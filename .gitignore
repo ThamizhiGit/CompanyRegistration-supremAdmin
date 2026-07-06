@@ -3,3 +3,9 @@ dist
 node_modules
 .env
 .env.local
+
+# Playwright test files
+test-results/
+playwright-report/
+.auth/
+*.traceviewer
