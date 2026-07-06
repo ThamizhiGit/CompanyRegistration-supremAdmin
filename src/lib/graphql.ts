@@ -1,16 +1,18 @@
 import { gql } from '@apollo/client';
 
 export const TOKEN_AUTH_MUTATION = gql`
-  mutation TokenAuth($username: String!, $password: String!) {
-    tokenAuth(username: $username, password: $password) {
+  mutation SuperAdminLogin($username: String!, $password: String!) {
+    superAdminTokenAuth(username: $username, password: $password) {
+      success
+      message
       token
-      refreshToken
-      user {
+      expiresAt
+      superAdmin {
         id
         username
         email
-        isCompanyAdmin
-        isSuperuser
+        isActive
+        lastLogin
       }
     }
   }

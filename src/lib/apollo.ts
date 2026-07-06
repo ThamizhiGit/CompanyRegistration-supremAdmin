@@ -5,14 +5,15 @@ const GRAPHQL_URI = import.meta.env.VITE_GRAPHQL_URI || 'http://localhost:8000/g
 
 console.log('Connecting to GraphQL at:', GRAPHQL_URI);
 
-// Auth link to add JWT token if present in localStorage
+// Auth link to add the super-admin token if present in localStorage.
+// The admin API expects the raw token in X-SuperAdmin-Authorization (no "Bearer" prefix).
 const authLink = new ApolloLink((operation, forward) => {
   const token = localStorage.getItem('token');
 
-  operation.setContext(({ headers }) => ({
+  operation.setContext(({ headers }: { headers?: Record<string, string> }) => ({
     headers: {
       ...headers,
-      Authorization: token ? `Bearer ${token}` : ''
+      ...(token ? { 'X-SuperAdmin-Authorization': token } : {})
     }
   }));
 

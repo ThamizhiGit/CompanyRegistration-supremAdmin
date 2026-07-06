@@ -34,12 +34,18 @@ export default function App() {
   const [hide, setHide] = useState(true);
 
   const [loginUser, { loading }] = useMutation<{
-    tokenAuth: {
-      token: string;
-      user: {
+    superAdminTokenAuth: {
+      success: boolean;
+      message: string;
+      token: string | null;
+      expiresAt: string | null;
+      superAdmin: {
+        id: string;
         username: string;
-        isSuperuser: boolean;
-      };
+        email: string;
+        isActive: boolean;
+        lastLogin: string | null;
+      } | null;
     };
   }, LoginState, any, any>(TOKEN_AUTH_MUTATION);
 
@@ -69,21 +75,26 @@ export default function App() {
         },
       });
 
-      const auth = data?.tokenAuth;
+      const auth = data?.superAdminTokenAuth;
 
       if (!auth) {
         setError('Authentication returned an empty response.');
         return;
       }
 
-      if (!auth.user.isSuperuser) {
-        setError('This dashboard is restricted to super admins.');
+      if (!auth.success || !auth.token || !auth.superAdmin) {
+        setError(auth.message || 'Login failed. Please check your credentials.');
+        return;
+      }
+
+      if (!auth.superAdmin.isActive) {
+        setError('This super admin account is inactive.');
         return;
       }
 
       localStorage.setItem('token', auth.token);
-      localStorage.setItem('adminUsername', auth.user.username);
-      setAdminUsername(auth.user.username);
+      localStorage.setItem('adminUsername', auth.superAdmin.username);
+      setAdminUsername(auth.superAdmin.username);
       setLogin({ username: '', password: '' });
     } catch (err: any) {
       setError(err?.message || 'Login failed. Please check your credentials.');
