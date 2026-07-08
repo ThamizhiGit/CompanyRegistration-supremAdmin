@@ -6,7 +6,7 @@ test.describe('Login Flow', () => {
   });
 
   test('should display login form', async ({ page }) => {
-    await expect(page.locator('text=Welcome back')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Welcome back', exact: true })).toBeVisible();
     await expect(page.locator('input[placeholder="Enter your username"]')).toBeVisible();
     await expect(page.locator('input[placeholder="Enter your password"]')).toBeVisible();
     await expect(page.locator('button[type="submit"]')).toBeVisible();
@@ -14,19 +14,19 @@ test.describe('Login Flow', () => {
 
   test('should show error when fields are empty', async ({ page }) => {
     await page.click('button[type="submit"]');
-    await expect(page.locator('text=Enter your username and password.')).toBeVisible();
+    await expect(page.getByText('Enter your username and password.', { exact: true })).toBeVisible();
   });
 
   test('should show error with only username', async ({ page }) => {
     await page.fill('input[placeholder="Enter your username"]', 'testuser');
     await page.click('button[type="submit"]');
-    await expect(page.locator('text=Enter your username and password.')).toBeVisible();
+    await expect(page.getByText('Enter your username and password.', { exact: true })).toBeVisible();
   });
 
   test('should show error with only password', async ({ page }) => {
     await page.fill('input[placeholder="Enter your password"]', 'password123');
     await page.click('button[type="submit"]');
-    await expect(page.locator('text=Enter your username and password.')).toBeVisible();
+    await expect(page.getByText('Enter your username and password.', { exact: true })).toBeVisible();
   });
 
   test('should toggle password visibility', async ({ page }) => {
@@ -85,6 +85,24 @@ test.describe('Login Flow', () => {
             },
           }),
         });
+      } else if (postData?.includes('adminRevenueSummary')) {
+        route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            data: {
+              adminRevenueSummary: {
+                totalCompanies: 1,
+                totalUsers: 1,
+                totalPayments: 0,
+                grossRevenue: 0,
+                totalExpenses: 0,
+                byStatus: [],
+                __typename: 'AdminRevenueSummary',
+              },
+            },
+          }),
+        });
       } else {
         route.continue();
       }
@@ -96,43 +114,83 @@ test.describe('Login Flow', () => {
     const submitBtn = page.locator('button[type="submit"]');
     await submitBtn.click();
 
-    // Wait for login to complete
-    await page.waitForTimeout(2000);
+    await expect(page.getByRole('button', { name: 'Logout' })).toBeVisible();
 
-    const token = await page.evaluate(() => localStorage.getItem('token'));
-    const adminUsername = await page.evaluate(() => localStorage.getItem('adminUsername'));
+    const token = await page.evaluate(() => sessionStorage.getItem('token'));
+    const adminUsername = await page.evaluate(() => sessionStorage.getItem('adminUsername'));
+    const adminExpiresAt = await page.evaluate(() => sessionStorage.getItem('adminExpiresAt'));
 
     // Verify token and username are stored
     expect(token).toBe('auth_token_xyz123');
     expect(adminUsername).toBe('admin');
-
-    console.log('✅ Login successful:', { token, adminUsername });
+    expect(adminExpiresAt).toBe('2026-07-13T09:12:00Z');
   });
 });
 
-test.describe('Dashboard Sidebar', () => {
-  test.beforeEach(async ({ page, context }) => {
-    // Setup: Mock localStorage with valid token
-    await context.addInitScript(() => {
-      localStorage.setItem('token', 'test-token-12345');
-      localStorage.setItem('adminUsername', 'testadmin');
+test.describe('Session lifecycle', () => {
+  const installSessionMocks = async (page: any) => {
+    await page.route('**/graphql/', (route) => {
+      const postData = route.request().postData() || '';
+      if (postData.includes('adminRevenueSummary')) {
+        route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            data: {
+              adminRevenueSummary: {
+                totalCompanies: 1,
+                totalUsers: 1,
+                totalPayments: 1,
+                grossRevenue: 0,
+                totalExpenses: 0,
+                byStatus: [],
+                __typename: 'AdminRevenueSummary',
+              },
+            },
+          }),
+        });
+        return;
+      }
+
+      route.continue();
     });
+  };
+
+  test.beforeEach(async ({ page, context }) => {
+    // Setup: Mock authenticated session in sessionStorage
+    await context.addInitScript(() => {
+      const expiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+      sessionStorage.setItem('token', 'test-token-12345');
+      sessionStorage.setItem('adminUsername', 'testadmin');
+      sessionStorage.setItem('adminExpiresAt', expiresAt);
+    });
+    await installSessionMocks(page);
     await page.goto('/');
   });
 
-  test('should navigate to dashboard when authenticated', async ({ page }) => {
-    // When token exists, app should attempt to load dashboard
-    // Check that we're not on login page
-    await page.waitForTimeout(500);
-    const welcomeText = page.locator('text=Welcome back');
-    const isLoginVisible = await welcomeText.isVisible().catch(() => false);
-
-    expect(isLoginVisible).toBeFalsy();
+  test('should show dashboard when session is valid', async ({ page }) => {
+    await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible();
   });
 
-  test('should clear auth on logout', async ({ page }) => {
-    // Verify token is in storage
-    const token = await page.evaluate(() => localStorage.getItem('token'));
-    expect(token).toBe('test-token-12345');
+  test('should clear session on logout', async ({ page }) => {
+    await page.getByRole('button', { name: 'Logout' }).click();
+
+    await expect(page.getByRole('heading', { name: 'Welcome back', exact: true })).toBeVisible();
+
+    const token = await page.evaluate(() => sessionStorage.getItem('token'));
+    const adminUsername = await page.evaluate(() => sessionStorage.getItem('adminUsername'));
+    expect(token).toBeNull();
+    expect(adminUsername).toBeNull();
+  });
+
+  test('should auto expire session when token expires', async ({ page }) => {
+    await page.addInitScript(() => {
+      const expiry = new Date(Date.now() - 1000).toISOString();
+      sessionStorage.setItem('adminExpiresAt', expiry);
+    });
+    await page.reload();
+
+    await expect(page.getByRole('heading', { name: 'Welcome back', exact: true })).toBeVisible();
+    await expect(page.getByText('Your session has expired. Please sign in again.', { exact: true })).toBeVisible();
   });
 });
