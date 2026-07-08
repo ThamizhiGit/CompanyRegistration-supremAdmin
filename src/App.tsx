@@ -13,6 +13,23 @@ import {
 import { AdminDashboard } from './components/admin';
 import { TOKEN_AUTH_MUTATION } from './lib/graphql';
 
+const STORAGE = window.sessionStorage;
+const TOKEN_KEY = 'token';
+const ADMIN_USERNAME_KEY = 'adminUsername';
+const ADMIN_EXPIRES_AT_KEY = 'adminExpiresAt';
+
+const clearAdminSession = () => {
+  STORAGE.removeItem(TOKEN_KEY);
+  STORAGE.removeItem(ADMIN_USERNAME_KEY);
+  STORAGE.removeItem(ADMIN_EXPIRES_AT_KEY);
+};
+
+const isExpired = (expiresAt: string | null) => {
+  if (!expiresAt) return false;
+  const expiresAtMs = new Date(expiresAt).getTime();
+  return Number.isNaN(expiresAtMs) || expiresAtMs <= Date.now();
+};
+
 const MODULES = [
   { icon: Users, title: 'AI Workforce', sub: 'HR & Payroll', wrap: 'bg-emerald-50 text-emerald-500' },
   { icon: Receipt, title: 'AI Invoice', sub: 'Smart Billing', wrap: 'bg-cyan-50 text-cyan-500' },
@@ -50,12 +67,53 @@ export default function App() {
   }, LoginState, any, any>(TOKEN_AUTH_MUTATION);
 
   useEffect(() => {
-    const token = localStorage.getItem('token');
-    const storedUsername = localStorage.getItem('adminUsername');
+    const token = STORAGE.getItem(TOKEN_KEY);
+    const storedUsername = STORAGE.getItem(ADMIN_USERNAME_KEY);
+    const expiresAt = STORAGE.getItem(ADMIN_EXPIRES_AT_KEY);
+
+    if (token && storedUsername && isExpired(expiresAt)) {
+      clearAdminSession();
+      setAdminUsername('');
+      setError('Your session has expired. Please sign in again.');
+      return;
+    }
 
     if (token && storedUsername) {
       setAdminUsername(storedUsername);
     }
+  }, []);
+
+  useEffect(() => {
+    if (!adminUsername) return;
+    const expiresAt = STORAGE.getItem(ADMIN_EXPIRES_AT_KEY);
+    if (!expiresAt) return;
+
+    const delay = new Date(expiresAt).getTime() - Date.now();
+    if (!Number.isFinite(delay) || delay <= 0) {
+      clearAdminSession();
+      setAdminUsername('');
+      setError('Your session has expired. Please sign in again.');
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      clearAdminSession();
+      setAdminUsername('');
+      setError('Your session has expired. Please sign in again.');
+    }, delay);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [adminUsername]);
+
+  useEffect(() => {
+    const handleExpiredSession = () => {
+      clearAdminSession();
+      setAdminUsername('');
+      setError('Your session has expired. Please sign in again.');
+    };
+
+    window.addEventListener('admin-session-expired', handleExpiredSession);
+    return () => window.removeEventListener('admin-session-expired', handleExpiredSession);
   }, []);
 
   const handleLogin = async (event: React.FormEvent) => {
@@ -92,8 +150,13 @@ export default function App() {
         return;
       }
 
-      localStorage.setItem('token', auth.token);
-      localStorage.setItem('adminUsername', auth.superAdmin.username);
+      STORAGE.setItem(TOKEN_KEY, auth.token);
+      STORAGE.setItem(ADMIN_USERNAME_KEY, auth.superAdmin.username);
+      if (auth.expiresAt) {
+        STORAGE.setItem(ADMIN_EXPIRES_AT_KEY, auth.expiresAt);
+      } else {
+        STORAGE.removeItem(ADMIN_EXPIRES_AT_KEY);
+      }
       setAdminUsername(auth.superAdmin.username);
       setLogin({ username: '', password: '' });
     } catch (err: any) {
@@ -102,8 +165,7 @@ export default function App() {
   };
 
   const handleLogout = () => {
-    localStorage.removeItem('token');
-    localStorage.removeItem('adminUsername');
+    clearAdminSession();
     setAdminUsername('');
   };
 
