@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useQuery, useMutation } from '@apollo/client/react';
-import { ADMIN_PAYMENTS_QUERY, ADMIN_UPDATE_PAYMENT_STATUS_MUTATION, ADMIN_PAYMENTS_QUERY as REFETCH_QUERY } from '../../../lib/graphql';
+import { ADMIN_PAYMENTS_QUERY, ADMIN_UPDATE_PAYMENT_STATUS_MUTATION, ADMIN_COMPANIES_QUERY } from '../../../lib/graphql';
 import { formatPrice, formatDate, parseModules } from '../../../lib/admin-utils';
 import { RefreshCw } from 'lucide-react';
 
@@ -9,25 +9,40 @@ type PaymentStatus = 'pending' | 'succeeded' | 'failed' | 'refunded' | null;
 interface PaymentType {
   paymentIntentId: string;
   email: string;
-  modules: string;
+  modules?: unknown;
   amount: number;
   currency: string;
   status: string;
   companyId?: number;
   companyName?: string;
+  source?: string | null;
+  deniedReason?: string | null;
   createdAt: string;
-  updatedAt: string;
+  updatedAt?: string;
+  dueDate?: string | null;
+  recurringDate?: string | null;
+  gatewayMethod?: string | null;
+  gatewayRefReceiverMedium?: string | null;
+  gatewayRefSenderMedium?: string | null;
+  paymentGatewayStatus?: string | null;
 }
 
-export const Subscriptions: React.FC<{onToast: (type: 'success'|'error', msg: string) => void}> = ({onToast}) => {
+export const Subscriptions: React.FC<{onToast: (type: 'success'|'error', msg: string) => void}> = ({ onToast }) => {
   const [statusFilter, setStatusFilter] = useState<PaymentStatus>(null);
   const [companySearch, setCompanySearch] = useState('');
 
-  const { data, loading, error, refetch } = useQuery<{adminPayments: PaymentType[]}, {status: PaymentStatus; companyId: number | null}, any>(ADMIN_PAYMENTS_QUERY, {
+  const { data, loading, error, refetch } = useQuery<
+    { adminPayments: PaymentType[] },
+    { status: PaymentStatus; companyId: number | null; dateFrom: string | null; dateTo: string | null; search: string | null },
+    any
+  >(ADMIN_PAYMENTS_QUERY, {
     variables: {
       status: statusFilter,
-      companyId: null
-    }
+      companyId: null,
+      dateFrom: null,
+      dateTo: null,
+      search: companySearch || null,
+    },
   });
 
   const [updatePaymentStatus] = useMutation(ADMIN_UPDATE_PAYMENT_STATUS_MUTATION);
@@ -37,8 +52,24 @@ export const Subscriptions: React.FC<{onToast: (type: 'success'|'error', msg: st
       await updatePaymentStatus({
         variables: {
           paymentIntentId,
-          status: newStatus
-        }
+          status: newStatus,
+          reason: newStatus === 'failed' ? 'manual_update_failed' : null,
+        },
+        refetchQueries: [
+          {
+            query: ADMIN_COMPANIES_QUERY,
+            variables: {
+              search: null,
+              status: null,
+              subscriptionStatus: null,
+              dueDateFrom: null,
+              dueDateTo: null,
+              recurringDateFrom: null,
+              recurringDateTo: null,
+            },
+          },
+        ],
+        awaitRefetchQueries: true,
       });
       onToast('success', 'Payment status updated');
       refetch();
@@ -52,10 +83,27 @@ export const Subscriptions: React.FC<{onToast: (type: 'success'|'error', msg: st
 
   const payments = data?.adminPayments || [];
   const statuses = ['pending', 'succeeded', 'failed', 'refunded'] as const;
+  const dedupePayments = (paymentItems: PaymentType[]) => {
+    const seen = new Set<string>();
+    return paymentItems.filter((payment) => {
+      if (seen.has(payment.paymentIntentId)) return false;
+      seen.add(payment.paymentIntentId);
+      return true;
+    });
+  };
 
-  const filteredPayments = companySearch
-    ? payments.filter((p: any) => p.companyName?.toLowerCase().includes(companySearch.toLowerCase()))
-    : payments;
+  const filteredPayments = dedupePayments(
+    companySearch
+      ? payments.filter((payment) => {
+        const search = companySearch.toLowerCase();
+        return (
+          payment.companyName?.toLowerCase().includes(search) ||
+          payment.email?.toLowerCase().includes(search) ||
+          payment.paymentIntentId?.toLowerCase().includes(search)
+        );
+      })
+      : payments
+  );
 
   return (
     <div className="space-y-8">
@@ -73,7 +121,6 @@ export const Subscriptions: React.FC<{onToast: (type: 'success'|'error', msg: st
         </button>
       </div>
 
-      {/* Filters */}
       <div className="bg-white rounded-lg border border-slate-200 p-6 space-y-4">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
@@ -82,9 +129,7 @@ export const Subscriptions: React.FC<{onToast: (type: 'success'|'error', msg: st
               <button
                 onClick={() => setStatusFilter(null)}
                 className={`px-3 py-2 rounded-lg font-medium transition-colors ${
-                  statusFilter === null
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                  statusFilter === null ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
                 }`}
               >
                 All
@@ -94,9 +139,7 @@ export const Subscriptions: React.FC<{onToast: (type: 'success'|'error', msg: st
                   key={status}
                   onClick={() => setStatusFilter(status)}
                   className={`px-3 py-2 rounded-lg font-medium transition-colors ${
-                    statusFilter === status
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                    statusFilter === status ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
                   }`}
                 >
                   {status.charAt(0).toUpperCase() + status.slice(1)}
@@ -105,19 +148,18 @@ export const Subscriptions: React.FC<{onToast: (type: 'success'|'error', msg: st
             </div>
           </div>
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-2">Search by Company</label>
+            <label className="block text-sm font-medium text-slate-700 mb-2">Search by Company, Email, or Payment</label>
             <input
               type="text"
               value={companySearch}
-              onChange={(e) => setCompanySearch(e.target.value)}
-              placeholder="Company name..."
+              onChange={(event) => setCompanySearch(event.target.value)}
+              placeholder="Company, email, payment id..."
               className="w-full px-3 py-2 border border-slate-300 rounded-lg"
             />
           </div>
         </div>
       </div>
 
-      {/* Payments Table */}
       <div className="bg-white rounded-lg border border-slate-200 overflow-hidden">
         {filteredPayments.length === 0 ? (
           <div className="text-center py-12 text-slate-500">
@@ -133,27 +175,32 @@ export const Subscriptions: React.FC<{onToast: (type: 'success'|'error', msg: st
                   <th className="text-left py-4 px-6 font-semibold text-slate-700">Modules</th>
                   <th className="text-left py-4 px-6 font-semibold text-slate-700">Amount</th>
                   <th className="text-left py-4 px-6 font-semibold text-slate-700">Status</th>
+                  <th className="text-left py-4 px-6 font-semibold text-slate-700">Gateway</th>
                   <th className="text-left py-4 px-6 font-semibold text-slate-700">Created</th>
                   <th className="text-right py-4 px-6 font-semibold text-slate-700">Action</th>
                 </tr>
               </thead>
               <tbody>
-                {filteredPayments.map((payment: any) => {
+                {filteredPayments.map((payment) => {
                   const modules = parseModules(payment.modules);
                   return (
                     <tr key={payment.paymentIntentId} className="border-b border-slate-100 hover:bg-slate-50">
-                      <td className="py-4 px-6 font-medium text-slate-800">{payment.companyName || '-'}</td>
+                      <td className="py-4 px-6 font-medium text-slate-800">
+                        <div>{payment.companyName || '-'}</div>
+                        <div className="text-xs text-slate-500">{payment.paymentIntentId}</div>
+                      </td>
                       <td className="py-4 px-6 text-slate-700">{payment.email}</td>
                       <td className="py-4 px-6">
                         <div className="flex flex-wrap gap-1">
-                          {modules.map((mod) => (
-                            <span
-                              key={mod}
-                              className="inline-block px-2 py-1 bg-slate-100 text-slate-700 text-xs rounded"
-                            >
-                              {mod}
-                            </span>
-                          ))}
+                          {modules.length === 0 ? (
+                            <span className="text-slate-400 text-sm">No modules</span>
+                          ) : (
+                            modules.map((module) => (
+                              <span key={module} className="inline-block px-2 py-1 bg-slate-100 text-slate-700 text-xs rounded">
+                                {module}
+                              </span>
+                            ))
+                          )}
                         </div>
                       </td>
                       <td className="py-4 px-6 font-semibold text-slate-800">
@@ -169,13 +216,17 @@ export const Subscriptions: React.FC<{onToast: (type: 'success'|'error', msg: st
                           {payment.status}
                         </span>
                       </td>
+                      <td className="py-4 px-6 text-slate-700">
+                        <div>{payment.gatewayMethod || '-'}</div>
+                        <div className="text-xs text-slate-500">{payment.paymentGatewayStatus || '-'}</div>
+                      </td>
                       <td className="py-4 px-6 text-slate-600 text-sm">
                         {formatDate(payment.createdAt)}
                       </td>
                       <td className="py-4 px-6 text-right">
                         <select
                           value={payment.status}
-                          onChange={(e) => handleStatusChange(payment.paymentIntentId, e.target.value)}
+                          onChange={(event) => handleStatusChange(payment.paymentIntentId, event.target.value)}
                           className="px-3 py-1 border border-slate-300 rounded text-sm bg-white cursor-pointer hover:border-slate-400"
                         >
                           <option value="pending">pending</option>

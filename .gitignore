@@ -9,3 +9,13 @@ test-results/
 playwright-report/
 .auth/
 *.traceviewer
+
+# IDEs and editors
+.vscode/
+.idea/
+
+# AI Assistants
+.ai/
+.agents/
+.claude/
+.codex/

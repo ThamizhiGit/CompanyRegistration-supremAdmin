@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
-import { LogOut, Menu, X, BarChart3, Package, CreditCard, Building2, Users, Home } from 'lucide-react';
+import { LogOut, Menu, X, LayoutDashboard, Package, Building2, Users, ReceiptText, CreditCard } from 'lucide-react';
 
 interface AdminLayoutProps {
-  currentPage: 'dashboard' | 'packages' | 'subscriptions' | 'companies' | 'users';
-  onPageChange: (page: 'dashboard' | 'packages' | 'subscriptions' | 'companies' | 'users') => void;
+  currentPage: 'dashboard' | 'packages' | 'companies' | 'subscriptions' | 'users' | 'infrastructure';
+  onPageChange: (page: 'dashboard' | 'packages' | 'companies' | 'subscriptions' | 'users' | 'infrastructure') => void;
   onLogout: () => void;
   username: string;
   children: React.ReactNode;
@@ -19,11 +19,12 @@ export const AdminLayout: React.FC<AdminLayoutProps> = ({
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
   const navItems = [
-    { id: 'dashboard', label: 'Dashboard', icon: Home },
+    { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'packages', label: 'Packages', icon: Package },
-    { id: 'subscriptions', label: 'Subscriptions', icon: CreditCard },
     { id: 'companies', label: 'Companies', icon: Building2 },
+    { id: 'subscriptions', label: 'Subscriptions', icon: CreditCard },
     { id: 'users', label: 'Users', icon: Users },
+    { id: 'infrastructure', label: 'Infrastructure', icon: ReceiptText },
   ] as const;
 
   return (
