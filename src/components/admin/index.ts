@@ -6,3 +6,4 @@ export { Packages } from './pages/Packages';
 export { Companies } from './pages/Companies';
 export { Users } from './pages/Users';
 export { Infrastructure } from './pages/Infrastructure';
+export { Expenses } from './pages/Expenses';

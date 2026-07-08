@@ -29,6 +29,7 @@ interface UserActivityType {
   companyId: number | null;
   userId: string | number;
   details?: unknown;
+  message?: unknown;
   createdAt?: string;
 }
 
@@ -78,7 +79,18 @@ export const Users: React.FC<{onToast: (type: 'success'|'error', msg: string) =>
   const users = usersData?.adminUsers || [];
   const companies = companiesData?.adminCompanies || [];
   const activityUser = users.find((user) => String(user.id) === String(activityUserId));
-  const activityLogs = activityData?.adminUserActivityLogs || [];
+  const allActivityLogs = activityData?.adminUserActivityLogs || [];
+  const activityLogs = activityUserId === null
+    ? []
+    : allActivityLogs.filter((activity) => {
+        const selectedUserId = String(activityUserId);
+        const activityUserLogId = activity.userId === null || activity.userId === undefined ? '' : String(activity.userId);
+        const targetId = activity.targetId === null || activity.targetId === undefined ? '' : String(activity.targetId);
+        const targetType = typeof activity.targetType === 'string' ? activity.targetType.toLowerCase() : '';
+        const isDirectUserRecord = targetType === 'customuser' || targetType === 'user';
+
+        return activityUserLogId === selectedUserId || (isDirectUserRecord && targetId === selectedUserId);
+      });
 
   const toActivityUserId = (value: string | number) => {
     if (typeof value === 'number') return value;
@@ -102,6 +114,112 @@ export const Users: React.FC<{onToast: (type: 'success'|'error', msg: string) =>
     if (!value) return '-';
     const date = new Date(value);
     return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+  };
+
+  const toTitleCase = (value: string) =>
+    value
+      .toLowerCase()
+      .split(/\s+/)
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(' ');
+
+  const formatAction = (action: unknown) => {
+    if (typeof action !== 'string' || !action.trim()) return '-';
+    const formatted = action.trim().toUpperCase();
+    const map: Record<string, string> = {
+      CREATE: 'Created',
+      UPDATE: 'Updated',
+      DELETE: 'Deleted',
+      LOGIN: 'Logged in',
+      LOGOUT: 'Logged out',
+    };
+    return map[formatted] || toTitleCase(formatted.toLowerCase());
+  };
+
+  const formatTargetType = (targetType: unknown) => {
+    if (typeof targetType !== 'string' || !targetType.trim()) return '-';
+    const formatted = targetType.trim().toLowerCase();
+    const map: Record<string, string> = {
+      customuser: 'User',
+      custompermission: 'Permission',
+      partialinvoicehistory: 'Invoice History',
+      division: 'Division',
+      company: 'Company',
+      module: 'Package',
+      subscription: 'Subscription',
+      expense: 'Expense',
+    };
+    return map[formatted] || toTitleCase(formatted.replace(/[^a-z0-9]+/g, ' '));
+  };
+
+  const parseDetails = (details: unknown) => {
+    if (details === null || details === undefined) return {};
+    if (typeof details === 'string') {
+      try {
+        const parsed = JSON.parse(details);
+        return typeof parsed === 'object' && parsed !== null ? parsed : {};
+      } catch {
+        return {};
+      }
+    }
+    if (typeof details === 'object' && !Array.isArray(details)) return details as Record<string, unknown>;
+    return {};
+  };
+
+  const formatActivitySummary = (activity: UserActivityType) => {
+    if (typeof activity.message === 'string' && activity.message.trim()) {
+      return activity.message.trim();
+    }
+
+    const action = formatAction(activity.action);
+    const area = formatTargetType(activity.targetType);
+    const details = parseDetails(activity.details);
+    const rawAction = typeof activity.action === 'string' ? activity.action.trim().toUpperCase() : '';
+    const rawTarget = typeof activity.targetType === 'string' ? activity.targetType.trim().toLowerCase() : '';
+
+    let summary = `${action} ${area}`;
+
+    if (rawAction === 'CREATE' && rawTarget === 'customuser') {
+      summary = 'Created user account';
+    } else if (rawAction === 'UPDATE' && rawTarget === 'customuser') {
+      summary = 'Updated user account';
+    } else if (rawAction === 'CREATE' && rawTarget === 'custompermission') {
+      summary = 'Added permission';
+    } else if (rawAction === 'UPDATE' && rawTarget === 'division') {
+      summary = 'Updated division details';
+    } else if (rawAction === 'CREATE' && rawTarget === 'partialinvoicehistory') {
+      summary = 'Created invoice history record';
+    }
+
+    const extraParts: string[] = [];
+    const email = typeof details.email === 'string' && details.email.trim() ? details.email.trim() : '';
+    const name = typeof details.name === 'string' && details.name.trim() ? details.name.trim() : '';
+    const status = typeof details.status === 'string' && details.status.trim() ? details.status.trim() : '';
+    const expensePercentage = details.expense_percentage;
+    const permissionName =
+      typeof details.permission_name === 'string' && details.permission_name.trim()
+        ? details.permission_name.trim()
+        : typeof details.permission === 'string' && details.permission.trim()
+          ? details.permission.trim()
+          : '';
+
+    if (permissionName && area === 'Permission') {
+      extraParts.push(`permission: ${permissionName}`);
+    }
+    if (name && area !== 'Permission') {
+      extraParts.push(`for ${name}`);
+    }
+    if (email) {
+      extraParts.push(`for ${email}`);
+    }
+    if (status) {
+      extraParts.push(`with status changed to ${status}`);
+    }
+    if (expensePercentage !== undefined) {
+      extraParts.push('with expense percentage updated');
+    }
+
+    return extraParts.length ? `${summary} ${extraParts.join(' ')}` : summary;
   };
 
   const resolvedLocationId =
@@ -271,35 +389,47 @@ export const Users: React.FC<{onToast: (type: 'success'|'error', msg: string) =>
               ) : activityError ? (
                 <div className="text-center py-6 text-red-600">Failed to load activity logs: {activityError.message}</div>
               ) : activityLogs.length === 0 ? (
-                <div className="text-center py-6 text-slate-500">No activity logs found.</div>
+                <div className="text-center py-6 text-slate-500">No activity found for this user.</div>
               ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full">
-                    <thead className="bg-slate-50 border-b border-slate-200">
-                      <tr>
-                        <th className="text-left py-3 px-4 font-semibold text-slate-700">Created</th>
-                        <th className="text-left py-3 px-4 font-semibold text-slate-700">Actor</th>
-                        <th className="text-left py-3 px-4 font-semibold text-slate-700">Action</th>
-                        <th className="text-left py-3 px-4 font-semibold text-slate-700">Target Type</th>
-                        <th className="text-left py-3 px-4 font-semibold text-slate-700">Target ID</th>
-                        <th className="text-left py-3 px-4 font-semibold text-slate-700">Company ID</th>
-                        <th className="text-left py-3 px-4 font-semibold text-slate-700">Details</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {activityLogs.map((activity) => (
-                        <tr key={activity.id} className="border-b border-slate-100">
-                          <td className="py-3 px-4 text-sm text-slate-700">{displayDateTime(activity.createdAt)}</td>
-                          <td className="py-3 px-4 text-sm text-slate-700">{displayValue(activity.actor)}</td>
-                          <td className="py-3 px-4 text-sm text-slate-700">{displayValue(activity.action)}</td>
-                          <td className="py-3 px-4 text-sm text-slate-700">{displayValue(activity.targetType)}</td>
-                          <td className="py-3 px-4 text-sm text-slate-700">{displayValue(activity.targetId)}</td>
-                          <td className="py-3 px-4 text-sm text-slate-700">{activity.companyId || '-'}</td>
-                          <td className="py-3 px-4 text-sm text-slate-700">{displayValue(activity.details)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                <div className="space-y-2">
+                  {activityLogs.map((activity) => {
+                    const actionLabel = formatAction(activity.action);
+                    const areaLabel = formatTargetType(activity.targetType);
+                    return (
+                      <details
+                        key={activity.id}
+                        className="group rounded-lg border border-slate-200 bg-white"
+                      >
+                        <summary className="list-none cursor-pointer">
+                          <div className="grid grid-cols-1 gap-3 p-4 hover:bg-slate-50 md:grid-cols-[160px_1fr_auto] md:items-start">
+                            <div className="text-sm font-semibold text-slate-800">
+                              {displayDateTime(activity.createdAt)}
+                            </div>
+                            <div className="min-w-0">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <p className="font-semibold text-slate-900">{actionLabel} {areaLabel}</p>
+                                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">{areaLabel}</span>
+                              </div>
+                              <p className="mt-1 text-sm text-slate-600">{formatActivitySummary(activity)}</p>
+                              <p className="mt-2 text-xs text-slate-500">Done by {displayValue(activity.actor)}</p>
+                            </div>
+                            <div className="flex items-center justify-between gap-2 md:justify-end">
+                              <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">{actionLabel}</span>
+                              <span className="text-xs text-slate-400 group-open:hidden">Details</span>
+                              <span className="hidden text-xs text-slate-400 group-open:inline">Hide details</span>
+                            </div>
+                          </div>
+                        </summary>
+                        <div className="border-t border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-600">
+                          <div className="grid gap-2 md:grid-cols-3">
+                            <p><strong>Target ID:</strong> {displayValue(activity.targetId)}</p>
+                            <p><strong>Company ID:</strong> {activity.companyId || '-'}</p>
+                            <p className="md:col-span-3"><strong>Raw details:</strong> {displayValue(activity.details)}</p>
+                          </div>
+                        </div>
+                      </details>
+                    );
+                  })}
                 </div>
               )}
             </div>

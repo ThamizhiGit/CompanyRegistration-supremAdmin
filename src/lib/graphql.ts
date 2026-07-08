@@ -25,10 +25,24 @@ export const ADMIN_REVENUE_SUMMARY_QUERY = gql`
       totalUsers
       totalPayments
       grossRevenue
+      totalExpenses
+      netRevenue
       byStatus {
         status
         count
         amount
+      }
+      expenseByCategory {
+        key
+        label
+        amount
+        count
+      }
+      expenseByVendor {
+        key
+        label
+        amount
+        count
       }
     }
   }
@@ -445,6 +459,150 @@ export const ADMIN_ACTIVITY_LOG_QUERY = gql`
       ipAddress
       userAgent
       __typename
+    }
+  }
+`;
+
+export const ADMIN_EXPENSES_QUERY = gql`
+  query AdminExpenses($filter: ExpenseFilterInput, $sort: ExpenseSortInput) {
+    adminExpenses(filter: $filter, sort: $sort) {
+      totalCount
+      items {
+        id
+        expenseRef
+        title
+        description
+        category
+        status
+        vendor
+        projectCode
+        serviceCode
+        incurredAt
+        dueAt
+        paidAt
+        currency
+        subtotalCents
+        taxCents
+        totalCents
+        createdAt
+        updatedAt
+        createdBy
+        approvedBy
+        invoiceNumber
+        invoiceDate
+        referenceLink
+        tags
+        lineItems {
+          id
+          expenseId
+          lineType
+          label
+          quantity
+          unitPriceCents
+          costCents
+          unit
+          notes
+          llmProvider
+          llmModel
+          inputTokens
+          outputTokens
+        }
+      }
+    }
+  }
+`;
+
+export const ADMIN_EXPENSE_DETAIL_QUERY = gql`
+  query AdminExpenseById($id: ID!) {
+    adminExpenseById(id: $id) {
+      id
+      expenseRef
+      title
+      description
+      category
+      status
+      vendor
+      projectCode
+      serviceCode
+      incurredAt
+      dueAt
+      paidAt
+      currency
+      subtotalCents
+      taxCents
+      totalCents
+      createdAt
+      updatedAt
+      createdBy
+      approvedBy
+      invoiceNumber
+      invoiceDate
+      referenceLink
+      tags
+      metadata
+      lineItems {
+        id
+        expenseId
+        lineType
+        label
+        quantity
+        unitPriceCents
+        costCents
+        unit
+        notes
+        llmProvider
+        llmModel
+        inputTokens
+        outputTokens
+      }
+    }
+  }
+`;
+
+export const ADMIN_CREATE_EXPENSE_MUTATION = gql`
+  mutation AdminCreateExpense($input: ExpenseCreateInput!) {
+    adminCreateExpense(input: $input) {
+      success
+      message
+      expense {
+        id
+        expenseRef
+        title
+        status
+        totalCents
+        currency
+      }
+    }
+  }
+`;
+
+export const ADMIN_UPDATE_EXPENSE_MUTATION = gql`
+  mutation AdminUpdateExpense($input: ExpenseUpdateInput!) {
+    adminUpdateExpense(input: $input) {
+      success
+      message
+      expense {
+        id
+        expenseRef
+        title
+        status
+        totalCents
+        currency
+      }
+    }
+  }
+`;
+
+export const ADMIN_SET_EXPENSE_STATUS_MUTATION = gql`
+  mutation AdminSetExpenseStatus($input: ExpenseStatusInput!) {
+    adminSetExpenseStatus(input: $input) {
+      success
+      message
+      expense {
+        id
+        expenseRef
+        status
+      }
     }
   }
 `;

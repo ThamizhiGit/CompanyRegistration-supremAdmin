@@ -6,6 +6,7 @@ import { Companies } from './pages/Companies';
 import { Subscriptions } from './pages/Subscriptions';
 import { Users } from './pages/Users';
 import { Infrastructure } from './pages/Infrastructure';
+import { Expenses } from './pages/Expenses';
 import { Toast } from './Toast';
 
 interface AdminDashboardProps {
@@ -13,7 +14,7 @@ interface AdminDashboardProps {
   onLogout: () => void;
 }
 
-type CurrentPage = 'dashboard' | 'packages' | 'companies' | 'subscriptions' | 'users' | 'infrastructure';
+type CurrentPage = 'dashboard' | 'packages' | 'companies' | 'subscriptions' | 'users' | 'infrastructure' | 'expenses';
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({ username, onLogout }) => {
   const [currentPage, setCurrentPage] = useState<CurrentPage>('dashboard');
@@ -37,6 +38,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ username, onLogo
         return <Users onToast={showToast} />;
       case 'infrastructure':
         return <Infrastructure />;
+      case 'expenses':
+        return <Expenses onToast={showToast} />;
       default:
         return <Dashboard />;
     }

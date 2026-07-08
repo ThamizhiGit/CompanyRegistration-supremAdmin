@@ -39,9 +39,17 @@ const graphQLMocks: Record<OperationName, any> = {
         totalUsers: 7,
         totalPayments: 4,
         grossRevenue: 120000,
+        totalExpenses: 500,
+        netRevenue: 119500,
         byStatus: [
           { status: 'succeeded', count: 2, amount: 90000, __typename: 'PaymentStatusSummary' },
           { status: 'failed', count: 1, amount: 30000, __typename: 'PaymentStatusSummary' },
+        ],
+        expenseByCategory: [
+          { key: 'hosting', label: 'Hosting', amount: 500, count: 1, __typename: 'ExpenseBreakdown' },
+        ],
+        expenseByVendor: [
+          { key: 'digitalocean', label: 'DigitalOcean', amount: 500, count: 1, __typename: 'ExpenseBreakdown' },
         ],
       },
     },

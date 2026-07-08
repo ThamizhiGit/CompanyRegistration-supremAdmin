@@ -2,17 +2,27 @@ import React from 'react';
 import { useQuery } from '@apollo/client/react';
 import { ADMIN_REVENUE_SUMMARY_QUERY } from '../../../lib/graphql';
 import { formatPrice } from '../../../lib/admin-utils';
-import { BarChart3, Building2, Users, CreditCard, TrendingUp } from 'lucide-react';
+import { Building2, Users, CreditCard, TrendingUp, ReceiptText, WalletCards } from 'lucide-react';
+
+interface RevenueStatusSummary {
+  status: string;
+  count: number;
+  amount: number;
+}
+
+interface RevenueSummary {
+  totalCompanies: number;
+  totalUsers: number;
+  totalPayments: number;
+  grossRevenue: number;
+  totalExpenses?: number | null;
+  netRevenue?: number | null;
+  byStatus: RevenueStatusSummary[];
+}
 
 export const Dashboard: React.FC = () => {
   const { data, loading, error } = useQuery<{
-    adminRevenueSummary: {
-      totalCompanies: number;
-      totalUsers: number;
-      totalPayments: number;
-      grossRevenue: number;
-      byStatus: Array<{ status: string; count: number; amount: number }>;
-    };
+    adminRevenueSummary: RevenueSummary;
   }, Record<string, never>, any>(ADMIN_REVENUE_SUMMARY_QUERY);
 
   if (loading) {
@@ -47,6 +57,9 @@ export const Dashboard: React.FC = () => {
     return <div className="text-center py-12 text-slate-500">No data available</div>;
   }
 
+  const totalExpenses = summary.totalExpenses ?? 0;
+  const netRevenue = summary.grossRevenue - totalExpenses;
+
   const cards = [
     {
       label: 'Total Companies',
@@ -79,6 +92,22 @@ export const Dashboard: React.FC = () => {
       gradient: 'linear-gradient(135deg, #fff3e0 0%, #ffe0b2 100%)',
       textColor: '#e65100',
       accentColor: '#ff6f00'
+    },
+    {
+      label: 'Total Expenses',
+      value: formatPrice(totalExpenses),
+      icon: ReceiptText,
+      gradient: 'linear-gradient(135deg, #fee2e2 0%, #fecdd3 100%)',
+      textColor: '#be123c',
+      accentColor: '#e11d48'
+    },
+    {
+      label: 'Net Revenue',
+      value: formatPrice(netRevenue),
+      icon: WalletCards,
+      gradient: 'linear-gradient(135deg, #dcfce7 0%, #bbf7d0 100%)',
+      textColor: netRevenue >= 0 ? '#047857' : '#be123c',
+      accentColor: netRevenue >= 0 ? '#10b981' : '#e11d48'
     }
   ];
 
@@ -90,9 +119,15 @@ export const Dashboard: React.FC = () => {
       </div>
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6 gap-6">
         {cards.map((card: any) => {
           const Icon = card.icon;
+          const iconBg =
+            card.accentColor === '#00cbd6' ? 'rgba(0, 203, 214, 0.15)' :
+            card.accentColor === '#10b981' ? 'rgba(16, 185, 129, 0.15)' :
+            card.accentColor === '#7c4dff' ? 'rgba(124, 77, 255, 0.15)' :
+            card.accentColor === '#e11d48' ? 'rgba(225, 29, 72, 0.15)' :
+            'rgba(255, 111, 0, 0.15)';
           return (
             <div
               key={card.label}
@@ -105,9 +140,7 @@ export const Dashboard: React.FC = () => {
             >
               <div className="flex items-start justify-between mb-4">
                 <span className="text-sm font-bold" style={{color: card.textColor}}>{card.label}</span>
-                <div className="p-2 rounded-lg transition-transform group-hover:scale-110" style={{
-                  backgroundColor: `rgba(${card.accentColor === '#00cbd6' ? '0, 203, 214' : card.accentColor === '#10b981' ? '16, 185, 129' : card.accentColor === '#7c4dff' ? '124, 77, 255' : '255, 111, 0'}, 0.15)`
-                }}>
+                <div className="p-2 rounded-lg transition-transform group-hover:scale-110" style={{ backgroundColor: iconBg }}>
                   <Icon className="w-5 h-5" style={{color: card.accentColor}} />
                 </div>
               </div>
@@ -152,6 +185,7 @@ export const Dashboard: React.FC = () => {
           </div>
         </div>
       )}
+
     </div>
   );
 };
