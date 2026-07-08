@@ -199,6 +199,10 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
     if (status === 'failed' || status === 'past_due') return 'bg-red-50 text-red-700';
     return 'bg-slate-100 text-slate-700';
   };
+  const getCompanyGatewayLabel = (company: CompanyType) =>
+    company.latestPaymentGatewayMethod || company.latestPaymentSource || '-';
+  const getPaymentGatewayLabel = (payment: CompanyPaymentType) =>
+    payment.gatewayMethod || payment.source || '-';
   const clearFilters = () => {
     setSearch('');
     setStatusFilter('all');
@@ -220,6 +224,7 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
         .toLowerCase();
       const gatewayText = [
         company.latestPaymentGatewayMethod,
+        company.latestPaymentSource,
         company.latestPaymentGatewayStatus,
         company.latestPaymentGatewayRefReceiverMedium,
         company.latestPaymentGatewayRefSenderMedium,
@@ -505,7 +510,7 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                       <td className="py-4 px-6 text-slate-700">{formatDate(company.subscriptionDueDate)}</td>
                       <td className="py-4 px-6 text-slate-700">{formatDate(company.subscriptionRecurringDate)}</td>
                       <td className="py-4 px-6 text-slate-700">
-                        <div>{company.latestPaymentGatewayMethod || '-'}</div>
+                        <div>{getCompanyGatewayLabel(company)}</div>
                         <div className="text-xs text-slate-500">{company.latestPaymentGatewayStatus || '-'}</div>
                       </td>
                       <td className="py-4 px-6">
@@ -722,7 +727,7 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                     <p><strong>Amount:</strong> {viewingCompany.latestPaymentAmount !== null && viewingCompany.latestPaymentAmount !== undefined ? formatPrice(viewingCompany.latestPaymentAmount, viewingCompany.latestPaymentCurrency || 'USD') : '-'}</p>
                     <p><strong>Source:</strong> {viewingCompany.latestPaymentSource || '-'}</p>
                     <p><strong>Denied reason:</strong> {viewingCompany.latestPaymentDeniedReason || '-'}</p>
-                    <p><strong>Gateway:</strong> {viewingCompany.latestPaymentGatewayMethod || '-'} / {viewingCompany.latestPaymentGatewayStatus || '-'}</p>
+                    <p><strong>Gateway:</strong> {getCompanyGatewayLabel(viewingCompany)} / {viewingCompany.latestPaymentGatewayStatus || '-'}</p>
                     <p><strong>Receiver ref:</strong> {viewingCompany.latestPaymentGatewayRefReceiverMedium || '-'}</p>
                     <p><strong>Sender ref:</strong> {viewingCompany.latestPaymentGatewayRefSenderMedium || '-'}</p>
                     <p><strong>Created:</strong> {formatDateTime(viewingCompany.latestPaymentCreatedAt || '')}</p>
@@ -824,7 +829,7 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                             </td>
                             <td className="py-3 px-4 text-slate-700">{payment.source || '-'}</td>
                             <td className="py-3 px-4 text-slate-700">
-                              <div>{payment.gatewayMethod || '-'}</div>
+                              <div>{getPaymentGatewayLabel(payment)}</div>
                               <div className="text-xs text-slate-500">{payment.paymentGatewayStatus || '-'}</div>
                             </td>
                             <td className="py-3 px-4 text-slate-700">
@@ -890,7 +895,7 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                   <p><strong>Amount:</strong> {formatPrice(selectedPayment.amount, selectedPayment.currency)}</p>
                   <p><strong>Status:</strong> {selectedPayment.status}</p>
                   <p><strong>Source:</strong> {selectedPayment.source || '-'}</p>
-                  <p><strong>Gateway method:</strong> {selectedPayment.gatewayMethod || '-'}</p>
+                  <p><strong>Gateway method:</strong> {getPaymentGatewayLabel(selectedPayment)}</p>
                   <p><strong>Ref receiver:</strong> {selectedPayment.gatewayRefReceiverMedium || '-'}</p>
                   <p><strong>Ref sender:</strong> {selectedPayment.gatewayRefSenderMedium || '-'}</p>
                   <p><strong>Due:</strong> {formatDateTime(selectedPayment.dueDate || '')}</p>

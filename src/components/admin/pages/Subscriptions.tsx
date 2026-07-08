@@ -83,6 +83,7 @@ export const Subscriptions: React.FC<{onToast: (type: 'success'|'error', msg: st
 
   const payments = data?.adminPayments || [];
   const statuses = ['pending', 'succeeded', 'failed', 'refunded'] as const;
+  const getGatewayLabel = (payment: PaymentType) => payment.gatewayMethod || payment.source || '-';
   const dedupePayments = (paymentItems: PaymentType[]) => {
     const seen = new Set<string>();
     return paymentItems.filter((payment) => {
@@ -217,7 +218,7 @@ export const Subscriptions: React.FC<{onToast: (type: 'success'|'error', msg: st
                         </span>
                       </td>
                       <td className="py-4 px-6 text-slate-700">
-                        <div>{payment.gatewayMethod || '-'}</div>
+                        <div>{getGatewayLabel(payment)}</div>
                         <div className="text-xs text-slate-500">{payment.paymentGatewayStatus || '-'}</div>
                       </td>
                       <td className="py-4 px-6 text-slate-600 text-sm">
