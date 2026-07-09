@@ -583,10 +583,10 @@ test.describe('Admin UI flow suite (mocked backend)', () => {
     await expect(createdRow.getByRole('cell', { name: expense.vendor, exact: true })).toBeVisible();
 
     await createdRow.locator('button[title="View"]').click();
-    await expect(page.getByText('Snapshot:')).toBeVisible();
-    await expect(page.getByText(`Title: ${expense.title}`, { exact: true })).toBeVisible();
-    await expect(page.getByText(`Vendor: ${expense.vendor}`, { exact: true })).toBeVisible();
-    await page.getByRole('button', { name: 'Hide' }).click();
+    await expect(page.getByRole('heading', { name: /^EXP-/ })).toBeVisible();
+    await expect(page.getByText(expense.title, { exact: true })).toBeVisible();
+    await expect(page.getByText(expense.vendor, { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Close' }).last().click();
 
     await createdRow.locator('button[title="Edit"]').click();
     await expect(page.getByRole('heading', { name: 'Edit Expense' })).toBeVisible();

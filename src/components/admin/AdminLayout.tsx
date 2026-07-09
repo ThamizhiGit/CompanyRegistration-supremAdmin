@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { LogOut, Menu, X, LayoutDashboard, Package, Building2, Users, ReceiptText, CreditCard } from 'lucide-react';
+import { LogOut, Menu, X, LayoutDashboard, Package, Building2, Users, Network, ReceiptText, CreditCard } from 'lucide-react';
 
 interface AdminLayoutProps {
   currentPage: 'dashboard' | 'packages' | 'companies' | 'subscriptions' | 'users' | 'infrastructure' | 'expenses';
@@ -24,7 +24,7 @@ export const AdminLayout: React.FC<AdminLayoutProps> = ({
     { id: 'companies', label: 'Companies', icon: Building2 },
     { id: 'subscriptions', label: 'Subscriptions', icon: CreditCard },
     { id: 'users', label: 'Users', icon: Users },
-    { id: 'infrastructure', label: 'Infrastructure', icon: ReceiptText },
+    { id: 'infrastructure', label: 'Infrastructure', icon: Network },
     { id: 'expenses', label: 'Expenses', icon: ReceiptText },
   ] as const;
 

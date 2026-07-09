@@ -9,6 +9,7 @@ import {
   ADMIN_SET_EXPENSE_STATUS_MUTATION,
 } from '../../../lib/graphql';
 import { formatPrice, centsFromDollars } from '../../../lib/admin-utils';
+import { useDebouncedValue } from '../../../lib/useDebouncedValue';
 
 type ExpenseStatus = 'draft' | 'pending' | 'approved' | 'paid' | 'rejected' | 'archived';
 type ExpenseCategory = 'hosting' | 'service' | 'integration' | 'llm' | 'other';
@@ -223,7 +224,19 @@ const statusClasses: Record<ExpenseStatus, string> = {
   archived: 'bg-slate-200 text-slate-600',
 };
 
-const toMoney = (value: number, currency = 'USD') => formatPrice(value, currency);
+const normalizeCurrencyValue = (currency: string) => sanitizeCurrency(currency) || 'USD';
+
+const toMoney = (value: number, currency = 'USD') => {
+  try {
+    return formatPrice(value, normalizeCurrencyValue(currency));
+  } catch {
+    return `$${(value / 100).toFixed(2)}`;
+  }
+};
+
+const CURRENCY_OPTIONS = ['USD', 'EUR', 'GBP', 'INR', 'AUD', 'CAD', 'SGD', 'JPY', 'AED', 'CHF', 'CNY', 'BRL'];
+
+const sanitizeCurrency = (currency: string) => currency.trim().toUpperCase().replace(/[^A-Z]/g, '').slice(0, 3);
 
 const buildPayloadFromJson = (value: string) => {
   if (!value || !value.trim()) return undefined;
@@ -297,6 +310,12 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [limit, setLimit] = useState(10);
   const [page, setPage] = useState(0);
+  const debouncedSearch = useDebouncedValue(search);
+  const debouncedVendorFilter = useDebouncedValue(vendorFilter);
+  const debouncedProjectFilter = useDebouncedValue(projectFilter);
+  const debouncedCurrencyFilter = useDebouncedValue(currencyFilter);
+  const debouncedFromDate = useDebouncedValue(fromDate);
+  const debouncedToDate = useDebouncedValue(toDate);
 
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<ExpenseForm>(emptyForm());
@@ -308,21 +327,32 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
 
   const filterInput = useMemo<ExpenseFilterInput>(() => {
     const params: ExpenseFilterInput = {
-      search: search.trim() || null,
+      search: debouncedSearch.trim() || null,
       category: categoryFilter === 'all' ? null : categoryFilter,
       status: statusFilter === 'all' ? null : statusFilter,
-      vendor: vendorFilter.trim() || null,
-      projectCode: projectFilter.trim() || null,
-      currency: currencyFilter.trim() || null,
-      fromDate: fromDate || null,
-      toDate: toDate || null,
+      vendor: debouncedVendorFilter.trim() || null,
+      projectCode: debouncedProjectFilter.trim() || null,
+      currency: debouncedCurrencyFilter.trim() || null,
+      fromDate: debouncedFromDate || null,
+      toDate: debouncedToDate || null,
       limit,
       offset: page * limit,
       minTotalCents: null,
       maxTotalCents: null,
     };
     return params;
-  }, [search, categoryFilter, statusFilter, vendorFilter, projectFilter, currencyFilter, fromDate, toDate, limit, page]);
+  }, [
+    debouncedSearch,
+    categoryFilter,
+    statusFilter,
+    debouncedVendorFilter,
+    debouncedProjectFilter,
+    debouncedCurrencyFilter,
+    debouncedFromDate,
+    debouncedToDate,
+    limit,
+    page,
+  ]);
 
   const sortInput = useMemo<ExpenseSortInput>(() => ({
     field: sortBy,
@@ -467,6 +497,8 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
   const taxCents = Number.parseFloat(editing.taxInput || '0') * 100;
   const validTax = Number.isNaN(taxCents) ? 0 : Math.max(0, Math.round(taxCents));
   const total = Math.max(0, subtotal + validTax);
+  const displayCurrency = normalizeCurrencyValue(editing.currency);
+  const currencyOptions = useMemo(() => Array.from(new Set([displayCurrency, ...CURRENCY_OPTIONS])), [displayCurrency]);
   const normalizeDuplicateKey = (value: string | null | undefined) => (value || '').trim().toLowerCase();
   const getExpenseDay = (value: string | null | undefined) => {
     if (!value) return '';
@@ -482,7 +514,7 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
     if (!editing.category) errors.category = 'Category is required';
     if (!editing.vendor.trim()) errors.vendor = 'Vendor is required';
     if (!editing.incurredAt) errors.incurredAt = 'Expense date is required';
-    if (!editing.currency.trim()) errors.currency = 'Currency is required';
+    if (!normalizeCurrencyValue(editing.currency)) errors.currency = 'Currency is required';
     const taxValue = Number.parseFloat(editing.taxInput || '0');
     if (!Number.isFinite(taxValue) || taxValue < 0) {
       errors.taxInput = 'Tax must be a non-negative number';
@@ -579,7 +611,7 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
       dueAt: editing.dueAt ? new Date(editing.dueAt).toISOString() : undefined,
       invoiceNumber: editing.invoiceNumber.trim() || undefined,
       invoiceDate: editing.invoiceDate ? new Date(editing.invoiceDate).toISOString() : undefined,
-      currency: editing.currency.trim().toUpperCase(),
+      currency: normalizeCurrencyValue(editing.currency),
       status: editing.status,
       tags: editing.tags
         .split(',')
@@ -675,6 +707,7 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
         </div>
         <div className="flex items-center gap-2">
           <select
+            aria-label="Expenses per page"
             className="px-3 py-2 border border-slate-300 rounded-lg"
             value={limit}
             onChange={(event) => {
@@ -739,7 +772,7 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
         </div>
         <div className="bg-white rounded-lg border border-slate-200 p-4">
           <p className="text-sm text-slate-600">Total Amount</p>
-          <p className="text-2xl font-black text-slate-800 mt-2">{toMoney(summary.totalAmount, editing.currency || 'USD')}</p>
+          <p className="text-2xl font-black text-slate-800 mt-2">{toMoney(summary.totalAmount, displayCurrency)}</p>
         </div>
         <div className="bg-white rounded-lg border border-slate-200 p-4">
           <p className="text-sm text-slate-600">Draft / Pending</p>
@@ -752,10 +785,11 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
       </div>
 
       <div className="bg-white rounded-lg border border-slate-200 p-4">
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-8 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6 gap-3">
           <div className="flex items-center gap-2 border border-slate-200 rounded-lg px-3">
             <Search className="w-4 h-4 text-slate-500" />
             <input
+              aria-label="Search expenses"
               className="flex-1 border-0 p-2 outline-none"
               value={search}
               onChange={(event) => {
@@ -766,6 +800,7 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
             />
           </div>
           <select
+            aria-label="Expense category filter"
             className="px-3 py-2 border border-slate-300 rounded-lg"
             value={categoryFilter}
             onChange={(event) => {
@@ -779,6 +814,7 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
             ))}
           </select>
           <select
+            aria-label="Expense status filter"
             className="px-3 py-2 border border-slate-300 rounded-lg"
             value={statusFilter}
             onChange={(event) => {
@@ -792,6 +828,7 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
             ))}
           </select>
           <input
+            aria-label="Vendor filter"
             className="px-3 py-2 border border-slate-300 rounded-lg"
             value={vendorFilter}
             onChange={(event) => {
@@ -801,6 +838,7 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
             placeholder="Vendor"
           />
               <input
+                aria-label="Project code filter"
                 className="px-3 py-2 border border-slate-300 rounded-lg"
                 value={projectFilter}
                 onChange={(event) => {
@@ -810,15 +848,17 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
                 placeholder="Project code"
               />
               <input
+                aria-label="Currency filter"
                 className="px-3 py-2 border border-slate-300 rounded-lg"
                 value={currencyFilter}
                 onChange={(event) => {
                   setPage(0);
                   setCurrencyFilter(event.target.value);
                 }}
-                placeholder="Currency (eg USD)"
+                placeholder="Currency"
               />
           <input
+            aria-label="From date filter"
             className="px-3 py-2 border border-slate-300 rounded-lg"
             value={fromDate}
             onChange={(event) => {
@@ -828,6 +868,7 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
             type="date"
           />
           <input
+            aria-label="To date filter"
             className="px-3 py-2 border border-slate-300 rounded-lg"
             value={toDate}
             onChange={(event) => {
@@ -837,6 +878,7 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
             type="date"
           />
           <select
+            aria-label="Expense sort field"
             className="px-3 py-2 border border-slate-300 rounded-lg"
             value={sortBy}
             onChange={(event) => {
@@ -848,6 +890,7 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
             <option value="status">Sort: Status</option>
           </select>
           <select
+            aria-label="Expense sort direction"
             className="px-3 py-2 border border-slate-300 rounded-lg"
             value={sortDir}
             onChange={(event) => {
@@ -907,7 +950,7 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
                   <th className="text-left px-4 py-3 text-sm font-semibold text-slate-700">Total</th>
                   <th className="text-left px-4 py-3 text-sm font-semibold text-slate-700">Status</th>
                   <th className="text-left px-4 py-3 text-sm font-semibold text-slate-700">Date</th>
-                  <th className="text-left px-4 py-3 text-sm font-semibold text-slate-700">Actions</th>
+                  <th className="text-right px-4 py-3 text-sm font-semibold text-slate-700">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -917,7 +960,7 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
                     <td className="px-4 py-3 text-slate-700">{expense.title}</td>
                     <td className="px-4 py-3 text-slate-700">{expense.category}</td>
                     <td className="px-4 py-3 text-slate-700">{expense.vendor || '-'}</td>
-                    <td className="px-4 py-3 text-slate-700">{formatPrice(expense.totalCents, expense.currency)}</td>
+                      <td className="px-4 py-3 text-slate-700">{toMoney(expense.totalCents, expense.currency)}</td>
                     <td className="px-4 py-3">
                       <span className={`px-3 py-1 rounded-full text-xs font-medium ${statusClasses[expense.status]}`}>
                         {expense.status}
@@ -925,18 +968,16 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
                     </td>
                     <td className="px-4 py-3 text-slate-700">{expense.incurredAt?.slice(0, 10) || '-'}</td>
                     <td className="px-4 py-3">
-                      <div className="flex flex-wrap gap-2">
+                      <div className="flex items-center justify-end gap-1 whitespace-nowrap">
                         <button
-                          className="px-2 py-1 rounded-lg bg-slate-100 text-slate-700 text-sm hover:bg-slate-200"
-                          onClick={() => {
-                            setSelectedExpense((current) => (current?.id === expense.id ? null : expense));
-                          }}
+                          className="p-2 hover:bg-blue-50 text-blue-600 rounded-lg"
+                          onClick={() => setSelectedExpense(expense)}
                           title="View"
                         >
                           <Eye className="w-4 h-4" />
                         </button>
                         <button
-                          className="px-2 py-1 rounded-lg bg-blue-100 text-blue-700 text-sm hover:bg-blue-200"
+                          className="p-2 hover:bg-emerald-50 text-emerald-600 rounded-lg"
                           onClick={() => openEditForm(expense)}
                           title="Edit"
                         >
@@ -955,25 +996,120 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
       {renderPager()}
 
       {selectedExpense && detailExpense && (
-        <div className="bg-white rounded-lg border border-slate-200 p-4">
-          <div className="flex items-start justify-between gap-4">
-            <h3 className="font-bold text-slate-700">Snapshot: {detailExpense.expenseRef}</h3>
-            <button
-              className="text-sm px-3 py-1 border border-slate-200 rounded-lg"
-              onClick={() => setSelectedExpense(null)}
-            >
-              Hide
-            </button>
-          </div>
-          <div className="text-sm text-slate-600 mt-3 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2">
-            <div>Title: {detailExpense.title}</div>
-            <div>Vendor: {detailExpense.vendor || '-'}</div>
-            <div>Status: {detailExpense.status}</div>
-            <div>Category: {detailExpense.category}</div>
-            <div>Project: {detailExpense.projectCode || '-'}</div>
-            <div>Total: {formatPrice(detailExpense.totalCents, detailExpense.currency)}</div>
-            <div>Created: {detailExpense.createdAt?.slice(0, 16)}</div>
-            <div>Updated: {detailExpense.updatedAt?.slice(0, 16)}</div>
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl border border-slate-200 w-full max-w-5xl max-h-[90vh] flex flex-col overflow-hidden">
+            <div className="shrink-0 p-5 border-b border-slate-100 flex items-start justify-between gap-4">
+              <div>
+                <h3 className="font-bold text-lg text-slate-800">{detailExpense.expenseRef}</h3>
+                <p className="text-sm text-slate-500 mt-1">{detailExpense.title}</p>
+              </div>
+              <button
+                className="p-2 rounded-lg hover:bg-slate-100 text-slate-600"
+                onClick={() => setSelectedExpense(null)}
+                title="Close"
+              >
+                <X className="w-5 h-5" />
+                <span className="sr-only">Close</span>
+              </button>
+            </div>
+
+            <div className="p-5 space-y-5 overflow-y-auto">
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3 text-sm">
+                <div className="rounded-lg border border-slate-200 p-3">
+                  <p className="text-slate-500">Vendor</p>
+                  <p className="font-semibold text-slate-800 mt-1">{detailExpense.vendor || '-'}</p>
+                </div>
+                <div className="rounded-lg border border-slate-200 p-3">
+                  <p className="text-slate-500">Status</p>
+                  <span className={`inline-block mt-1 px-3 py-1 rounded-full text-xs font-medium ${statusClasses[detailExpense.status]}`}>
+                    {detailExpense.status}
+                  </span>
+                </div>
+                <div className="rounded-lg border border-slate-200 p-3">
+                  <p className="text-slate-500">Category</p>
+                  <p className="font-semibold text-slate-800 mt-1">{detailExpense.category}</p>
+                </div>
+                <div className="rounded-lg border border-slate-200 p-3">
+                  <p className="text-slate-500">Total</p>
+                  <p className="font-semibold text-slate-800 mt-1">{toMoney(detailExpense.totalCents, detailExpense.currency)}</p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                <div className="rounded-lg border border-slate-200 p-4 space-y-2">
+                  <h4 className="font-semibold text-slate-800">Expense Details</h4>
+                  <p><strong>Project:</strong> {detailExpense.projectCode || '-'}</p>
+                  <p><strong>Service:</strong> {detailExpense.serviceCode || '-'}</p>
+                  <p><strong>Invoice:</strong> {detailExpense.invoiceNumber || '-'}</p>
+                  <p><strong>Description:</strong> {detailExpense.description || '-'}</p>
+                  <p><strong>Reference:</strong> {detailExpense.referenceLink || '-'}</p>
+                  <p><strong>Tags:</strong> {detailExpense.tags?.length ? detailExpense.tags.join(', ') : '-'}</p>
+                </div>
+                <div className="rounded-lg border border-slate-200 p-4 space-y-2">
+                  <h4 className="font-semibold text-slate-800">Dates & Totals</h4>
+                  <p><strong>Incurred:</strong> {detailExpense.incurredAt?.slice(0, 10) || '-'}</p>
+                  <p><strong>Due:</strong> {detailExpense.dueAt?.slice(0, 10) || '-'}</p>
+                  <p><strong>Paid:</strong> {detailExpense.paidAt?.slice(0, 10) || '-'}</p>
+                  <p><strong>Invoice date:</strong> {detailExpense.invoiceDate?.slice(0, 10) || '-'}</p>
+                  <p><strong>Subtotal:</strong> {toMoney(detailExpense.subtotalCents, detailExpense.currency)}</p>
+                  <p><strong>Tax:</strong> {toMoney(detailExpense.taxCents, detailExpense.currency)}</p>
+                  <p><strong>Created:</strong> {detailExpense.createdAt?.slice(0, 16) || '-'}</p>
+                  <p><strong>Updated:</strong> {detailExpense.updatedAt?.slice(0, 16) || '-'}</p>
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-slate-200 overflow-hidden">
+                <div className="px-4 py-3 border-b border-slate-100 font-semibold text-slate-800">Line Items</div>
+                {detailExpense.lineItems.length === 0 ? (
+                  <div className="p-4 text-sm text-slate-500">No line items</div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead className="bg-slate-50">
+                        <tr>
+                          <th className="text-left px-4 py-3 font-semibold text-slate-700">Label</th>
+                          <th className="text-left px-4 py-3 font-semibold text-slate-700">Type</th>
+                          <th className="text-right px-4 py-3 font-semibold text-slate-700">Qty</th>
+                          <th className="text-right px-4 py-3 font-semibold text-slate-700">Unit</th>
+                          <th className="text-right px-4 py-3 font-semibold text-slate-700">Cost</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {detailExpense.lineItems.map((line) => (
+                          <tr key={line.id} className="border-t border-slate-100">
+                            <td className="px-4 py-3 text-slate-800">
+                              <div className="font-medium">{line.label}</div>
+                              {line.notes && <div className="text-xs text-slate-500 mt-1">{line.notes}</div>}
+                            </td>
+                            <td className="px-4 py-3 text-slate-700">{line.lineType}</td>
+                            <td className="px-4 py-3 text-right text-slate-700">{line.quantity}</td>
+                            <td className="px-4 py-3 text-right text-slate-700">{toMoney(line.unitPriceCents, detailExpense.currency)}</td>
+                            <td className="px-4 py-3 text-right font-semibold text-slate-800">{toMoney(line.costCents, detailExpense.currency)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+
+              {detailExpense.metadata && Object.keys(detailExpense.metadata).length > 0 && (
+                <div className="rounded-lg border border-slate-200 p-4">
+                  <h4 className="font-semibold text-slate-800 mb-2">Metadata</h4>
+                  <pre className="text-xs bg-slate-50 border border-slate-100 rounded-lg p-3 overflow-auto">
+                    {JSON.stringify(detailExpense.metadata, null, 2)}
+                  </pre>
+                </div>
+              )}
+            </div>
+            <div className="shrink-0 border-t border-slate-100 bg-white p-4 flex justify-end">
+              <button
+                className="px-4 py-2 border border-slate-200 rounded-lg text-slate-700 hover:bg-slate-100"
+                onClick={() => setSelectedExpense(null)}
+              >
+                Close
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -1046,12 +1182,17 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
                     />
                   </FieldLabel>
                   <FieldLabel label="Currency">
-                    <input
+                    <select
                       className="px-3 py-2 border border-slate-300 rounded-lg"
-                      value={editing.currency}
+                      value={displayCurrency}
                       onChange={(event) => setField('currency', event.target.value)}
-                      placeholder="USD"
-                    />
+                    >
+                      {currencyOptions.map((currency) => currency ? (
+                        <option key={currency} value={currency}>
+                          {currency}
+                        </option>
+                      ) : null)}
+                    </select>
                   </FieldLabel>
                   <FieldLabel label="Tax amount">
                     <input
@@ -1192,7 +1333,7 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
                         placeholder="1"
                       />
                     </MiniLabel>
-                    <MiniLabel label={`Unit price (${editing.currency || 'USD'})`} className="md:col-span-2">
+                    <MiniLabel label={`Unit price (${displayCurrency})`} className="md:col-span-2">
                       <input
                         className={`px-3 py-2 border rounded-lg ${formErrors[`line_${index}_price`] ? 'border-rose-300' : 'border-slate-300'}`}
                         type="number"
@@ -1215,7 +1356,7 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
                       <input
                         className="px-3 py-2 border border-slate-300 rounded-lg bg-white"
                         readOnly
-                        value={formatPrice(cost, editing.currency || 'USD')}
+                        value={toMoney(cost, displayCurrency)}
                       />
                     </MiniLabel>
 
@@ -1283,9 +1424,9 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
               })}
 
               <div className="text-right text-sm text-slate-700 space-y-1">
-                <p>Subtotal: <strong>{formatPrice(subtotal, editing.currency || 'USD')}</strong></p>
-                <p>Tax: <strong>{formatPrice(validTax, editing.currency || 'USD')}</strong></p>
-                <p>Total: <strong>{formatPrice(total, editing.currency || 'USD')}</strong></p>
+                <p>Subtotal: <strong>{toMoney(subtotal, displayCurrency)}</strong></p>
+                <p>Tax: <strong>{toMoney(validTax, displayCurrency)}</strong></p>
+                <p>Total: <strong>{toMoney(total, displayCurrency)}</strong></p>
               </div>
             </div>
 

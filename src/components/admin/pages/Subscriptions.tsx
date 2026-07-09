@@ -1,8 +1,8 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useQuery, useMutation } from '@apollo/client/react';
 import { ADMIN_PAYMENTS_QUERY, ADMIN_UPDATE_PAYMENT_STATUS_MUTATION, ADMIN_COMPANIES_QUERY } from '../../../lib/graphql';
 import { formatPrice, formatDate, parseModules } from '../../../lib/admin-utils';
-import { RefreshCw } from 'lucide-react';
+import { RefreshCw, X } from 'lucide-react';
 
 type PaymentStatus = 'pending' | 'succeeded' | 'failed' | 'refunded' | null;
 
@@ -27,21 +27,38 @@ interface PaymentType {
   paymentGatewayStatus?: string | null;
 }
 
-export const Subscriptions: React.FC<{onToast: (type: 'success'|'error', msg: string) => void}> = ({ onToast }) => {
+interface IndexedPaymentType extends PaymentType {
+  modulesList: string[];
+  searchableText: string;
+}
+
+export const Subscriptions: React.FC<{
+  onToast: (type: 'success'|'error', msg: string) => void;
+  initialCompanyId?: number | null;
+  initialCompanySearch?: string;
+}> = ({ onToast, initialCompanyId = null, initialCompanySearch = '' }) => {
   const [statusFilter, setStatusFilter] = useState<PaymentStatus>(null);
-  const [companySearch, setCompanySearch] = useState('');
+  const [companyIdFilter, setCompanyIdFilter] = useState<number | null>(initialCompanyId);
+  const [companySearch, setCompanySearch] = useState(initialCompanySearch);
+
+  useEffect(() => {
+    setCompanyIdFilter(initialCompanyId);
+  }, [initialCompanyId]);
+
+  useEffect(() => {
+    setCompanySearch(initialCompanySearch || '');
+  }, [initialCompanySearch]);
 
   const { data, loading, error, refetch } = useQuery<
     { adminPayments: PaymentType[] },
-    { status: PaymentStatus; companyId: number | null; dateFrom: string | null; dateTo: string | null; search: string | null },
+    { status: PaymentStatus; companyId: number | null; dateFrom: string | null; dateTo: string | null },
     any
   >(ADMIN_PAYMENTS_QUERY, {
     variables: {
       status: statusFilter,
-      companyId: null,
+      companyId: companyIdFilter,
       dateFrom: null,
       dateTo: null,
-      search: companySearch || null,
     },
   });
 
@@ -78,33 +95,46 @@ export const Subscriptions: React.FC<{onToast: (type: 'success'|'error', msg: st
     }
   };
 
-  if (loading) return <div className="text-center py-12 text-slate-500">Loading subscriptions...</div>;
-  if (error) return <div className="text-center py-12 text-red-600">Error: {error.message}</div>;
-
   const payments = data?.adminPayments || [];
   const statuses = ['pending', 'succeeded', 'failed', 'refunded'] as const;
   const getGatewayLabel = (payment: PaymentType) => payment.gatewayMethod || payment.source || '-';
-  const dedupePayments = (paymentItems: PaymentType[]) => {
+  const normalizedCompanySearch = companySearch.trim().toLowerCase();
+  const indexedPayments = useMemo<IndexedPaymentType[]>(() => payments.map((payment) => {
+    const modulesList = parseModules(payment.modules);
+    const searchableText = [
+      payment.companyName,
+      payment.email,
+      payment.paymentIntentId,
+      payment.gatewayMethod,
+      payment.source,
+      payment.paymentGatewayStatus,
+      ...modulesList,
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase();
+
+    return {
+      ...payment,
+      modulesList,
+      searchableText,
+    };
+  }), [payments]);
+
+  const filteredPayments = useMemo(() => {
     const seen = new Set<string>();
-    return paymentItems.filter((payment) => {
+    const dedupedPayments = indexedPayments.filter((payment) => {
       if (seen.has(payment.paymentIntentId)) return false;
       seen.add(payment.paymentIntentId);
       return true;
     });
-  };
 
-  const filteredPayments = dedupePayments(
-    companySearch
-      ? payments.filter((payment) => {
-        const search = companySearch.toLowerCase();
-        return (
-          payment.companyName?.toLowerCase().includes(search) ||
-          payment.email?.toLowerCase().includes(search) ||
-          payment.paymentIntentId?.toLowerCase().includes(search)
-        );
-      })
-      : payments
-  );
+    if (!normalizedCompanySearch) return dedupedPayments;
+    return dedupedPayments.filter((payment) => payment.searchableText.includes(normalizedCompanySearch));
+  }, [indexedPayments, normalizedCompanySearch]);
+
+  if (loading) return <div className="text-center py-12 text-slate-500">Loading subscriptions...</div>;
+  if (error) return <div className="text-center py-12 text-red-600">Error: {error.message}</div>;
 
   return (
     <div className="space-y-8">
@@ -123,6 +153,21 @@ export const Subscriptions: React.FC<{onToast: (type: 'success'|'error', msg: st
       </div>
 
       <div className="bg-white rounded-lg border border-slate-200 p-6 space-y-4">
+        {companyIdFilter !== null && (
+          <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 flex items-center justify-between gap-3 text-sm text-blue-700">
+            <div>Filtering subscriptions for Company ID: {companyIdFilter}</div>
+            <button
+              type="button"
+              onClick={() => {
+                setCompanyIdFilter(null);
+                setCompanySearch('');
+              }}
+              className="inline-flex items-center gap-1 px-3 py-1 text-blue-700 border border-blue-200 rounded-lg hover:bg-blue-100"
+            >
+              <X className="w-3.5 h-3.5" /> Clear company filter
+            </button>
+          </div>
+        )}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-2">Filter by Status</label>
@@ -183,7 +228,7 @@ export const Subscriptions: React.FC<{onToast: (type: 'success'|'error', msg: st
               </thead>
               <tbody>
                 {filteredPayments.map((payment) => {
-                  const modules = parseModules(payment.modules);
+                  const modules = payment.modulesList;
                   return (
                     <tr key={payment.paymentIntentId} className="border-b border-slate-100 hover:bg-slate-50">
                       <td className="py-4 px-6 font-medium text-slate-800">

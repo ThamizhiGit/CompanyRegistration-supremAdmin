@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useQuery } from '@apollo/client/react';
 import { ADMIN_ACTIVITY_LOG_QUERY } from '../../../lib/graphql';
 import { toDateTimeLocalValue, formatDateTime } from '../../../lib/admin-utils';
+import { useDebouncedValue } from '../../../lib/useDebouncedValue';
 
 interface ActivityType {
   id: string;
@@ -25,6 +26,12 @@ export const UserActivityLog: React.FC = () => {
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
   const [selected, setSelected] = useState<ActivityType | null>(null);
+  const debouncedActor = useDebouncedValue(actor);
+  const debouncedAction = useDebouncedValue(action);
+  const debouncedCompanyId = useDebouncedValue(companyId);
+  const debouncedUserId = useDebouncedValue(userId);
+  const debouncedFromDate = useDebouncedValue(fromDate);
+  const debouncedToDate = useDebouncedValue(toDate);
   const toActivityUserId = (value: string) => {
     const trimmed = value.trim();
     if (!trimmed) return null;
@@ -52,16 +59,16 @@ export const UserActivityLog: React.FC = () => {
     to: string | null;
   }, any>(ADMIN_ACTIVITY_LOG_QUERY, {
     variables: {
-      actor: actor || '',
-      action: action || '',
-      companyId: companyId || null,
-      userId: toActivityUserId(userId),
-      from: fromDate || null,
-      to: toDate || null,
+      actor: debouncedActor || '',
+      action: debouncedAction || '',
+      companyId: debouncedCompanyId || null,
+      userId: toActivityUserId(debouncedUserId),
+      from: debouncedFromDate || null,
+      to: debouncedToDate || null,
     }
   });
 
-  if (loading) {
+  if (loading && !data) {
     return <div className="text-center py-12 text-slate-500">Loading activity logs...</div>;
   }
 

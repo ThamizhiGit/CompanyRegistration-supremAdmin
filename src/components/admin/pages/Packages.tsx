@@ -1,13 +1,14 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { useQuery, useMutation } from '@apollo/client/react';
 import {
   ADMIN_MODULES_QUERY,
   ADMIN_SAVE_MODULE_MUTATION,
   ADMIN_SET_MODULE_OFFER_MUTATION,
   ADMIN_MODULE_DETAIL_QUERY,
+  ADMIN_DELETE_MODULE_MUTATION,
 } from '../../../lib/graphql';
 import { formatPrice, centsFromDollars } from '../../../lib/admin-utils';
-import { Plus, Edit2, X, Save, Tag, Eye } from 'lucide-react';
+import { Plus, Edit2, X, Save, Tag, Eye, Trash2 } from 'lucide-react';
 
 interface EditingModule {
   id: string;
@@ -54,6 +55,8 @@ interface ModuleDetailType {
   logs: Array<{ id: string; action: string; actor: string; message: string; createdAt: string }>;
 }
 
+const normalizeCurrency = (currency: string) => currency.trim().toUpperCase();
+
 export const Packages: React.FC<{onToast: (type: 'success'|'error', msg: string) => void}> = ({onToast}) => {
   const [search, setSearch] = useState('');
   const [activeFilter, setActiveFilter] = useState<'all' | 'active' | 'inactive'>('all');
@@ -66,13 +69,15 @@ export const Packages: React.FC<{onToast: (type: 'success'|'error', msg: string)
   const [newModule, setNewModule] = useState(false);
   const [offering, setOffering] = useState<OfferingModule | null>(null);
   const [viewingId, setViewingId] = useState<string | null>(null);
+  const [deleteModuleId, setDeleteModuleId] = useState<string | null>(null);
+  const [deleteForce, setDeleteForce] = useState(false);
 
   const { data, loading, error, refetch } = useQuery<{adminModules: ModuleType[]}, any, any>(ADMIN_MODULES_QUERY, {
     variables: {
       includeInactive: true,
-      search: search || null,
+      search: null,
       active: activeFilter === 'all' ? null : activeFilter === 'active',
-      currency: currencyFilter || null,
+      currency: currencyFilter ? normalizeCurrency(currencyFilter) : null,
       priceMin: minPrice ? centsFromDollars(parseFloat(minPrice)) : null,
       priceMax: maxPrice ? centsFromDollars(parseFloat(maxPrice)) : null,
     }
@@ -88,6 +93,7 @@ export const Packages: React.FC<{onToast: (type: 'success'|'error', msg: string)
 
   const [saveModule] = useMutation(ADMIN_SAVE_MODULE_MUTATION);
   const [setOffer] = useMutation(ADMIN_SET_MODULE_OFFER_MUTATION);
+  const [deleteModule] = useMutation(ADMIN_DELETE_MODULE_MUTATION);
 
   const handleSave = async () => {
     if (!editing) return;
@@ -98,7 +104,7 @@ export const Packages: React.FC<{onToast: (type: 'success'|'error', msg: string)
           name: editing.name,
           description: editing.description,
           price: editing.price,
-          currency: editing.currency,
+          currency: normalizeCurrency(editing.currency),
           active: editing.active,
           sortOrder: editing.sortOrder,
         },
@@ -143,11 +149,37 @@ export const Packages: React.FC<{onToast: (type: 'success'|'error', msg: string)
     }
   };
 
-  useEffect(() => {
-    if (viewingId && !moduleDetailLoading && moduleDetailData?.adminModuleDetail) {
-      refetch();
+  const handleDeleteModule = async () => {
+    if (!deleteModuleId) return;
+    try {
+      const response = await deleteModule({
+        variables: {
+          id: deleteModuleId,
+          force: deleteForce,
+        },
+      });
+
+      const payload = response.data?.adminDeleteModule;
+      if (payload?.success) {
+        onToast('success', payload.message || `Package "${deleteModuleId}" deleted`);
+      } else {
+        onToast('error', payload?.message || 'Failed to delete package');
+      }
+
+      if (payload?.success) {
+        setDeleteModuleId(null);
+        setDeleteForce(false);
+        setViewingId((current) => (current === deleteModuleId ? null : current));
+        if (editing && editing.id === deleteModuleId) {
+          setEditing(null);
+          setNewModule(false);
+        }
+        refetch();
+      }
+    } catch (err: any) {
+      onToast('error', err.message || 'Failed to delete package');
     }
-  }, [moduleDetailData?.adminModuleDetail, moduleDetailLoading, refetch, viewingId]);
+  };
 
   if (loading) return <div className="text-center py-12 text-slate-500">Loading packages...</div>;
   if (error) return <div className="text-center py-12 text-red-600">Error: {error.message}</div>;
@@ -160,6 +192,19 @@ export const Packages: React.FC<{onToast: (type: 'success'|'error', msg: string)
     return true;
   };
   const modules = (data?.adminModules || []).filter((module) => {
+    const normalizedSearch = search.trim().toLowerCase();
+    const searchableText = [
+      module.id,
+      module.name,
+      module.description,
+      module.currency,
+      module.offerLabel,
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase();
+
+    if (normalizedSearch && !searchableText.includes(normalizedSearch)) return false;
     if (offerFilter === 'all') return true;
     const activeOffer = isOfferActive(module);
     return offerFilter === 'active' ? activeOffer : !activeOffer;
@@ -181,7 +226,7 @@ export const Packages: React.FC<{onToast: (type: 'success'|'error', msg: string)
               name: '',
               description: '',
               price: 1000,
-              currency: currencyFilter || 'USD',
+              currency: normalizeCurrency(currencyFilter || 'USD'),
               active: true,
               sortOrder: modules.length + 1,
             });
@@ -219,7 +264,7 @@ export const Packages: React.FC<{onToast: (type: 'success'|'error', msg: string)
           <input
             className="px-3 py-2 border border-slate-300 rounded-lg"
             value={currencyFilter}
-            onChange={(e) => setCurrencyFilter(e.target.value)}
+            onChange={(e) => setCurrencyFilter(normalizeCurrency(e.target.value))}
             placeholder="Currency"
           />
           <input
@@ -306,7 +351,7 @@ export const Packages: React.FC<{onToast: (type: 'success'|'error', msg: string)
                             name: module.name,
                             description: module.description || '',
                             price: module.price,
-                            currency: module.currency,
+                            currency: normalizeCurrency(module.currency),
                             active: module.active,
                             sortOrder: module.sortOrder || 0,
                           });
@@ -339,6 +384,16 @@ export const Packages: React.FC<{onToast: (type: 'success'|'error', msg: string)
                           <X className="w-4 h-4" />
                         </button>
                       )}
+                      <button
+                        onClick={() => {
+                          setDeleteModuleId(module.id);
+                          setDeleteForce(false);
+                        }}
+                        className="p-2 hover:bg-red-50 text-red-600 rounded-lg"
+                        title="Delete package"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
                     </td>
                   </tr>
                   );
@@ -348,6 +403,54 @@ export const Packages: React.FC<{onToast: (type: 'success'|'error', msg: string)
           </div>
         )}
       </div>
+
+      {deleteModuleId !== null && (
+        <div className="fixed inset-0 z-50 bg-black/30 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl border border-slate-200 w-full max-w-lg">
+            <div className="p-4 border-b border-slate-100 flex items-center justify-between">
+              <h3 className="font-bold text-lg text-slate-800">Delete Package</h3>
+              <button
+                onClick={() => {
+                  setDeleteModuleId(null);
+                  setDeleteForce(false);
+                }}
+                className="p-2 rounded-lg hover:bg-slate-100"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-5 space-y-4">
+              <p className="text-sm text-slate-700">Are you sure you want to delete <strong>{deleteModuleId}</strong>?</p>
+              <label className="flex items-center gap-2 text-sm text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={deleteForce}
+                  onChange={(event) => setDeleteForce(event.target.checked)}
+                />
+                Force delete and unlink from all companies
+              </label>
+              <p className="text-xs text-slate-500">If this package is attached to companies, regular delete may fail. Try enabling force delete.</p>
+              <div className="flex justify-end gap-2">
+                <button
+                  className="px-4 py-2 border border-slate-200 rounded-lg"
+                  onClick={() => {
+                    setDeleteModuleId(null);
+                    setDeleteForce(false);
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="px-4 py-2 text-white rounded-lg bg-red-600 hover:bg-red-700"
+                  onClick={handleDeleteModule}
+                >
+                  Delete Package
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {editing && (
         <div className="fixed inset-0 z-40 bg-black/30 flex items-center justify-center p-4">
@@ -394,7 +497,7 @@ export const Packages: React.FC<{onToast: (type: 'success'|'error', msg: string)
                   <input
                     type="text"
                     value={editing.currency}
-                    onChange={(event) => setEditing({ ...editing, currency: event.target.value })}
+                    onChange={(event) => setEditing({ ...editing, currency: normalizeCurrency(event.target.value) })}
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                   />
                 </div>

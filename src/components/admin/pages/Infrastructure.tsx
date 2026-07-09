@@ -20,11 +20,11 @@ interface InfrastructureEntry {
 export const Infrastructure: React.FC = () => {
   const [period, setPeriod] = useState('30d');
 
-  const { data, loading, error, refetch } = useQuery<{adminInfrastructure: InfrastructureEntry}, {period: string}, any>(ADMIN_INFRASTRUCTURE_QUERY, {
+  const { data, loading, error } = useQuery<{adminInfrastructure: InfrastructureEntry}, {period: string}, any>(ADMIN_INFRASTRUCTURE_QUERY, {
     variables: { period },
   });
 
-  if (loading) {
+  if (loading && !data) {
     return <div className="text-center py-12 text-slate-500">Loading infrastructure...</div>;
   }
 
@@ -48,11 +48,11 @@ export const Infrastructure: React.FC = () => {
 
         <div className="flex items-center gap-2">
           <select
+            aria-label="Infrastructure reporting period"
             value={period}
             onChange={(event) => {
               const nextPeriod = event.target.value;
               setPeriod(nextPeriod);
-              refetch({ period: nextPeriod });
             }}
             className="px-3 py-2 border border-slate-300 rounded-lg"
           >

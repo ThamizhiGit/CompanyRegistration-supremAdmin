@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useQuery, useMutation, useLazyQuery } from '@apollo/client/react';
 import { ADMIN_USERS_QUERY, ADMIN_COMPANIES_QUERY, ADMIN_UPDATE_USER_MUTATION, ADMIN_ACTIVITY_LOG_QUERY } from '../../../lib/graphql';
 import { Search, Eye, Edit2 } from 'lucide-react';
@@ -52,11 +52,9 @@ export const Users: React.FC<{onToast: (type: 'success'|'error', msg: string) =>
 
   const { data: usersData, loading: usersLoading, error: usersError, refetch: refetchUsers } = useQuery<{adminUsers: UserType[]}, {
     companyId: number | null;
-    search: string | null;
   }, any>(ADMIN_USERS_QUERY, {
     variables: {
       companyId: companyFilter,
-      search: search || null,
     }
   });
 
@@ -73,11 +71,29 @@ export const Users: React.FC<{onToast: (type: 'success'|'error', msg: string) =>
 
   const [updateUser] = useMutation(ADMIN_UPDATE_USER_MUTATION);
 
-  if (usersLoading) return <div className="text-center py-12 text-slate-500">Loading users...</div>;
-  if (usersError) return <div className="text-center py-12 text-red-600">Error: {usersError.message}</div>;
-
   const users = usersData?.adminUsers || [];
   const companies = companiesData?.adminCompanies || [];
+  const normalizedSearch = search.trim().toLowerCase();
+  const displayedUsers = useMemo(() => {
+    if (!normalizedSearch) return users;
+
+    return users.filter((user) => {
+      const searchableText = [
+        user.firstName,
+        user.lastName,
+        `${user.firstName} ${user.lastName}`,
+        user.email,
+        user.username,
+        user.company?.company,
+        user.location?.location,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+
+      return searchableText.includes(normalizedSearch);
+    });
+  }, [users, normalizedSearch]);
   const activityUser = users.find((user) => String(user.id) === String(activityUserId));
   const allActivityLogs = activityData?.adminUserActivityLogs || [];
   const activityLogs = activityUserId === null
@@ -91,6 +107,9 @@ export const Users: React.FC<{onToast: (type: 'success'|'error', msg: string) =>
 
         return activityUserLogId === selectedUserId || (isDirectUserRecord && targetId === selectedUserId);
       });
+
+  if (usersLoading) return <div className="text-center py-12 text-slate-500">Loading users...</div>;
+  if (usersError) return <div className="text-center py-12 text-red-600">Error: {usersError.message}</div>;
 
   const toActivityUserId = (value: string | number) => {
     if (typeof value === 'number') return value;
@@ -289,46 +308,47 @@ export const Users: React.FC<{onToast: (type: 'success'|'error', msg: string) =>
       </div>
 
       <div className="bg-white rounded-lg border border-slate-200 overflow-hidden">
-        {users.length === 0 ? (
+        {displayedUsers.length === 0 ? (
           <div className="text-center py-12 text-slate-500">{search || companyFilter ? 'No users match your filters' : 'No users found'}</div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full">
+            <table className="w-full min-w-[1080px]">
               <thead className="bg-slate-50 border-b border-slate-200">
                 <tr>
-                  <th className="text-left py-4 px-6 font-semibold text-slate-700">Name</th>
-                  <th className="text-left py-4 px-6 font-semibold text-slate-700">Email</th>
-                  <th className="text-left py-4 px-6 font-semibold text-slate-700">Username</th>
-                  <th className="text-left py-4 px-6 font-semibold text-slate-700">Company</th>
-                  <th className="text-left py-4 px-6 font-semibold text-slate-700">Location</th>
-                  <th className="text-left py-4 px-6 font-semibold text-slate-700">Role</th>
-                  <th className="text-left py-4 px-6 font-semibold text-slate-700">Status</th>
-                  <th className="text-right py-4 px-6 font-semibold text-slate-700">Actions</th>
+                  <th className="text-left py-3 px-4 font-semibold text-slate-700">Name</th>
+                  <th className="text-left py-3 px-4 font-semibold text-slate-700">Email</th>
+                  <th className="text-left py-3 px-4 font-semibold text-slate-700">Username</th>
+                  <th className="text-left py-3 px-4 font-semibold text-slate-700">Company</th>
+                  <th className="text-left py-3 px-4 font-semibold text-slate-700">Location</th>
+                  <th className="text-left py-3 px-4 font-semibold text-slate-700">Role</th>
+                  <th className="text-left py-3 px-4 font-semibold text-slate-700">Status</th>
+                  <th className="sticky right-0 z-10 bg-slate-50 text-right py-3 px-4 font-semibold text-slate-700 w-24">Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {users.map((user) => (
-                  <tr key={user.id} className="border-b border-slate-100 hover:bg-slate-50">
-                    <td className="py-4 px-6 font-medium text-slate-800">{user.firstName} {user.lastName}</td>
-                    <td className="py-4 px-6 text-slate-700">{user.email}</td>
-                    <td className="py-4 px-6 text-slate-700 font-mono text-sm">{user.username}</td>
-                    <td className="py-4 px-6 text-slate-700">{user.company?.company || '-'}</td>
-                    <td className="py-4 px-6 text-slate-700">{user.location?.location || '-'}</td>
-                    <td className="py-4 px-6">
+                {displayedUsers.map((user) => (
+                  <tr key={user.id} className="group border-b border-slate-100 hover:bg-slate-50">
+                    <td className="py-3 px-4 font-medium text-slate-800 max-w-[150px] truncate" title={`${user.firstName} ${user.lastName}`}>{user.firstName} {user.lastName}</td>
+                    <td className="py-3 px-4 text-slate-700 max-w-[220px] truncate" title={user.email}>{user.email}</td>
+                    <td className="py-3 px-4 text-slate-700 font-mono text-sm max-w-[150px] truncate" title={user.username}>{user.username}</td>
+                    <td className="py-3 px-4 text-slate-700 max-w-[170px] truncate" title={user.company?.company || '-'}>{user.company?.company || '-'}</td>
+                    <td className="py-3 px-4 text-slate-700 max-w-[150px] truncate" title={user.location?.location || '-'}>{user.location?.location || '-'}</td>
+                    <td className="py-3 px-4">
                       <span className={`inline-block px-3 py-1 rounded-full text-sm font-medium ${
                         user.isCompanyAdmin ? 'bg-purple-50 text-purple-700' : 'bg-slate-100 text-slate-700'
                       }`}>
                         {user.isCompanyAdmin ? 'Company Admin' : 'User'}
                       </span>
                     </td>
-                    <td className="py-4 px-6">
+                    <td className="py-3 px-4">
                       <span className={`inline-block px-3 py-1 rounded-full text-sm font-medium ${
                         user.isActive ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'
                       }`}>
                         {user.isActive ? 'Active' : 'Inactive'}
                       </span>
                     </td>
-                      <td className="py-4 px-6 text-right">
+                      <td className="sticky right-0 bg-white py-3 px-4 group-hover:bg-slate-50">
+                        <div className="flex items-center justify-end gap-1 whitespace-nowrap">
                       <button
                         onClick={() => {
                           const normalizedId = toActivityUserId(user.id);
@@ -338,7 +358,7 @@ export const Users: React.FC<{onToast: (type: 'success'|'error', msg: string) =>
                           });
                         }}
                         title="View Activity"
-                        className="p-2 mr-2 hover:bg-blue-50 text-blue-600 rounded-lg"
+                        className="p-2 hover:bg-blue-50 text-blue-600 rounded-lg"
                       >
                         <Eye className="w-4 h-4" />
                         <span className="sr-only">View Activity</span>
@@ -360,6 +380,7 @@ export const Users: React.FC<{onToast: (type: 'success'|'error', msg: string) =>
                         <Edit2 className="w-4 h-4" />
                         <span className="sr-only">Edit User</span>
                       </button>
+                        </div>
                     </td>
                   </tr>
                 ))}
@@ -371,19 +392,19 @@ export const Users: React.FC<{onToast: (type: 'success'|'error', msg: string) =>
 
       {activityUserId !== null && (
         <div className="fixed inset-0 z-50 bg-black/30 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl border border-slate-200 w-full max-w-4xl max-h-[90vh] overflow-auto">
-            <div className="p-4 border-b border-slate-100 flex items-center justify-between">
-              <h3 className="font-bold text-lg text-slate-800">
+          <div className="bg-white rounded-xl border border-slate-200 w-full max-w-4xl max-h-[90vh] overflow-hidden">
+            <div className="p-4 border-b border-slate-100 flex items-center justify-between gap-3">
+              <h3 className="font-bold text-lg text-slate-800 truncate">
                 User Activity - {activityUser ? `${activityUser.firstName} ${activityUser.lastName}` : activityUserId}
               </h3>
               <button
                 onClick={() => setActivityUserId(null)}
-                className="px-2 py-1 rounded border border-slate-200"
+                className="shrink-0 px-2 py-1 rounded border border-slate-200"
               >
                 ×
               </button>
             </div>
-            <div className="p-4">
+            <div className="max-h-[calc(90vh-65px)] overflow-y-auto p-4">
               {activityLoading ? (
                 <div className="text-center py-6 text-slate-500">Loading activity...</div>
               ) : activityError ? (
@@ -398,7 +419,7 @@ export const Users: React.FC<{onToast: (type: 'success'|'error', msg: string) =>
                     return (
                       <details
                         key={activity.id}
-                        className="group rounded-lg border border-slate-200 bg-white"
+                        className="group min-w-0 rounded-lg border border-slate-200 bg-white"
                       >
                         <summary className="list-none cursor-pointer">
                           <div className="grid grid-cols-1 gap-3 p-4 hover:bg-slate-50 md:grid-cols-[160px_1fr_auto] md:items-start">
@@ -421,10 +442,15 @@ export const Users: React.FC<{onToast: (type: 'success'|'error', msg: string) =>
                           </div>
                         </summary>
                         <div className="border-t border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-600">
-                          <div className="grid gap-2 md:grid-cols-3">
+                          <div className="grid min-w-0 gap-2 md:grid-cols-3">
                             <p><strong>Target ID:</strong> {displayValue(activity.targetId)}</p>
                             <p><strong>Company ID:</strong> {activity.companyId || '-'}</p>
-                            <p className="md:col-span-3"><strong>Raw details:</strong> {displayValue(activity.details)}</p>
+                            <div className="min-w-0 md:col-span-3">
+                              <strong>Raw details:</strong>
+                              <pre className="mt-1 max-h-40 overflow-y-auto whitespace-pre-wrap break-all rounded-md border border-slate-200 bg-white p-3 font-mono text-[11px] leading-relaxed text-slate-600">
+                                {displayValue(activity.details)}
+                              </pre>
+                            </div>
                           </div>
                         </div>
                       </details>

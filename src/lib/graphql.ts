@@ -143,6 +143,16 @@ export const ADMIN_SAVE_MODULE_MUTATION = gql`
   }
 `;
 
+export const ADMIN_DELETE_MODULE_MUTATION = gql`
+  mutation AdminDeleteModule($id: String!, $force: Boolean) {
+    adminDeleteModule(id: $id, force: $force) {
+      success
+      message
+      removedFromCompanies
+    }
+  }
+`;
+
 export const ADMIN_SET_MODULE_OFFER_MUTATION = gql`
   mutation AdminSetModuleOffer(
     $id: String!
@@ -320,6 +330,7 @@ export const ADMIN_UPDATE_COMPANY_DETAIL_MUTATION = gql`
     $company: String
     $status: String
     $subscriptionStatus: String
+    $subscriptionStatusReason: String
     $subscriptionDueDate: DateTime
     $subscriptionRecurringDate: DateTime
     $isMultiLocationEnabled: Boolean
@@ -329,6 +340,7 @@ export const ADMIN_UPDATE_COMPANY_DETAIL_MUTATION = gql`
       company: $company
       status: $status
       subscriptionStatus: $subscriptionStatus
+      subscriptionStatusReason: $subscriptionStatusReason
       subscriptionDueDate: $subscriptionDueDate
       subscriptionRecurringDate: $subscriptionRecurringDate
       isMultiLocationEnabled: $isMultiLocationEnabled
