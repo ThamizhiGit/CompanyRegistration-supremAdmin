@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useMutation } from '@apollo/client/react';
-import { Plus, Pencil, Eye, Save, X, Search, RotateCcw, ChevronDown, ChevronUp } from 'lucide-react';
+import { Plus, Pencil, Eye, Save, X, Search, RotateCcw, ChevronDown, ChevronUp, Filter } from 'lucide-react';
 import {
   ADMIN_EXPENSES_QUERY,
   ADMIN_EXPENSE_DETAIL_QUERY,
@@ -10,6 +10,7 @@ import {
 } from '../../../lib/graphql';
 import { formatPrice, centsFromDollars } from '../../../lib/admin-utils';
 import { useDebouncedValue } from '../../../lib/useDebouncedValue';
+import { buildColumnFilterOptions, ColumnFilter, matchesColumnFilter } from '../ColumnFilter';
 
 type ExpenseStatus = 'draft' | 'pending' | 'approved' | 'paid' | 'rejected' | 'archived';
 type ExpenseCategory = 'hosting' | 'service' | 'integration' | 'llm' | 'other';
@@ -299,23 +300,18 @@ const MiniLabel: React.FC<{ label: string; children: React.ReactNode; className?
 
 export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: string) => void }> = ({ onToast }) => {
   const [search, setSearch] = useState('');
-  const [categoryFilter, setCategoryFilter] = useState<'all' | ExpenseCategory>('all');
-  const [statusFilter, setStatusFilter] = useState<'all' | ExpenseStatus>('all');
-  const [vendorFilter, setVendorFilter] = useState('');
-  const [projectFilter, setProjectFilter] = useState('');
-  const [currencyFilter, setCurrencyFilter] = useState('');
-  const [fromDate, setFromDate] = useState('');
-  const [toDate, setToDate] = useState('');
+  const [categorySelections, setCategorySelections] = useState<string[]>([]);
+  const [statusSelections, setStatusSelections] = useState<string[]>([]);
+  const [vendorSelections, setVendorSelections] = useState<string[]>([]);
+  const [projectSelections, setProjectSelections] = useState<string[]>([]);
+  const [currencySelections, setCurrencySelections] = useState<string[]>([]);
+  const [dateSelections, setDateSelections] = useState<string[]>([]);
+  const [filtersOpen, setFiltersOpen] = useState(true);
   const [sortBy, setSortBy] = useState('incurredAt');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [limit, setLimit] = useState(10);
   const [page, setPage] = useState(0);
   const debouncedSearch = useDebouncedValue(search);
-  const debouncedVendorFilter = useDebouncedValue(vendorFilter);
-  const debouncedProjectFilter = useDebouncedValue(projectFilter);
-  const debouncedCurrencyFilter = useDebouncedValue(currencyFilter);
-  const debouncedFromDate = useDebouncedValue(fromDate);
-  const debouncedToDate = useDebouncedValue(toDate);
 
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<ExpenseForm>(emptyForm());
@@ -328,13 +324,13 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
   const filterInput = useMemo<ExpenseFilterInput>(() => {
     const params: ExpenseFilterInput = {
       search: debouncedSearch.trim() || null,
-      category: categoryFilter === 'all' ? null : categoryFilter,
-      status: statusFilter === 'all' ? null : statusFilter,
-      vendor: debouncedVendorFilter.trim() || null,
-      projectCode: debouncedProjectFilter.trim() || null,
-      currency: debouncedCurrencyFilter.trim() || null,
-      fromDate: debouncedFromDate || null,
-      toDate: debouncedToDate || null,
+      category: null,
+      status: null,
+      vendor: null,
+      projectCode: null,
+      currency: null,
+      fromDate: null,
+      toDate: null,
       limit,
       offset: page * limit,
       minTotalCents: null,
@@ -343,13 +339,6 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
     return params;
   }, [
     debouncedSearch,
-    categoryFilter,
-    statusFilter,
-    debouncedVendorFilter,
-    debouncedProjectFilter,
-    debouncedCurrencyFilter,
-    debouncedFromDate,
-    debouncedToDate,
     limit,
     page,
   ]);
@@ -381,18 +370,35 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
   const [setExpenseStatus] = useMutation(ADMIN_SET_EXPENSE_STATUS_MUTATION);
 
   const expenses = (data?.adminExpenses?.items || []) as Expense[];
+  const categoryOptions = useMemo(() => buildColumnFilterOptions(expenses, (expense) => expense.category), [expenses]);
+  const statusOptions = useMemo(() => buildColumnFilterOptions(expenses, (expense) => expense.status), [expenses]);
+  const vendorOptions = useMemo(() => buildColumnFilterOptions(expenses, (expense) => expense.vendor || '-'), [expenses]);
+  const projectOptions = useMemo(() => buildColumnFilterOptions(expenses, (expense) => expense.projectCode || expense.expenseRef || '-'), [expenses]);
+  const currencyFilterOptions = useMemo(() => buildColumnFilterOptions(expenses, (expense) => expense.currency), [expenses]);
+  const dateOptions = useMemo(() => buildColumnFilterOptions(expenses, (expense) => expense.incurredAt?.slice(0, 10) || '-'), [expenses]);
+  const displayedExpenses = useMemo(
+    () => expenses.filter((expense) => (
+      matchesColumnFilter(projectSelections, expense.projectCode || expense.expenseRef || '-') &&
+      matchesColumnFilter(categorySelections, expense.category) &&
+      matchesColumnFilter(vendorSelections, expense.vendor || '-') &&
+      matchesColumnFilter(currencySelections, expense.currency) &&
+      matchesColumnFilter(statusSelections, expense.status) &&
+      matchesColumnFilter(dateSelections, expense.incurredAt?.slice(0, 10) || '-')
+    )),
+    [expenses, projectSelections, categorySelections, vendorSelections, currencySelections, statusSelections, dateSelections],
+  );
   const totalCount = data?.adminExpenses?.totalCount || 0;
   const detailExpense = (detailData?.adminExpenseById || null) as Expense | null;
 
   const summary = useMemo(() => {
-    const draftCount = expenses.filter((expense) => expense.status === 'draft').length;
-    const pendingCount = expenses.filter((expense) => expense.status === 'pending').length;
-    const approvedCount = expenses.filter((expense) => expense.status === 'approved').length;
-    const totalAmount = expenses.reduce((acc, expense) => acc + expense.totalCents, 0);
-    const pageCount = expenses.length;
+    const draftCount = displayedExpenses.filter((expense) => expense.status === 'draft').length;
+    const pendingCount = displayedExpenses.filter((expense) => expense.status === 'pending').length;
+    const approvedCount = displayedExpenses.filter((expense) => expense.status === 'approved').length;
+    const totalAmount = displayedExpenses.reduce((acc, expense) => acc + expense.totalCents, 0);
+    const pageCount = displayedExpenses.length;
 
     return { draftCount, pendingCount, approvedCount, totalAmount, pageCount };
-  }, [expenses]);
+  }, [displayedExpenses]);
 
   const buildFormFromExpense = (expense: Expense): ExpenseForm => {
     const localIncident = expense.incurredAt ? new Date(expense.incurredAt).toISOString().slice(0, 16) : new Date().toISOString().slice(0, 16);
@@ -799,107 +805,29 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
               placeholder="Search"
             />
           </div>
-          <select
-            aria-label="Expense category filter"
-            className="px-3 py-2 border border-slate-300 rounded-lg"
-            value={categoryFilter}
-            onChange={(event) => {
-              setPage(0);
-              setCategoryFilter(event.target.value as any);
-            }}
+          <button
+            type="button"
+            onClick={() => setFiltersOpen((open) => {
+              if (open) {
+                setCategorySelections([]);
+                setStatusSelections([]);
+                setVendorSelections([]);
+                setProjectSelections([]);
+                setCurrencySelections([]);
+                setDateSelections([]);
+              }
+              return !open;
+            })}
+            aria-pressed={filtersOpen}
+            title="Filters"
+            className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border transition ${
+              filtersOpen
+                ? 'border-cyan-400 bg-cyan-50 text-cyan-600'
+                : 'border-slate-200 bg-slate-50 text-slate-400 hover:border-cyan-300 hover:text-cyan-500'
+            }`}
           >
-            <option value="all">All Categories</option>
-            {CATEGORY_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>{option.label}</option>
-            ))}
-          </select>
-          <select
-            aria-label="Expense status filter"
-            className="px-3 py-2 border border-slate-300 rounded-lg"
-            value={statusFilter}
-            onChange={(event) => {
-              setPage(0);
-              setStatusFilter(event.target.value as any);
-            }}
-          >
-            <option value="all">All Status</option>
-            {STATUS_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>{option.label}</option>
-            ))}
-          </select>
-          <input
-            aria-label="Vendor filter"
-            className="px-3 py-2 border border-slate-300 rounded-lg"
-            value={vendorFilter}
-            onChange={(event) => {
-              setPage(0);
-              setVendorFilter(event.target.value);
-            }}
-            placeholder="Vendor"
-          />
-              <input
-                aria-label="Project code filter"
-                className="px-3 py-2 border border-slate-300 rounded-lg"
-                value={projectFilter}
-                onChange={(event) => {
-                  setPage(0);
-                  setProjectFilter(event.target.value);
-                }}
-                placeholder="Project code"
-              />
-              <input
-                aria-label="Currency filter"
-                className="px-3 py-2 border border-slate-300 rounded-lg"
-                value={currencyFilter}
-                onChange={(event) => {
-                  setPage(0);
-                  setCurrencyFilter(event.target.value);
-                }}
-                placeholder="Currency"
-              />
-          <input
-            aria-label="From date filter"
-            className="px-3 py-2 border border-slate-300 rounded-lg"
-            value={fromDate}
-            onChange={(event) => {
-              setPage(0);
-              setFromDate(event.target.value);
-            }}
-            type="date"
-          />
-          <input
-            aria-label="To date filter"
-            className="px-3 py-2 border border-slate-300 rounded-lg"
-            value={toDate}
-            onChange={(event) => {
-              setPage(0);
-              setToDate(event.target.value);
-            }}
-            type="date"
-          />
-          <select
-            aria-label="Expense sort field"
-            className="px-3 py-2 border border-slate-300 rounded-lg"
-            value={sortBy}
-            onChange={(event) => {
-              setSortBy(event.target.value);
-            }}
-          >
-            <option value="incurredAt">Sort: Date</option>
-            <option value="totalCents">Sort: Total</option>
-            <option value="status">Sort: Status</option>
-          </select>
-          <select
-            aria-label="Expense sort direction"
-            className="px-3 py-2 border border-slate-300 rounded-lg"
-            value={sortDir}
-            onChange={(event) => {
-              setSortDir(event.target.value as any);
-            }}
-          >
-            <option value="desc">Desc</option>
-            <option value="asc">Asc</option>
-          </select>
+            <Filter className="h-4 w-4" />
+          </button>
         </div>
       </div>
 
@@ -910,13 +838,12 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
             className="text-sm px-3 py-2 border border-slate-200 rounded-lg"
             onClick={() => {
               setSearch('');
-              setCategoryFilter('all');
-              setStatusFilter('all');
-              setVendorFilter('');
-              setProjectFilter('');
-              setCurrencyFilter('');
-              setFromDate('');
-              setToDate('');
+              setCategorySelections([]);
+              setStatusSelections([]);
+              setVendorSelections([]);
+              setProjectSelections([]);
+              setCurrencySelections([]);
+              setDateSelections([]);
               setSortBy('incurredAt');
               setSortDir('desc');
               setPage(0);
@@ -925,7 +852,7 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
             Clear filters
           </button>
         </div>
-        {expenses.length === 0 ? (
+        {displayedExpenses.length === 0 ? (
           <div className="py-12 text-center text-slate-600">
             <p className="font-semibold text-slate-800">No expenses recorded yet</p>
             <p className="mt-1 text-sm">Create an expense here after the backend expense APIs are connected.</p>
@@ -952,9 +879,76 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
                   <th className="text-left px-4 py-3 text-sm font-semibold text-slate-700">Date</th>
                   <th className="text-right px-4 py-3 text-sm font-semibold text-slate-700">Actions</th>
                 </tr>
+                {filtersOpen ? (
+                <tr className="border-t border-slate-200 bg-white">
+                  <th className="px-4 py-2">
+                    <ColumnFilter
+                      label="Project"
+                      options={projectOptions}
+                      selectedValues={projectSelections}
+                      onChange={setProjectSelections}
+                    />
+                  </th>
+                  <th className="px-4 py-2"></th>
+                  <th className="px-4 py-2">
+                    <ColumnFilter
+                      label="Category"
+                      options={categoryOptions}
+                      selectedValues={categorySelections}
+                      onChange={setCategorySelections}
+                    />
+                  </th>
+                  <th className="px-4 py-2">
+                    <ColumnFilter
+                      label="Vendor"
+                      options={vendorOptions}
+                      selectedValues={vendorSelections}
+                      onChange={setVendorSelections}
+                    />
+                  </th>
+                  <th className="px-4 py-2">
+                    <ColumnFilter
+                      label="Currency"
+                      options={currencyFilterOptions}
+                      selectedValues={currencySelections}
+                      onChange={setCurrencySelections}
+                    />
+                  </th>
+                  <th className="px-4 py-2">
+                    <ColumnFilter
+                      label="Status"
+                      options={statusOptions}
+                      selectedValues={statusSelections}
+                      onChange={setStatusSelections}
+                    />
+                  </th>
+                  <th className="px-4 py-2">
+                    <ColumnFilter
+                      label="Date"
+                      options={dateOptions}
+                      selectedValues={dateSelections}
+                      onChange={setDateSelections}
+                    />
+                  </th>
+                  <th className="px-4 py-2">
+                    <select
+                      aria-label="Expense sort field"
+                      className="h-9 w-full rounded-lg border border-slate-300 px-2 text-xs font-medium text-slate-700 focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-100"
+                      value={sortBy}
+                      onChange={(event) => {
+                        setSortBy(event.target.value);
+                      }}
+                    >
+                      <option value="incurredAt">Sort: Date</option>
+                      <option value="totalCents">Sort: Total</option>
+                      <option value="status">Sort: Status</option>
+                    </select>
+                  </th>
+                </tr>
+                ) : null}
               </thead>
               <tbody>
-                {expenses.map((expense) => (
+                {displayedExpenses.map((expense) => (
                   <tr key={expense.id} className="border-t border-slate-100">
                     <td className="px-4 py-3 text-slate-700">{expense.expenseRef}</td>
                     <td className="px-4 py-3 text-slate-700">{expense.title}</td>

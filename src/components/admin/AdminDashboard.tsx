@@ -1,12 +1,11 @@
 import React, { useState } from 'react';
 import { AdminLayout } from './AdminLayout';
 import { Dashboard } from './pages/Dashboard';
-import { Packages } from './pages/Packages';
+import { Plans } from './pages/Plans';
 import { Companies } from './pages/Companies';
 import { Subscriptions } from './pages/Subscriptions';
 import { Users } from './pages/Users';
-import { Infrastructure } from './pages/Infrastructure';
-import { Expenses } from './pages/Expenses';
+import { Accounts } from './pages/Accounts';
 import { Toast } from './Toast';
 
 interface AdminDashboardProps {
@@ -14,7 +13,7 @@ interface AdminDashboardProps {
   onLogout: () => void;
 }
 
-type CurrentPage = 'dashboard' | 'packages' | 'companies' | 'subscriptions' | 'users' | 'infrastructure' | 'expenses';
+type CurrentPage = 'dashboard' | 'packages' | 'companies' | 'subscriptions' | 'users' | 'accounts';
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({ username, onLogout }) => {
   const [currentPage, setCurrentPage] = useState<CurrentPage>('dashboard');
@@ -29,17 +28,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ username, onLogo
       case 'dashboard':
         return <Dashboard />;
       case 'packages':
-        return <Packages onToast={showToast} />;
+        return <Plans onToast={showToast} />;
       case 'companies':
         return <Companies onToast={showToast} />;
       case 'subscriptions':
         return <Subscriptions onToast={showToast} />;
       case 'users':
         return <Users onToast={showToast} />;
-      case 'infrastructure':
-        return <Infrastructure />;
-      case 'expenses':
-        return <Expenses onToast={showToast} />;
+      case 'accounts':
+        return <Accounts onToast={showToast} />;
       default:
         return <Dashboard />;
     }

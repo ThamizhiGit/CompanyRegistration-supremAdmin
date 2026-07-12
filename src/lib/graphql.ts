@@ -181,6 +181,166 @@ export const ADMIN_SET_MODULE_OFFER_MUTATION = gql`
   }
 `;
 
+export const ADMIN_PLANS_QUERY = gql`
+  query AdminPlans($includeInactive: Boolean, $search: String, $active: Boolean) {
+    adminPlans(includeInactive: $includeInactive, search: $search, active: $active) {
+      id
+      name
+      description
+      basePriceCents
+      currency
+      billingInterval
+      perEmployee
+      trialMonths
+      employeeLimit
+      features
+      recommended
+      active
+      sortOrder
+      updatedAt
+      updatedBy {
+        id
+        username
+      }
+    }
+  }
+`;
+
+export const ADMIN_PLAN_DETAIL_QUERY = gql`
+  query AdminPlanDetail($id: String!) {
+    adminPlanDetail(id: $id) {
+      id
+      name
+      description
+      basePriceCents
+      currency
+      billingInterval
+      perEmployee
+      trialMonths
+      employeeLimit
+      features
+      recommended
+      active
+      sortOrder
+      logs {
+        id
+        action
+        actor
+        message
+        createdAt
+      }
+    }
+  }
+`;
+
+export const ADMIN_SAVE_PLAN_MUTATION = gql`
+  mutation AdminSavePlan($input: AdminPlanInput!) {
+    adminSavePlan(input: $input) {
+      success
+      message
+      plan {
+        id
+        name
+        basePriceCents
+        currency
+        billingInterval
+        perEmployee
+        trialMonths
+        employeeLimit
+        active
+      }
+    }
+  }
+`;
+
+export const ADMIN_DEACTIVATE_PLAN_MUTATION = gql`
+  mutation AdminDeactivatePlan($id: String!, $reason: String!) {
+    adminDeactivatePlan(id: $id, reason: $reason) {
+      success
+      message
+      plan {
+        id
+        active
+      }
+    }
+  }
+`;
+
+export const ADMIN_DELETE_PLAN_MUTATION = gql`
+  mutation AdminDeletePlan($id: String!, $reason: String!) {
+    adminDeletePlan(id: $id, reason: $reason) {
+      success
+      message
+      deletedId
+    }
+  }
+`;
+
+export const ADMIN_PROMO_CODES_QUERY = gql`
+  query AdminPromoCodes($includeInactive: Boolean, $active: Boolean, $search: String, $planId: String) {
+    adminPromoCodes(includeInactive: $includeInactive, active: $active, search: $search, planId: $planId) {
+      id
+      code
+      name
+      discountType
+      discountValue
+      currency
+      active
+      startsAt
+      endsAt
+      maxRedemptions
+      perEmailLimit
+      perCompanyLimit
+      firstTimeCustomerOnly
+      minimumAmountCents
+      redeemedCount
+      appliesToPlanIds
+      applicableBillingIntervals
+      createdAt
+      updatedAt
+      createdBy
+      updatedBy
+    }
+  }
+`;
+
+export const ADMIN_SAVE_PROMO_CODE_MUTATION = gql`
+  mutation AdminSavePromoCode($input: AdminPromoCodeInput!) {
+    adminSavePromoCode(input: $input) {
+      success
+      message
+      promoCode {
+        id
+        code
+        name
+        discountType
+        discountValue
+        currency
+        active
+        startsAt
+        endsAt
+        maxRedemptions
+        redeemedCount
+        appliesToPlanIds
+        applicableBillingIntervals
+      }
+    }
+  }
+`;
+
+export const ADMIN_DEACTIVATE_PROMO_CODE_MUTATION = gql`
+  mutation AdminDeactivatePromoCode($id: ID!, $reason: String) {
+    adminDeactivatePromoCode(id: $id, reason: $reason) {
+      success
+      message
+      promoCode {
+        id
+        active
+      }
+    }
+  }
+`;
+
 export const ADMIN_UPDATE_PAYMENT_STATUS_MUTATION = gql`
   mutation AdminUpdatePaymentStatus($paymentIntentId: String!, $status: String!, $reason: String) {
     adminUpdatePaymentStatus(paymentIntentId: $paymentIntentId, status: $status, reason: $reason) {
@@ -230,7 +390,12 @@ export const ADMIN_MANUAL_SUBSCRIPTION_MUTATION = gql`
     ) {
       success
       message
-      status
+      payment {
+        paymentIntentId
+        status
+        gatewayMethod
+        source
+      }
     }
   }
 `;
@@ -248,11 +413,27 @@ export const ADMIN_COMPANIES_QUERY = gql`
     ) {
       id
       company
+      planId
+      planName
+      employeeCount
       activeModules
       latestPaymentModules
       createdAt
       isMultiLocationEnabled
       subscriptionStatus
+      isActive
+      isSuspended
+      suspensionScope
+      suspensionReason
+      suspendedFrom
+      suspendedUntil
+      previousSubscriptionStatus
+      previousIsActive
+      resumedAt
+      resumeReason
+      trialEndsAt
+      nextBillingDate
+      nextBillingAmountCents
       subscriptionDueDate
       subscriptionRecurringDate
       paymentHistoryCount
@@ -260,6 +441,10 @@ export const ADMIN_COMPANIES_QUERY = gql`
       latestPaymentIntentId
       latestPaymentEmail
       latestPaymentAmount
+      latestPaymentPlanId
+      latestPaymentPlanName
+      latestPaymentEmployeeCountSnapshot
+      latestPaymentFinalAmountCents
       latestPaymentCurrency
       latestPaymentSource
       latestPaymentDeniedReason
@@ -277,6 +462,12 @@ export const ADMIN_COMPANY_PAYMENT_HISTORY_QUERY = gql`
     adminCompanyPaymentHistory(companyId: $companyId, dateFrom: $dateFrom, dateTo: $dateTo, status: $status) {
       paymentIntentId
       email
+      planId
+      planName
+      employeeCountSnapshot
+      originalAmountCents
+      finalAmountCents
+      trialEndsAt
       modules
       status
       amount
@@ -303,6 +494,12 @@ export const ADMIN_PAYMENTS_QUERY = gql`
     adminPayments(status: $status, companyId: $companyId, dateFrom: $dateFrom, dateTo: $dateTo, search: $search) {
       paymentIntentId
       email
+      planId
+      planName
+      employeeCountSnapshot
+      originalAmountCents
+      finalAmountCents
+      trialEndsAt
       modules
       amount
       currency
@@ -325,26 +522,26 @@ export const ADMIN_PAYMENTS_QUERY = gql`
 `;
 
 export const ADMIN_UPDATE_COMPANY_DETAIL_MUTATION = gql`
-  mutation AdminUpdateCompanyDetail(
-    $companyId: Int!
-    $company: String
-    $status: String
-    $subscriptionStatus: String
-    $subscriptionStatusReason: String
-    $subscriptionDueDate: DateTime
-    $subscriptionRecurringDate: DateTime
-    $isMultiLocationEnabled: Boolean
-  ) {
-    adminUpdateCompanyDetail(
-      companyId: $companyId
-      company: $company
-      status: $status
-      subscriptionStatus: $subscriptionStatus
-      subscriptionStatusReason: $subscriptionStatusReason
-      subscriptionDueDate: $subscriptionDueDate
-      subscriptionRecurringDate: $subscriptionRecurringDate
-      isMultiLocationEnabled: $isMultiLocationEnabled
-    ) {
+  mutation AdminUpdateCompanyDetail($input: CompanyUpdateInput!) {
+    adminUpdateCompanyDetail(input: $input) {
+      success
+      message
+      company {
+        id
+        company
+        subscriptionStatus
+        isSuspended
+        subscriptionDueDate
+        subscriptionRecurringDate
+        isMultiLocationEnabled
+      }
+    }
+  }
+`;
+
+export const ADMIN_UPDATE_COMPANY_SUBSCRIPTION_MUTATION = gql`
+  mutation AdminUpdateCompanySubscription($input: CompanySubscriptionInput!) {
+    adminUpdateCompanySubscription(input: $input) {
       success
       message
       company {
@@ -353,7 +550,32 @@ export const ADMIN_UPDATE_COMPANY_DETAIL_MUTATION = gql`
         subscriptionStatus
         subscriptionDueDate
         subscriptionRecurringDate
-        isMultiLocationEnabled
+      }
+    }
+  }
+`;
+
+export const ADMIN_SUSPEND_COMPANY_MUTATION = gql`
+  mutation AdminSuspendCompany($companyId: Int!, $scope: String!, $reason: String!, $suspendedUntil: DateTime) {
+    adminSuspendCompany(companyId: $companyId, scope: $scope, reason: $reason, suspendedUntil: $suspendedUntil) {
+      success
+      message
+      company {
+        id
+        company
+      }
+    }
+  }
+`;
+
+export const ADMIN_RESUME_COMPANY_MUTATION = gql`
+  mutation AdminResumeCompany($companyId: Int!, $reason: String!) {
+    adminResumeCompany(companyId: $companyId, reason: $reason) {
+      success
+      message
+      company {
+        id
+        company
       }
     }
   }
@@ -368,6 +590,25 @@ export const ADMIN_SET_COMPANY_MODULES_MUTATION = gql`
         id
         company
         activeModules
+      }
+    }
+  }
+`;
+
+export const ADMIN_ASSIGN_COMPANY_PLAN_MUTATION = gql`
+  mutation AdminAssignCompanyPlan($companyId: Int!, $planId: String!, $reason: String) {
+    adminAssignCompanyPlan(companyId: $companyId, planId: $planId, reason: $reason) {
+      success
+      message
+      company {
+        id
+        company
+        planId
+        planName
+        subscriptionStatus
+        trialEndsAt
+        nextBillingDate
+        nextBillingAmountCents
       }
     }
   }
@@ -444,6 +685,28 @@ export const ADMIN_INFRASTRUCTURE_QUERY = gql`
         date
         income
         expense
+      }
+    }
+  }
+`;
+
+export const ADMIN_ACCOUNTS_REPORT_QUERY = gql`
+  query AdminAccountsReport($period: String!, $year: Int!, $month: Int, $groupBy: String) {
+    adminAccountsReport(period: $period, year: $year, month: $month, groupBy: $groupBy) {
+      period
+      year
+      month
+      groupBy
+      income
+      expense
+      net
+      pendingBalance
+      failedRefunds
+      rows {
+        label
+        income
+        expense
+        net
       }
     }
   }

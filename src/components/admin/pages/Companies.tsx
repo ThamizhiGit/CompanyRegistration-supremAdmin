@@ -4,6 +4,7 @@ import {
   ADMIN_COMPANIES_QUERY,
   ADMIN_MODULES_QUERY,
   ADMIN_SET_COMPANY_MODULES_MUTATION,
+  ADMIN_ASSIGN_COMPANY_PLAN_MUTATION,
   ADMIN_UPDATE_COMPANY_DETAIL_MUTATION,
   ADMIN_COMPANY_PAYMENT_HISTORY_QUERY,
   ADMIN_UPDATE_PAYMENT_STATUS_MUTATION,
@@ -11,14 +12,23 @@ import {
   ADMIN_MANUAL_SUBSCRIPTION_MUTATION,
 } from '../../../lib/graphql';
 import { buildPayload, formatDate, formatDateTime, formatPrice, toDateTimeLocalValue, parseModules } from '../../../lib/admin-utils';
-import { Edit2, Save, X, ClipboardList, Eye, HandCoins, Clipboard } from 'lucide-react';
+import { Download, Edit2, Save, X, ClipboardList, Eye, Filter, HandCoins, Clipboard, Printer, Search } from 'lucide-react';
+import { buildColumnFilterOptions, ColumnFilter, matchesColumnFilter } from '../ColumnFilter';
 
 interface EditingCompanyDetail {
   id: number;
   company: string;
+  planId: string;
+  originalPlanId: string;
   modules: string[];
   originalSubscriptionStatus: string;
   subscriptionStatus: string;
+  isActive?: boolean | null;
+  isSuspended?: boolean | null;
+  suspensionScope?: string | null;
+  suspensionReason?: string | null;
+  suspendedFrom?: string | null;
+  suspendedUntil?: string | null;
   subscriptionStatusReason: string;
   subscriptionDueDate: string;
   subscriptionRecurringDate: string;
@@ -28,11 +38,17 @@ interface EditingCompanyDetail {
 interface CompanyType {
   id: number;
   company: string;
+  planId?: string | null;
+  planName?: string | null;
+  employeeCount?: number | null;
   activeModules: string;
   latestPaymentModules?: string | null;
   createdAt: string;
   isMultiLocationEnabled: boolean;
   subscriptionStatus: string;
+  trialEndsAt?: string | null;
+  nextBillingDate?: string | null;
+  nextBillingAmountCents?: number | null;
   subscriptionDueDate: string | null;
   subscriptionRecurringDate: string | null;
   paymentHistoryCount?: number;
@@ -40,6 +56,10 @@ interface CompanyType {
   latestPaymentIntentId?: string | null;
   latestPaymentEmail?: string | null;
   latestPaymentAmount?: number | null;
+  latestPaymentPlanId?: string | null;
+  latestPaymentPlanName?: string | null;
+  latestPaymentEmployeeCountSnapshot?: number | null;
+  latestPaymentFinalAmountCents?: number | null;
   latestPaymentCurrency?: string | null;
   latestPaymentSource?: string | null;
   latestPaymentDeniedReason?: string | null;
@@ -59,6 +79,12 @@ interface ModuleType {
 interface CompanyPaymentType {
   paymentIntentId: string;
   email: string;
+  planId?: string | null;
+  planName?: string | null;
+  employeeCountSnapshot?: number | null;
+  originalAmountCents?: number | null;
+  finalAmountCents?: number | null;
+  trialEndsAt?: string | null;
   modules?: string;
   status: string;
   amount: number;
@@ -78,16 +104,52 @@ interface CompanyPaymentType {
   paymentGatewayStatus?: string | null;
 }
 
+type CompanySortKey =
+  | 'company'
+  | 'subscriptionStatus'
+  | 'planName'
+  | 'latestPaymentEmail'
+  | 'subscriptionDueDate'
+  | 'subscriptionRecurringDate'
+  | 'latestPaymentGatewayMethod'
+  | 'createdAt';
+type SortDirection = 'asc' | 'desc' | null;
+
+const planOptions = [
+  { id: 'free', name: 'Free' },
+  { id: 'premium', name: 'Premium' },
+];
+
+const escapeHtml = (value: string) =>
+  value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
+const downloadTextFile = (filename: string, mimeType: string, content: string) => {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
+};
+
 export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string) => void}> = ({ onToast }) => {
   const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState('all');
-  const [emailFilter, setEmailFilter] = useState('');
-  const [gatewayFilter, setGatewayFilter] = useState('');
-  const [moduleFilter, setModuleFilter] = useState('');
-  const [dueFrom, setDueFrom] = useState('');
-  const [dueTo, setDueTo] = useState('');
-  const [recurringFrom, setRecurringFrom] = useState('');
-  const [recurringTo, setRecurringTo] = useState('');
+  const [sortKey, setSortKey] = useState<CompanySortKey>('createdAt');
+  const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
+  const [statusSelections, setStatusSelections] = useState<string[]>([]);
+  const [planSelections, setPlanSelections] = useState<string[]>([]);
+  const [emailSelections, setEmailSelections] = useState<string[]>([]);
+  const [dueDateSelections, setDueDateSelections] = useState<string[]>([]);
+  const [recurringDateSelections, setRecurringDateSelections] = useState<string[]>([]);
+  const [gatewaySelections, setGatewaySelections] = useState<string[]>([]);
+  const [moduleSelections, setModuleSelections] = useState<string[]>([]);
+  const [filtersOpen, setFiltersOpen] = useState(true);
 
   const [viewingCompany, setViewingCompany] = useState<CompanyType | null>(null);
   const [editingDetail, setEditingDetail] = useState<EditingCompanyDetail | null>(null);
@@ -108,22 +170,25 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
     { value: 'active', label: 'Active', description: 'Paid or approved subscription access' },
     { value: 'pending', label: 'Pending', description: 'Payment or approval is still in progress' },
     { value: 'past_due', label: 'Past due', description: 'Payment is overdue or needs attention' },
+    { value: 'suspended', label: 'Suspended', description: 'Temporarily blocked or limited by superadmin' },
     { value: 'failed', label: 'Failed', description: 'Latest subscription payment failed' },
     { value: 'refunded', label: 'Refunded', description: 'Subscription payment was refunded' },
     { value: 'canceled', label: 'Canceled', description: 'Subscription access is canceled' },
   ];
   const companyQueryVariables = useMemo(() => ({
+    search: search.trim() || null,
     status: null,
     subscriptionStatus: null,
-    dueDateFrom: dueFrom || null,
-    dueDateTo: dueTo || null,
-    recurringDateFrom: recurringFrom || null,
-    recurringDateTo: recurringTo || null,
-  }), [dueFrom, dueTo, recurringFrom, recurringTo]);
+    dueDateFrom: null,
+    dueDateTo: null,
+    recurringDateFrom: null,
+    recurringDateTo: null,
+  }), [search]);
 
   const { data: companiesData, loading: companiesLoading, error: companiesError, refetch: refetchCompanies } = useQuery<
     { adminCompanies: CompanyType[] },
     {
+      search: string | null;
       status: string | null;
       subscriptionStatus: string | null;
       dueDateFrom: string | null;
@@ -160,6 +225,7 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
   });
 
   const [setCompanyModules] = useMutation(ADMIN_SET_COMPANY_MODULES_MUTATION);
+  const [assignCompanyPlan] = useMutation(ADMIN_ASSIGN_COMPANY_PLAN_MUTATION);
   const [updateCompanyDetail] = useMutation(ADMIN_UPDATE_COMPANY_DETAIL_MUTATION);
   const [updatePaymentStatus] = useMutation(ADMIN_UPDATE_PAYMENT_STATUS_MUTATION);
   const [requestRefund] = useMutation(ADMIN_REQUEST_REFUND_MUTATION);
@@ -178,6 +244,10 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
     return subscriptionStatus || 'trial';
   };
   const getModuleName = (moduleId: string) => allModules.find((module) => module.id === moduleId)?.name || moduleId;
+  const getCompanyPlanId = (company: CompanyType) =>
+    company.planId || company.latestPaymentPlanId || (parseModules(company.activeModules).length > 0 ? 'premium' : 'free');
+  const getCompanyPlanName = (company: CompanyType) =>
+    company.planName || company.latestPaymentPlanName || planOptions.find((plan) => plan.id === getCompanyPlanId(company))?.name || '-';
   const renderModulePills = (moduleIds: string[], tone: 'active' | 'payment' = 'active') => {
     if (moduleIds.length === 0) return <span className="text-slate-400 text-sm">No modules</span>;
 
@@ -202,27 +272,61 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
     company.latestPaymentGatewayMethod || company.latestPaymentSource || '-';
   const getPaymentGatewayLabel = (payment: CompanyPaymentType) =>
     payment.gatewayMethod || payment.source || '-';
+  const getCompanyModuleFilterValue = (company: CompanyType) => {
+    const moduleIds = parseModules(company.activeModules);
+    const latestPaymentModuleIds = parseModules(company.latestPaymentModules || '');
+    const effectiveModuleIds = moduleIds.length > 0 ? moduleIds : latestPaymentModuleIds;
+    return effectiveModuleIds.map((moduleId) => getModuleName(moduleId)).join(', ') || 'No entitlements';
+  };
   const clearFilters = () => {
     setSearch('');
-    setStatusFilter('all');
-    setEmailFilter('');
-    setGatewayFilter('');
-    setModuleFilter('');
-    setDueFrom('');
-    setDueTo('');
-    setRecurringFrom('');
-    setRecurringTo('');
+    setStatusSelections([]);
+    setPlanSelections([]);
+    setEmailSelections([]);
+    setDueDateSelections([]);
+    setRecurringDateSelections([]);
+    setGatewaySelections([]);
+    setModuleSelections([]);
   };
   const normalizedSearch = search.trim().toLowerCase();
-  const normalizedEmailFilter = emailFilter.trim().toLowerCase();
-  const normalizedGatewayFilter = gatewayFilter.trim().toLowerCase();
-  const normalizedModuleFilter = moduleFilter.trim().toLowerCase();
+  const companyStatusOptions = useMemo(
+    () => buildColumnFilterOptions(rawCompanies, (company) => getEffectiveSubscriptionStatus(company)),
+    [rawCompanies],
+  );
+  const companyPlanOptions = useMemo(
+    () => buildColumnFilterOptions(rawCompanies, (company) => getCompanyPlanName(company)),
+    [rawCompanies],
+  );
+  const companyEmailOptions = useMemo(
+    () => buildColumnFilterOptions(rawCompanies, (company) => company.latestPaymentEmail || '-'),
+    [rawCompanies],
+  );
+  const companyDueOptions = useMemo(
+    () => buildColumnFilterOptions(rawCompanies, (company) => formatDate(company.subscriptionDueDate)),
+    [rawCompanies],
+  );
+  const companyRecurringOptions = useMemo(
+    () => buildColumnFilterOptions(rawCompanies, (company) => formatDate(company.subscriptionRecurringDate)),
+    [rawCompanies],
+  );
+  const companyGatewayOptions = useMemo(
+    () => buildColumnFilterOptions(rawCompanies, (company) => getCompanyGatewayLabel(company)),
+    [rawCompanies],
+  );
+  const companyModuleOptions = useMemo(
+    () => buildColumnFilterOptions(rawCompanies, (company) => getCompanyModuleFilterValue(company)),
+    [rawCompanies, allModules],
+  );
   const companies = useMemo(() => (
     rawCompanies.filter((company) => {
       const moduleIds = parseModules(company.activeModules);
       const latestPaymentModuleIds = parseModules(company.latestPaymentModules || '');
       const moduleText = [...moduleIds, ...latestPaymentModuleIds]
         .map((moduleId) => getModuleName(moduleId))
+        .join(' ')
+        .toLowerCase();
+      const planText = [getCompanyPlanId(company), getCompanyPlanName(company)]
+        .filter(Boolean)
         .join(' ')
         .toLowerCase();
       const gatewayText = [
@@ -241,6 +345,7 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
         company.latestPaymentEmail,
         company.latestPaymentIntentId,
         getEffectiveSubscriptionStatus(company),
+        planText,
         gatewayText,
         moduleText,
       ]
@@ -249,21 +354,170 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
         .toLowerCase();
 
       if (normalizedSearch && !searchableText.includes(normalizedSearch)) return false;
-      if (statusFilter !== 'all' && normalizeStatus(getEffectiveSubscriptionStatus(company)) !== statusFilter) return false;
-      if (normalizedEmailFilter && !(company.latestPaymentEmail || '').toLowerCase().includes(normalizedEmailFilter)) return false;
-      if (normalizedGatewayFilter && !gatewayText.includes(normalizedGatewayFilter)) return false;
-      if (normalizedModuleFilter && !moduleText.includes(normalizedModuleFilter)) return false;
+      if (!matchesColumnFilter(statusSelections, getEffectiveSubscriptionStatus(company))) return false;
+      if (!matchesColumnFilter(planSelections, getCompanyPlanName(company))) return false;
+      if (!matchesColumnFilter(emailSelections, company.latestPaymentEmail || '-')) return false;
+      if (!matchesColumnFilter(dueDateSelections, formatDate(company.subscriptionDueDate))) return false;
+      if (!matchesColumnFilter(recurringDateSelections, formatDate(company.subscriptionRecurringDate))) return false;
+      if (!matchesColumnFilter(gatewaySelections, getCompanyGatewayLabel(company))) return false;
+      if (!matchesColumnFilter(moduleSelections, getCompanyModuleFilterValue(company))) return false;
       return true;
+    }).sort((left, right) => {
+      if (!sortKey || !sortDirection) return 0;
+
+      const readValue = (company: CompanyType): string | number => {
+        switch (sortKey) {
+          case 'company':
+            return company.company || '';
+          case 'subscriptionStatus':
+            return getEffectiveSubscriptionStatus(company);
+          case 'planName':
+            return getCompanyPlanName(company);
+          case 'latestPaymentEmail':
+            return company.latestPaymentEmail || '';
+          case 'subscriptionDueDate':
+            return company.subscriptionDueDate ? new Date(company.subscriptionDueDate).getTime() : 0;
+          case 'subscriptionRecurringDate':
+            return company.subscriptionRecurringDate ? new Date(company.subscriptionRecurringDate).getTime() : 0;
+          case 'latestPaymentGatewayMethod':
+            return getCompanyGatewayLabel(company);
+          case 'createdAt':
+            return company.createdAt ? new Date(company.createdAt).getTime() : 0;
+          default:
+            return '';
+        }
+      };
+
+      const leftValue = readValue(left);
+      const rightValue = readValue(right);
+      const comparison =
+        typeof leftValue === 'number' && typeof rightValue === 'number'
+          ? leftValue - rightValue
+          : String(leftValue).localeCompare(String(rightValue), undefined, { sensitivity: 'base' });
+
+      return sortDirection === 'asc' ? comparison : -comparison;
     })
   ), [
     rawCompanies,
     normalizedSearch,
-    statusFilter,
-    normalizedEmailFilter,
-    normalizedGatewayFilter,
-    normalizedModuleFilter,
+    statusSelections,
+    planSelections,
+    emailSelections,
+    dueDateSelections,
+    recurringDateSelections,
+    gatewaySelections,
+    moduleSelections,
     allModules,
+    sortKey,
+    sortDirection,
   ]);
+
+  const cycleSort = (key: CompanySortKey) => {
+    if (sortKey !== key) {
+      setSortKey(key);
+      setSortDirection('asc');
+      return;
+    }
+    if (sortDirection === 'asc') {
+      setSortDirection('desc');
+      return;
+    }
+    if (sortDirection === 'desc') {
+      setSortDirection(null);
+      return;
+    }
+    setSortDirection('asc');
+  };
+
+  const SortHeader = ({ label, sort }: { label: string; sort: CompanySortKey }) => {
+    const active = sortKey === sort && sortDirection;
+    return (
+      <button
+        type="button"
+        onClick={() => cycleSort(sort)}
+        className="inline-flex items-center gap-1 font-semibold text-slate-700 hover:text-cyan-700"
+      >
+        <span>{label}</span>
+        <span className={`text-xs ${active ? 'text-cyan-700' : 'text-slate-400'}`}>
+          {active ? (sortDirection === 'asc' ? '▲' : '▼') : '↕'}
+        </span>
+      </button>
+    );
+  };
+
+  const exportCompanies = () => {
+    const rows = companies.map((company) => [
+      company.company,
+      getEffectiveSubscriptionStatus(company),
+      getCompanyPlanName(company),
+      company.latestPaymentEmail || '-',
+      formatDate(company.subscriptionDueDate),
+      formatDate(company.subscriptionRecurringDate),
+      getCompanyGatewayLabel(company),
+      formatPrice(company.latestPaymentFinalAmountCents ?? company.latestPaymentAmount ?? 0, company.latestPaymentCurrency || 'USD'),
+    ]);
+    const header = ['Company', 'Subscription Status', 'Plan', 'Email', 'Due Date', 'Recurring Date', 'Gateway', 'Latest Amount'];
+    const table = [header, ...rows]
+      .map((row) => `<tr>${row.map((cell) => `<td>${escapeHtml(String(cell ?? ''))}</td>`).join('')}</tr>`)
+      .join('');
+    downloadTextFile(
+      `companies-${new Date().toISOString().slice(0, 10)}.xls`,
+      'application/vnd.ms-excel',
+      `<table>${table}</table>`
+    );
+  };
+
+  const printCompanies = () => {
+    const rows = companies.map((company) => `
+      <tr>
+        <td>${escapeHtml(company.company)}</td>
+        <td>${escapeHtml(getEffectiveSubscriptionStatus(company))}</td>
+        <td>${escapeHtml(getCompanyPlanName(company))}</td>
+        <td>${escapeHtml(company.latestPaymentEmail || '-')}</td>
+        <td>${escapeHtml(formatDate(company.subscriptionDueDate))}</td>
+        <td>${escapeHtml(formatDate(company.subscriptionRecurringDate))}</td>
+        <td>${escapeHtml(getCompanyGatewayLabel(company))}</td>
+      </tr>
+    `).join('');
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      onToast('error', 'Popup blocked. Please allow popups to print companies.');
+      return;
+    }
+    printWindow.document.write(`
+      <html>
+        <head>
+          <title>Companies</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 24px; color: #0f172a; }
+            h1 { font-size: 20px; margin-bottom: 16px; }
+            table { border-collapse: collapse; width: 100%; font-size: 12px; }
+            th, td { border: 1px solid #cbd5e1; padding: 8px; text-align: left; }
+            th { background: #f8fafc; }
+          </style>
+        </head>
+        <body>
+          <h1>Companies</h1>
+          <table>
+            <thead>
+              <tr>
+                <th>Company</th>
+                <th>Subscription Status</th>
+                <th>Plan</th>
+                <th>Email</th>
+                <th>Due Date</th>
+                <th>Recurring Date</th>
+                <th>Gateway</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </body>
+      </html>
+    `);
+    printWindow.document.close();
+    printWindow.print();
+  };
 
   if (companiesLoading || modulesLoading) {
     return <div className="text-center py-12 text-slate-500">Loading companies...</div>;
@@ -287,15 +541,25 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
     try {
       await updateCompanyDetail({
         variables: {
-          companyId: editingDetail.id,
-          company: editingDetail.company,
-          subscriptionStatus: editingDetail.subscriptionStatus,
-          subscriptionStatusReason: statusChanged ? editingDetail.subscriptionStatusReason.trim() : null,
-          subscriptionDueDate: editingDetail.subscriptionDueDate || null,
-          subscriptionRecurringDate: editingDetail.subscriptionRecurringDate || null,
-          isMultiLocationEnabled: editingDetail.isMultiLocationEnabled,
+          input: {
+            id: editingDetail.id,
+            company: editingDetail.company,
+            subscriptionStatus: editingDetail.subscriptionStatus,
+            subscriptionDueDate: editingDetail.subscriptionDueDate || null,
+            subscriptionRecurringDate: editingDetail.subscriptionRecurringDate || null,
+            isMultiLocationEnabled: editingDetail.isMultiLocationEnabled,
+          },
         },
       });
+      if (editingDetail.planId !== editingDetail.originalPlanId) {
+        await assignCompanyPlan({
+          variables: {
+            companyId: editingDetail.id,
+            planId: editingDetail.planId,
+            reason: editingDetail.subscriptionStatusReason || 'Admin plan change',
+          },
+        });
+      }
       await setCompanyModules({
         variables: {
           companyId: editingDetail.id,
@@ -399,111 +663,72 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
     <div className="space-y-8">
       <div>
         <h2 className="text-2xl font-bold text-slate-800">Companies</h2>
-        <p className="text-slate-600">Manage tenants, subscriptions, and module assignments</p>
+        <p className="text-slate-600">Manage tenants, plan assignments, subscriptions, and legacy entitlements</p>
       </div>
 
-      <div className="bg-white rounded-lg border border-slate-200 p-6 space-y-4">
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-2">Search Companies</label>
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Company name..."
-              className="w-full px-4 py-2 border border-slate-300 rounded-lg"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-2">Subscription Status</label>
-            <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-              className="w-full px-3 py-2 border border-slate-300 rounded-lg"
+      <div className="bg-white rounded-lg border border-slate-200 p-4 space-y-3">
+        <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+          <div className="flex flex-1 flex-col gap-3 md:flex-row md:flex-wrap md:items-center">
+            <div className="relative md:min-w-[280px] md:flex-[1_1_320px]">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <label htmlFor="company-search" className="sr-only">Search companies</label>
+              <input
+                id="company-search"
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search companies, email, payment..."
+                className="w-full rounded-lg border border-slate-300 py-2 pl-9 pr-3 text-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-100"
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() => setFiltersOpen((open) => {
+                if (open) {
+                  setStatusSelections([]);
+                  setPlanSelections([]);
+                  setEmailSelections([]);
+                  setDueDateSelections([]);
+                  setRecurringDateSelections([]);
+                  setGatewaySelections([]);
+                  setModuleSelections([]);
+                }
+                return !open;
+              })}
+              aria-pressed={filtersOpen}
+              title="Filters"
+              className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border transition ${
+                filtersOpen
+                  ? 'border-cyan-400 bg-cyan-50 text-cyan-600'
+                  : 'border-slate-200 bg-slate-50 text-slate-400 hover:border-cyan-300 hover:text-cyan-500'
+              }`}
             >
-              <option value="all">All</option>
-              <option value="active">Active</option>
-              <option value="pending">Pending</option>
-              <option value="failed">Failed</option>
-              <option value="refunded">Refunded</option>
-              <option value="trial">Trial</option>
-              <option value="past_due">Past due</option>
-              <option value="canceled">Canceled</option>
-            </select>
+              <Filter className="h-4 w-4" />
+            </button>
           </div>
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-2">Payment Email</label>
-            <input
-              type="text"
-              value={emailFilter}
-              onChange={(e) => setEmailFilter(e.target.value)}
-              placeholder="Email..."
-              className="w-full px-4 py-2 border border-slate-300 rounded-lg"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-2">Gateway</label>
-            <input
-              type="text"
-              value={gatewayFilter}
-              onChange={(e) => setGatewayFilter(e.target.value)}
-              placeholder="Method, status, ref..."
-              className="w-full px-4 py-2 border border-slate-300 rounded-lg"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-2">Modules</label>
-            <input
-              type="text"
-              value={moduleFilter}
-              onChange={(e) => setModuleFilter(e.target.value)}
-              placeholder="Module name..."
-              className="w-full px-4 py-2 border border-slate-300 rounded-lg"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-2">Due Date From</label>
-            <input
-              type="datetime-local"
-              value={toDateTimeLocalValue(dueFrom)}
-              onChange={(e) => setDueFrom(e.target.value ? new Date(e.target.value).toISOString() : '')}
-              className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-2">Due Date To</label>
-            <input
-              type="datetime-local"
-              value={toDateTimeLocalValue(dueTo)}
-              onChange={(e) => setDueTo(e.target.value ? new Date(e.target.value).toISOString() : '')}
-              className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-2">Recurring From</label>
-            <input
-              type="datetime-local"
-              value={toDateTimeLocalValue(recurringFrom)}
-              onChange={(e) => setRecurringFrom(e.target.value ? new Date(e.target.value).toISOString() : '')}
-              className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-2">Recurring To</label>
-            <input
-              type="datetime-local"
-              value={toDateTimeLocalValue(recurringTo)}
-              onChange={(e) => setRecurringTo(e.target.value ? new Date(e.target.value).toISOString() : '')}
-              className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-            />
-          </div>
-          <div className="flex items-end">
+          <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
               onClick={clearFilters}
-              className="w-full px-4 py-2 border border-slate-200 rounded-lg text-slate-700 hover:bg-slate-100"
+              className="rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-100"
             >
-              Clear filters
+              Clear
+            </button>
+            <button
+              type="button"
+              onClick={exportCompanies}
+              className="inline-flex items-center gap-2 rounded-lg border border-emerald-200 px-3 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-50"
+            >
+              <Download className="h-4 w-4" />
+              Excel
+            </button>
+            <button
+              type="button"
+              onClick={printCompanies}
+              className="inline-flex items-center gap-2 rounded-lg border border-blue-200 px-3 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-50"
+            >
+              <Printer className="h-4 w-4" />
+              PDF
             </button>
           </div>
         </div>
@@ -512,24 +737,95 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
       <div className="bg-white rounded-lg border border-slate-200 overflow-hidden">
         {companies.length === 0 ? (
           <div className="text-center py-12 text-slate-500">
-            {search || statusFilter !== 'all' || emailFilter || gatewayFilter || moduleFilter || dueFrom || dueTo || recurringFrom || recurringTo
+            {search || statusSelections.length > 0 || planSelections.length > 0 || emailSelections.length > 0 || dueDateSelections.length > 0 || recurringDateSelections.length > 0 || gatewaySelections.length > 0 || moduleSelections.length > 0
               ? 'No companies match your filters'
               : 'No companies found'}
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[1180px]">
+            <table className="w-full min-w-[1320px]">
               <thead className="bg-slate-50 border-b border-slate-200">
                 <tr>
-                  <th className="text-left py-3 px-4 font-semibold text-slate-700">Company</th>
-                  <th className="text-left py-3 px-4 font-semibold text-slate-700">Subscription Status</th>
-                  <th className="text-left py-3 px-4 font-semibold text-slate-700">Email</th>
-                  <th className="text-left py-3 px-4 font-semibold text-slate-700">Due Date</th>
-                  <th className="text-left py-3 px-4 font-semibold text-slate-700">Recurring Date</th>
-                  <th className="text-left py-3 px-4 font-semibold text-slate-700">Gateway</th>
-                  <th className="text-left py-3 px-4 font-semibold text-slate-700">Modules</th>
+                  <th className="text-left py-3 px-4"><SortHeader label="Company" sort="company" /></th>
+                  <th className="text-left py-3 px-4"><SortHeader label="Subscription Status" sort="subscriptionStatus" /></th>
+                  <th className="text-left py-3 px-4"><SortHeader label="Plan" sort="planName" /></th>
+                  <th className="text-left py-3 px-4"><SortHeader label="Email" sort="latestPaymentEmail" /></th>
+                  <th className="text-left py-3 px-4"><SortHeader label="Due Date" sort="subscriptionDueDate" /></th>
+                  <th className="text-left py-3 px-4"><SortHeader label="Recurring Date" sort="subscriptionRecurringDate" /></th>
+                  <th className="text-left py-3 px-4"><SortHeader label="Gateway" sort="latestPaymentGatewayMethod" /></th>
+                  <th className="text-left py-3 px-4 font-semibold text-slate-700">Entitlements</th>
                   <th className="sticky right-0 z-10 bg-slate-50 text-right py-3 px-4 font-semibold text-slate-700">Actions</th>
                 </tr>
+                {filtersOpen ? (
+                <tr className="border-t border-slate-200 bg-white">
+                  <th className="px-4 py-2"></th>
+                  <th className="px-4 py-2">
+                    <ColumnFilter
+                      label="Subscription Status"
+                      options={companyStatusOptions}
+                      selectedValues={statusSelections}
+                      onChange={setStatusSelections}
+                    />
+                  </th>
+                  <th className="px-4 py-2">
+                    <ColumnFilter
+                      label="Plan"
+                      options={companyPlanOptions}
+                      selectedValues={planSelections}
+                      onChange={setPlanSelections}
+                    />
+                  </th>
+                  <th className="px-4 py-2">
+                    <ColumnFilter
+                      label="Email"
+                      options={companyEmailOptions}
+                      selectedValues={emailSelections}
+                      onChange={setEmailSelections}
+                    />
+                  </th>
+                  <th className="px-4 py-2">
+                    <ColumnFilter
+                      label="Due Date"
+                      options={companyDueOptions}
+                      selectedValues={dueDateSelections}
+                      onChange={setDueDateSelections}
+                    />
+                  </th>
+                  <th className="px-4 py-2">
+                    <ColumnFilter
+                      label="Recurring Date"
+                      options={companyRecurringOptions}
+                      selectedValues={recurringDateSelections}
+                      onChange={setRecurringDateSelections}
+                    />
+                  </th>
+                  <th className="px-4 py-2">
+                    <ColumnFilter
+                      label="Gateway"
+                      options={companyGatewayOptions}
+                      selectedValues={gatewaySelections}
+                      onChange={setGatewaySelections}
+                    />
+                  </th>
+                  <th className="px-4 py-2">
+                    <ColumnFilter
+                      label="Entitlements"
+                      options={companyModuleOptions}
+                      selectedValues={moduleSelections}
+                      onChange={setModuleSelections}
+                    />
+                  </th>
+                  <th className="sticky right-0 z-10 bg-white px-4 py-2 text-right">
+                    <button
+                      type="button"
+                      onClick={clearFilters}
+                      className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                    >
+                      Clear
+                    </button>
+                  </th>
+                </tr>
+                ) : null}
               </thead>
               <tbody>
                 {companies.map((company) => {
@@ -538,6 +834,7 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                   const shouldShowLatestPaidModules =
                     moduleIds.length === 0 && company.latestPaymentStatus === 'succeeded' && latestPaymentModuleIds.length > 0;
                   const effectiveSubscriptionStatus = getEffectiveSubscriptionStatus(company);
+                  const planName = getCompanyPlanName(company);
                   return (
                     <tr key={company.id} className="group border-b border-slate-100 hover:bg-slate-50">
                       <td className="py-3 px-4 font-medium text-slate-800 max-w-[180px] truncate" title={company.company}>{company.company}</td>
@@ -545,6 +842,14 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                         <span className={`inline-block px-3 py-1 rounded-full text-sm ${getStatusBadgeClass(effectiveSubscriptionStatus)}`}>
                           {effectiveSubscriptionStatus}
                         </span>
+                      </td>
+                      <td className="py-3 px-4 text-slate-700">
+                        <div className="font-semibold text-slate-800">{planName}</div>
+                        {company.employeeCount ?? company.latestPaymentEmployeeCountSnapshot ? (
+                          <div className="text-xs text-slate-500">
+                            {company.employeeCount ?? company.latestPaymentEmployeeCountSnapshot} employees
+                          </div>
+                        ) : null}
                       </td>
                       <td className="py-3 px-4 text-slate-700 max-w-[200px] truncate" title={company.latestPaymentEmail || '-'}>{company.latestPaymentEmail || '-'}</td>
                       <td className="py-3 px-4 text-slate-700 whitespace-nowrap">{formatDate(company.subscriptionDueDate)}</td>
@@ -579,6 +884,8 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                             setEditingDetail({
                               id: company.id,
                               company: company.company,
+                              planId: getCompanyPlanId(company),
+                              originalPlanId: getCompanyPlanId(company),
                               modules: moduleIds,
                               originalSubscriptionStatus: getEffectiveSubscriptionStatus(company),
                               subscriptionStatus: getEffectiveSubscriptionStatus(company),
@@ -649,6 +956,29 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                 </select>
                 <p className="mt-1 text-xs text-slate-500">
                   {subscriptionStatusOptions.find((status) => status.value === editingDetail.subscriptionStatus)?.description}
+                </p>
+              </div>
+              <div>
+                <label htmlFor="company-plan" className="block text-sm text-slate-700 mb-1">Subscription Plan</label>
+                <select
+                  id="company-plan"
+                  value={editingDetail.planId}
+                  onChange={(event) =>
+                    setEditingDetail({
+                      ...editingDetail,
+                      planId: event.target.value,
+                    })
+                  }
+                  className="w-full border border-slate-300 rounded-lg px-3 py-2 bg-white"
+                >
+                  {planOptions.map((plan) => (
+                    <option key={plan.id} value={plan.id}>
+                      {plan.name}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-1 text-xs text-slate-500">
+                  Plan drives billing. Legacy modules below remain available during migration.
                 </p>
               </div>
               {normalizeStatus(editingDetail.subscriptionStatus) !== normalizeStatus(editingDetail.originalSubscriptionStatus) && (
@@ -724,7 +1054,7 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                 </label>
               </div>
               <div>
-                <p className="font-semibold text-slate-700 mb-2">Active Modules</p>
+                <p className="font-semibold text-slate-700 mb-2">Legacy Entitlements</p>
                 <div className="space-y-2 max-h-[32vh] overflow-auto border border-slate-200 rounded-lg p-2">
                   {allModules.map((module) => (
                     <label key={module.id} className="flex items-center gap-3 p-3 hover:bg-slate-50 rounded-lg cursor-pointer">
@@ -786,7 +1116,7 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
         <div className="fixed inset-0 z-40 bg-black/30 flex items-center justify-center p-4">
           <div className="bg-white rounded-xl border border-slate-200 w-full max-w-6xl max-h-[85vh] overflow-y-auto">
             <div className="p-5 border-b border-slate-100 flex items-center justify-between">
-              <h3 className="font-bold text-lg">{viewingCompany ? 'View Company' : 'Company Payment History'}</h3>
+              <h3 className="font-bold text-lg">{viewingCompany ? 'Company 360' : 'Company Payment History'}</h3>
               <button
                 className="px-2 py-1 text-slate-500 hover:text-slate-700"
                 onClick={closeCompanyView}
@@ -803,14 +1133,16 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                     <p><strong>ID:</strong> {viewingCompany.id}</p>
                     <p><strong>Created:</strong> {formatDate(viewingCompany.createdAt)}</p>
                     <p><strong>Multi-location:</strong> {viewingCompany.isMultiLocationEnabled ? 'Yes' : 'No'}</p>
+                    <p><strong>Plan:</strong> {getCompanyPlanName(viewingCompany)}</p>
+                    <p><strong>Employees:</strong> {viewingCompany.employeeCount ?? viewingCompany.latestPaymentEmployeeCountSnapshot ?? '-'}</p>
                     <div>
-                      <p className="font-semibold text-slate-700">Active modules</p>
+                      <p className="font-semibold text-slate-700">Legacy entitlements</p>
                       <div className="flex flex-wrap gap-2 mt-1">
                         {renderModulePills(parseModules(viewingCompany.activeModules))}
                       </div>
                     </div>
                     <div>
-                      <p className="font-semibold text-slate-700">Latest payment modules</p>
+                      <p className="font-semibold text-slate-700">Latest payment entitlements</p>
                       <div className="flex flex-wrap gap-2 mt-1">
                         {renderModulePills(parseModules(viewingCompany.latestPaymentModules || ''), 'payment')}
                       </div>
@@ -820,6 +1152,9 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                     <h4 className="font-semibold text-slate-800">Subscription</h4>
                     <p><strong>Status:</strong> {getEffectiveSubscriptionStatus(viewingCompany)}</p>
                     <p><strong>Raw status:</strong> {viewingCompany.subscriptionStatus || '-'}</p>
+                    <p><strong>Trial ends:</strong> {formatDateTime(viewingCompany.trialEndsAt || '')}</p>
+                    <p><strong>Next billing:</strong> {formatDateTime(viewingCompany.nextBillingDate || '')}</p>
+                    <p><strong>Next amount:</strong> {viewingCompany.nextBillingAmountCents !== null && viewingCompany.nextBillingAmountCents !== undefined ? formatPrice(viewingCompany.nextBillingAmountCents, viewingCompany.latestPaymentCurrency || 'USD') : '-'}</p>
                     <p><strong>Due:</strong> {formatDateTime(viewingCompany.subscriptionDueDate || '')}</p>
                     <p><strong>Recurring:</strong> {formatDateTime(viewingCompany.subscriptionRecurringDate || '')}</p>
                     <p><strong>Payment count:</strong> {viewingCompany.paymentHistoryCount ?? 0}</p>
@@ -829,7 +1164,9 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                     <h4 className="font-semibold text-slate-800">Latest Payment</h4>
                     <p><strong>Payment ID:</strong> {viewingCompany.latestPaymentIntentId || '-'}</p>
                     <p><strong>Email:</strong> {viewingCompany.latestPaymentEmail || '-'}</p>
-                    <p><strong>Amount:</strong> {viewingCompany.latestPaymentAmount !== null && viewingCompany.latestPaymentAmount !== undefined ? formatPrice(viewingCompany.latestPaymentAmount, viewingCompany.latestPaymentCurrency || 'USD') : '-'}</p>
+                    <p><strong>Plan:</strong> {viewingCompany.latestPaymentPlanName || getCompanyPlanName(viewingCompany)}</p>
+                    <p><strong>Employees:</strong> {viewingCompany.latestPaymentEmployeeCountSnapshot ?? viewingCompany.employeeCount ?? '-'}</p>
+                    <p><strong>Amount:</strong> {viewingCompany.latestPaymentFinalAmountCents !== null && viewingCompany.latestPaymentFinalAmountCents !== undefined ? formatPrice(viewingCompany.latestPaymentFinalAmountCents, viewingCompany.latestPaymentCurrency || 'USD') : viewingCompany.latestPaymentAmount !== null && viewingCompany.latestPaymentAmount !== undefined ? formatPrice(viewingCompany.latestPaymentAmount, viewingCompany.latestPaymentCurrency || 'USD') : '-'}</p>
                     <p><strong>Source:</strong> {viewingCompany.latestPaymentSource || '-'}</p>
                     <p><strong>Denied reason:</strong> {viewingCompany.latestPaymentDeniedReason || '-'}</p>
                     <p><strong>Gateway:</strong> {getCompanyGatewayLabel(viewingCompany)} / {viewingCompany.latestPaymentGatewayStatus || '-'}</p>
@@ -885,7 +1222,8 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                       <tr>
                         <th className="text-left py-3 px-4">Payment</th>
                         <th className="text-left py-3 px-4">Email</th>
-                        <th className="text-left py-3 px-4">Modules</th>
+                        <th className="text-left py-3 px-4">Plan</th>
+                        <th className="text-left py-3 px-4">Entitlements</th>
                         <th className="text-left py-3 px-4">Status</th>
                         <th className="text-left py-3 px-4">Amount</th>
                         <th className="text-left py-3 px-4">Denied reason</th>
@@ -905,6 +1243,12 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                           <tr key={payment.paymentIntentId} className="border-t border-slate-100">
                             <td className="py-3 px-4 text-slate-700">{payment.paymentIntentId}</td>
                             <td className="py-3 px-4 text-slate-700">{payment.email}</td>
+                            <td className="py-3 px-4 text-slate-700">
+                              <div className="font-medium">{payment.planName || payment.planId || '-'}</div>
+                              <div className="text-xs text-slate-500">
+                                {payment.employeeCountSnapshot ?? '-'} employees
+                              </div>
+                            </td>
                             <td className="py-3 px-4">
                               <div className="flex flex-wrap gap-1">
                                 {modules.length === 0 ? (
@@ -928,7 +1272,7 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                                 {payment.status}
                               </span>
                             </td>
-                            <td className="py-3 px-4 text-slate-700">{formatPrice(payment.amount, payment.currency)}</td>
+                            <td className="py-3 px-4 text-slate-700">{formatPrice(payment.finalAmountCents ?? payment.amount, payment.currency)}</td>
                             <td className="py-3 px-4 text-slate-700 max-w-[220px] truncate" title={payment.deniedReason || ''}>
                               {payment.deniedReason || '-'}
                             </td>
@@ -997,7 +1341,11 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                   <p><strong>Payment Id:</strong> {selectedPayment.paymentIntentId}</p>
                   <p><strong>Company:</strong> {selectedPayment.companyName || selectedHistoryFor || '-'}</p>
                   <p><strong>Email:</strong> {selectedPayment.email}</p>
-                  <p><strong>Amount:</strong> {formatPrice(selectedPayment.amount, selectedPayment.currency)}</p>
+                  <p><strong>Plan:</strong> {selectedPayment.planName || selectedPayment.planId || '-'}</p>
+                  <p><strong>Employees:</strong> {selectedPayment.employeeCountSnapshot ?? '-'}</p>
+                  <p><strong>Original amount:</strong> {selectedPayment.originalAmountCents !== null && selectedPayment.originalAmountCents !== undefined ? formatPrice(selectedPayment.originalAmountCents, selectedPayment.currency) : '-'}</p>
+                  <p><strong>Final amount:</strong> {formatPrice(selectedPayment.finalAmountCents ?? selectedPayment.amount, selectedPayment.currency)}</p>
+                  <p><strong>Trial ends:</strong> {formatDateTime(selectedPayment.trialEndsAt || '')}</p>
                   <p><strong>Status:</strong> {selectedPayment.status}</p>
                   <p><strong>Source:</strong> {selectedPayment.source || '-'}</p>
                   <p><strong>Gateway method:</strong> {getPaymentGatewayLabel(selectedPayment)}</p>

@@ -1,7 +1,8 @@
 import React, { useMemo, useState } from 'react';
 import { useQuery, useMutation, useLazyQuery } from '@apollo/client/react';
 import { ADMIN_USERS_QUERY, ADMIN_COMPANIES_QUERY, ADMIN_UPDATE_USER_MUTATION, ADMIN_ACTIVITY_LOG_QUERY } from '../../../lib/graphql';
-import { Search, Eye, Edit2 } from 'lucide-react';
+import { Search, Eye, Edit2, Filter } from 'lucide-react';
+import { buildColumnFilterOptions, ColumnFilter, matchesColumnFilter } from '../ColumnFilter';
 
 interface UserType {
   id: string;
@@ -45,8 +46,15 @@ interface EditUserType {
 }
 
 export const Users: React.FC<{onToast: (type: 'success'|'error', msg: string) => void}> = ({ onToast }) => {
-  const [companyFilter, setCompanyFilter] = useState<number | null>(null);
+  const [nameSelections, setNameSelections] = useState<string[]>([]);
+  const [emailSelections, setEmailSelections] = useState<string[]>([]);
+  const [usernameSelections, setUsernameSelections] = useState<string[]>([]);
+  const [companySelections, setCompanySelections] = useState<string[]>([]);
+  const [locationSelections, setLocationSelections] = useState<string[]>([]);
+  const [roleSelections, setRoleSelections] = useState<string[]>([]);
+  const [statusSelections, setStatusSelections] = useState<string[]>([]);
   const [search, setSearch] = useState('');
+  const [filtersOpen, setFiltersOpen] = useState(true);
   const [editingUser, setEditingUser] = useState<EditUserType | null>(null);
   const [activityUserId, setActivityUserId] = useState<string | number | null>(null);
 
@@ -54,7 +62,7 @@ export const Users: React.FC<{onToast: (type: 'success'|'error', msg: string) =>
     companyId: number | null;
   }, any>(ADMIN_USERS_QUERY, {
     variables: {
-      companyId: companyFilter,
+      companyId: null,
     }
   });
 
@@ -73,11 +81,46 @@ export const Users: React.FC<{onToast: (type: 'success'|'error', msg: string) =>
 
   const users = usersData?.adminUsers || [];
   const companies = companiesData?.adminCompanies || [];
+  const companyOptions = useMemo(
+    () => buildColumnFilterOptions(users, (user) => user.company?.company || '-'),
+    [users],
+  );
+  const nameOptions = useMemo(
+    () => buildColumnFilterOptions(users, (user) => `${user.firstName || ''} ${user.lastName || ''}`.trim() || '-'),
+    [users],
+  );
+  const emailOptions = useMemo(
+    () => buildColumnFilterOptions(users, (user) => user.email || '-'),
+    [users],
+  );
+  const usernameOptions = useMemo(
+    () => buildColumnFilterOptions(users, (user) => user.username || '-'),
+    [users],
+  );
+  const locationOptions = useMemo(
+    () => buildColumnFilterOptions(users, (user) => user.location?.location || '-'),
+    [users],
+  );
+  const roleOptions = useMemo(
+    () => buildColumnFilterOptions(users, (user) => user.isCompanyAdmin ? 'Company Admin' : 'User'),
+    [users],
+  );
+  const statusOptions = useMemo(
+    () => buildColumnFilterOptions(users, (user) => user.isActive ? 'Active' : 'Inactive'),
+    [users],
+  );
   const normalizedSearch = search.trim().toLowerCase();
   const displayedUsers = useMemo(() => {
-    if (!normalizedSearch) return users;
-
     return users.filter((user) => {
+      const fullName = `${user.firstName || ''} ${user.lastName || ''}`.trim() || '-';
+      if (!matchesColumnFilter(nameSelections, fullName)) return false;
+      if (!matchesColumnFilter(emailSelections, user.email || '-')) return false;
+      if (!matchesColumnFilter(usernameSelections, user.username || '-')) return false;
+      if (!matchesColumnFilter(companySelections, user.company?.company || '-')) return false;
+      if (!matchesColumnFilter(locationSelections, user.location?.location || '-')) return false;
+      if (!matchesColumnFilter(roleSelections, user.isCompanyAdmin ? 'Company Admin' : 'User')) return false;
+      if (!matchesColumnFilter(statusSelections, user.isActive ? 'Active' : 'Inactive')) return false;
+      if (!normalizedSearch) return true;
       const searchableText = [
         user.firstName,
         user.lastName,
@@ -93,7 +136,7 @@ export const Users: React.FC<{onToast: (type: 'success'|'error', msg: string) =>
 
       return searchableText.includes(normalizedSearch);
     });
-  }, [users, normalizedSearch]);
+  }, [users, normalizedSearch, nameSelections, emailSelections, usernameSelections, companySelections, locationSelections, roleSelections, statusSelections]);
   const activityUser = users.find((user) => String(user.id) === String(activityUserId));
   const allActivityLogs = activityData?.adminUserActivityLogs || [];
   const activityLogs = activityUserId === null
@@ -277,31 +320,42 @@ export const Users: React.FC<{onToast: (type: 'success'|'error', msg: string) =>
       <div className="bg-white rounded-lg border border-slate-200 p-6 space-y-4">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-2">Filter by Company</label>
-            <select
-              value={companyFilter || ''}
-              onChange={(event) => setCompanyFilter(event.target.value ? parseInt(event.target.value) : null)}
-              className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-            >
-              <option value="">All Companies</option>
-              {companies.map((company: any) => (
-                <option key={company.id} value={company.id}>
-                  {company.company}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
             <label className="block text-sm font-medium text-slate-700 mb-2">Search (name/email/username)</label>
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-              <input
-                type="text"
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                placeholder="Search..."
-                className="w-full pl-10 pr-3 py-2 border border-slate-300 rounded-lg"
-              />
+            <div className="flex items-center gap-2">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                <input
+                  type="text"
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                  placeholder="Search..."
+                  className="w-full pl-10 pr-3 py-2 border border-slate-300 rounded-lg"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={() => setFiltersOpen((open) => {
+                  if (open) {
+                    setNameSelections([]);
+                    setEmailSelections([]);
+                    setUsernameSelections([]);
+                    setCompanySelections([]);
+                    setLocationSelections([]);
+                    setRoleSelections([]);
+                    setStatusSelections([]);
+                  }
+                  return !open;
+                })}
+                aria-pressed={filtersOpen}
+                title="Filters"
+                className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border transition ${
+                  filtersOpen
+                    ? 'border-cyan-400 bg-cyan-50 text-cyan-600'
+                    : 'border-slate-200 bg-slate-50 text-slate-400 hover:border-cyan-300 hover:text-cyan-500'
+                }`}
+              >
+                <Filter className="h-4 w-4" />
+              </button>
             </div>
           </div>
         </div>
@@ -309,7 +363,11 @@ export const Users: React.FC<{onToast: (type: 'success'|'error', msg: string) =>
 
       <div className="bg-white rounded-lg border border-slate-200 overflow-hidden">
         {displayedUsers.length === 0 ? (
-          <div className="text-center py-12 text-slate-500">{search || companyFilter ? 'No users match your filters' : 'No users found'}</div>
+          <div className="text-center py-12 text-slate-500">
+            {search || nameSelections.length > 0 || emailSelections.length > 0 || usernameSelections.length > 0 || companySelections.length > 0 || locationSelections.length > 0 || roleSelections.length > 0 || statusSelections.length > 0
+              ? 'No users match your filters'
+              : 'No users found'}
+          </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[1080px]">
@@ -324,6 +382,67 @@ export const Users: React.FC<{onToast: (type: 'success'|'error', msg: string) =>
                   <th className="text-left py-3 px-4 font-semibold text-slate-700">Status</th>
                   <th className="sticky right-0 z-10 bg-slate-50 text-right py-3 px-4 font-semibold text-slate-700 w-24">Actions</th>
                 </tr>
+                {filtersOpen ? (
+                <tr className="border-t border-slate-200 bg-white">
+                  <th className="px-4 py-2">
+                    <ColumnFilter
+                      label="Name"
+                      options={nameOptions}
+                      selectedValues={nameSelections}
+                      onChange={setNameSelections}
+                    />
+                  </th>
+                  <th className="px-4 py-2">
+                    <ColumnFilter
+                      label="Email"
+                      options={emailOptions}
+                      selectedValues={emailSelections}
+                      onChange={setEmailSelections}
+                    />
+                  </th>
+                  <th className="px-4 py-2">
+                    <ColumnFilter
+                      label="Username"
+                      options={usernameOptions}
+                      selectedValues={usernameSelections}
+                      onChange={setUsernameSelections}
+                    />
+                  </th>
+                  <th className="px-4 py-2">
+                    <ColumnFilter
+                      label="Company"
+                      options={companyOptions}
+                      selectedValues={companySelections}
+                      onChange={setCompanySelections}
+                    />
+                  </th>
+                  <th className="px-4 py-2">
+                    <ColumnFilter
+                      label="Location"
+                      options={locationOptions}
+                      selectedValues={locationSelections}
+                      onChange={setLocationSelections}
+                    />
+                  </th>
+                  <th className="px-4 py-2">
+                    <ColumnFilter
+                      label="Role"
+                      options={roleOptions}
+                      selectedValues={roleSelections}
+                      onChange={setRoleSelections}
+                    />
+                  </th>
+                  <th className="px-4 py-2">
+                    <ColumnFilter
+                      label="Status"
+                      options={statusOptions}
+                      selectedValues={statusSelections}
+                      onChange={setStatusSelections}
+                    />
+                  </th>
+                  <th className="sticky right-0 z-10 bg-white px-4 py-2"></th>
+                </tr>
+                ) : null}
               </thead>
               <tbody>
                 {displayedUsers.map((user) => (
