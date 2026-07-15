@@ -42,7 +42,6 @@ interface EditUserType {
   username: string;
   isCompanyAdmin: boolean;
   isActive: boolean;
-  locationId: number | '';
 }
 
 export const Users: React.FC<{onToast: (type: 'success'|'error', msg: string) => void}> = ({ onToast }) => {
@@ -284,9 +283,6 @@ export const Users: React.FC<{onToast: (type: 'success'|'error', msg: string) =>
     return extraParts.length ? `${summary} ${extraParts.join(' ')}` : summary;
   };
 
-  const resolvedLocationId =
-    editingUser?.locationId ? String(editingUser.locationId) : '';
-
   const handleSave = async () => {
     if (!editingUser) return;
     try {
@@ -299,7 +295,6 @@ export const Users: React.FC<{onToast: (type: 'success'|'error', msg: string) =>
           username: editingUser.username,
           isCompanyAdmin: editingUser.isCompanyAdmin,
           isActive: editingUser.isActive,
-          locationId: editingUser.locationId || null,
         },
       });
       onToast('success', 'User updated');
@@ -491,7 +486,6 @@ export const Users: React.FC<{onToast: (type: 'success'|'error', msg: string) =>
                           username: user.username,
                           isCompanyAdmin: user.isCompanyAdmin,
                           isActive: user.isActive,
-                          locationId: user.location?.id || '',
                         })}
                         title="Edit User"
                         className="p-2 hover:bg-emerald-50 text-emerald-600 rounded-lg"
@@ -647,22 +641,6 @@ export const Users: React.FC<{onToast: (type: 'success'|'error', msg: string) =>
                   <span>Active</span>
                 </label>
               </div>
-              <label>
-                <span className="text-sm text-slate-700">Location Id</span>
-                <input
-                  className="w-full border border-slate-300 rounded-lg px-3 py-2 mt-1"
-                  value={resolvedLocationId}
-                  onChange={(event) =>
-                    setEditingUser({
-                      ...editingUser,
-                      locationId: event.target.value ? parseInt(event.target.value, 10) : '',
-                    })
-                  }
-                  placeholder="Optional"
-                  type="number"
-                  min={1}
-                />
-              </label>
               <div className="flex justify-end gap-2">
                 <button
                   className="px-4 py-2 border border-slate-200 rounded-lg text-slate-700"

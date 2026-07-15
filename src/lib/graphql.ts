@@ -645,7 +645,6 @@ export const ADMIN_UPDATE_USER_MUTATION = gql`
     $username: String
     $isCompanyAdmin: Boolean
     $isActive: Boolean
-    $locationId: Int
   ) {
     adminUpdateUser(
       userId: $userId
@@ -655,7 +654,6 @@ export const ADMIN_UPDATE_USER_MUTATION = gql`
       username: $username
       isCompanyAdmin: $isCompanyAdmin
       isActive: $isActive
-      locationId: $locationId
     ) {
       success
       message

@@ -19,7 +19,7 @@ const graphQLMocks: Record<OperationName, any> = {
         success: true,
         message: 'ok',
         token: 'e2e-token',
-        expiresAt: '2026-07-13T09:12:00Z',
+        expiresAt: '2027-07-13T09:12:00Z',
         superAdmin: {
           id: '1',
           username: 'admin',
@@ -370,15 +370,17 @@ test('users edit in popup and activity pages exist', async ({ page }) => {
 
   await page.getByRole('button', { name: 'Users' }).click();
   await expect(page.getByRole('heading', { name: 'Users' })).toBeVisible();
-  await page.getByRole('button', { name: 'Activity', exact: true }).click();
+  await page.getByRole('button', { name: 'View Activity' }).click();
   await expect(page.getByRole('heading', { name: 'User Activity - John Doe' })).toBeVisible();
-  await expect(page.getByText('Updated package offer')).toBeVisible();
+  await expect(page.getByText('Package_update Package').first()).toBeVisible();
   await page.getByRole('button', { name: '×' }).click();
-  await page.getByRole('button', { name: 'Edit' }).click();
+  await page.getByRole('button', { name: 'Edit User' }).click();
   await expect(page.getByRole('heading', { name: 'Edit User' })).toBeVisible();
+  await expect(page.getByText('Location Id')).toHaveCount(0);
   await page.getByRole('button', { name: 'Cancel' }).click();
 
-  await page.getByRole('button', { name: 'Infrastructure' }).click();
+  await page.getByRole('button', { name: 'Accounts' }).click();
+  await expect(page.getByRole('heading', { name: 'Accounts' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Infrastructure' })).toBeVisible();
 
   // Test income/expense cards
@@ -410,7 +412,7 @@ test('sidebar has all options and every page loads', async ({ page }) => {
     { label: 'Companies', heading: 'Companies' },
     { label: 'Subscriptions', heading: 'Subscriptions & Payments' },
     { label: 'Users', heading: 'Users' },
-    { label: 'Infrastructure', heading: 'Infrastructure' },
+    { label: 'Accounts', heading: 'Accounts' },
   ];
 
   for (const option of sidebarOptions) {

@@ -4,7 +4,7 @@ const loginResponse = {
   success: true,
   message: 'ok',
   token: 'e2e-token',
-  expiresAt: '2026-07-13T10:00:00Z',
+  expiresAt: '2027-07-13T10:00:00Z',
   superAdmin: {
     id: '1',
     username: 'admin',
@@ -384,6 +384,28 @@ test('plans page renders two canonical plans and saves plan edits', async ({ pag
     currency: 'USD',
     perEmployee: true,
     recommended: true,
+  });
+});
+
+test('plans page saves yearly billing interval edits', async ({ page }) => {
+  await installGraphQLMock(page);
+  await login(page);
+
+  await page.getByRole('button', { name: 'Plans' }).click();
+  await expect(page.getByRole('heading', { name: 'Plans & Pricing' })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Edit plan' }).nth(1).click();
+  await expect(page.getByRole('heading', { name: 'Edit Plan' })).toBeVisible();
+  await page.getByLabel('Billing interval').selectOption('yearly');
+  await page.getByRole('button', { name: 'Save plan' }).click();
+
+  await expect.poll(() => capturedPlanInput?.billingInterval).toBe('yearly');
+  expect(capturedPlanInput).toMatchObject({
+    id: 'premium',
+    name: 'Premium',
+    billingInterval: 'yearly',
+    basePriceCents: 1200,
+    currency: 'USD',
   });
 });
 
