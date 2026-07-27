@@ -1,11 +1,11 @@
 import { defineConfig, devices } from '@playwright/test';
 
 export default defineConfig({
-  testDir: './e2e',
-  fullyParallel: true,
+  testDir: './tests',
+  fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
-  workers: process.env.CI ? 1 : undefined,
+  workers: 1,
   reporter: 'html',
   use: {
     baseURL: 'http://localhost:3001',
@@ -15,8 +15,34 @@ export default defineConfig({
 
   projects: [
     {
-      name: 'chromium',
-      use: { ...devices['Desktop Chrome'] },
+      name: 'mocked-chromium',
+      testIgnore: /integration[\\/]/,
+      use: (() => {
+        const { deviceScaleFactor, ...desktopChrome } = devices['Desktop Chrome'];
+        return {
+          ...desktopChrome,
+          channel: 'chrome',
+          viewport: null,
+          launchOptions: {
+            args: ['--start-maximized'],
+          },
+        };
+      })(),
+    },
+    {
+      name: 'real-backend-chromium',
+      testMatch: /integration[\\/].*\.spec\.ts/,
+      use: (() => {
+        const { deviceScaleFactor, ...desktopChrome } = devices['Desktop Chrome'];
+        return {
+          ...desktopChrome,
+          channel: 'chrome',
+          viewport: null,
+          launchOptions: {
+            args: ['--start-maximized'],
+          },
+        };
+      })(),
     },
   ],
 
@@ -24,5 +50,9 @@ export default defineConfig({
     command: 'npm run dev',
     url: 'http://localhost:3001',
     reuseExistingServer: !process.env.CI,
+    env: {
+      VITE_GRAPHQL_URI:
+        process.env.SUPREME_E2E_GRAPHQL_URI || 'http://localhost:8000/graphql/',
+    },
   },
 });
