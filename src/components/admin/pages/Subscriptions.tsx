@@ -9,7 +9,7 @@ import {
   ADMIN_RESUME_COMPANY_MUTATION,
   ADMIN_MANUAL_SUBSCRIPTION_MUTATION,
 } from '../../../lib/graphql';
-import { formatPrice, formatDate, formatDateTime, parseModules, toDateTimeLocalValue } from '../../../lib/admin-utils';
+import { formatPrice, formatDate, formatDateTime, toDateTimeLocalValue } from '../../../lib/admin-utils';
 import { Clipboard, Download, Edit2, Eye, Filter, Printer, RefreshCw, Search, X } from 'lucide-react';
 import { buildColumnFilterOptions, ColumnFilter, matchesColumnFilter } from '../ColumnFilter';
 
@@ -26,7 +26,6 @@ interface PaymentType {
   originalAmountCents?: number | null;
   finalAmountCents?: number | null;
   trialEndsAt?: string | null;
-  modules?: unknown;
   amount: number;
   currency: string;
   status: string;
@@ -45,7 +44,6 @@ interface PaymentType {
 }
 
 interface IndexedPaymentType extends PaymentType {
-  modulesList: string[];
   searchableText: string;
   displayCompanyName: string;
 }
@@ -117,7 +115,6 @@ export const Subscriptions: React.FC<{
   const [companySelections, setCompanySelections] = useState<string[]>([]);
   const [emailSelections, setEmailSelections] = useState<string[]>([]);
   const [planSelections, setPlanSelections] = useState<string[]>([]);
-  const [entitlementSelections, setEntitlementSelections] = useState<string[]>([]);
   const [amountSelections, setAmountSelections] = useState<string[]>([]);
   const [dueDateSelections, setDueDateSelections] = useState<string[]>([]);
   const [trialEndSelections, setTrialEndSelections] = useState<string[]>([]);
@@ -452,8 +449,6 @@ export const Subscriptions: React.FC<{
     paymentMethodLabel(payment.gatewayMethod) || paymentMethodLabel(payment.source) || '-';
   const getAmountFilterValue = (payment: PaymentType) =>
     formatPrice(payment.finalAmountCents ?? payment.amount ?? 0, payment.currency || 'USD');
-  const getEntitlementsFilterValue = (payment: IndexedPaymentType) =>
-    payment.modulesList.length > 0 ? payment.modulesList.join(', ') : 'No entitlements';
   const getPaymentStatus = (payment: PaymentType) => statusOverrides[payment.paymentIntentId] || payment.status;
   const getCompanyName = (payment: PaymentType) => {
     const paymentCompanyName = payment.companyName?.trim();
@@ -465,7 +460,6 @@ export const Subscriptions: React.FC<{
   };
   const normalizedCompanySearch = companySearch.trim().toLowerCase();
   const indexedPayments = useMemo<IndexedPaymentType[]>(() => payments.map((payment) => {
-    const modulesList = parseModules(payment.modules);
     const displayCompanyName = getCompanyName(payment);
     const effectiveStatus = getPaymentStatus(payment);
     const planText = [payment.planId, payment.planName, payment.employeeCountSnapshot]
@@ -480,7 +474,6 @@ export const Subscriptions: React.FC<{
       payment.gatewayMethod,
       payment.source,
       payment.paymentGatewayStatus,
-      ...modulesList,
     ]
       .filter(Boolean)
       .join(' ')
@@ -490,7 +483,6 @@ export const Subscriptions: React.FC<{
       ...payment,
       status: effectiveStatus,
       displayCompanyName,
-      modulesList,
       searchableText,
     };
   }), [payments, companyNameById, statusOverrides]);
@@ -504,10 +496,6 @@ export const Subscriptions: React.FC<{
   );
   const planOptions = useMemo(
     () => buildColumnFilterOptions(indexedPayments, (payment) => payment.planName || payment.planId || '-'),
-    [indexedPayments],
-  );
-  const entitlementOptions = useMemo(
-    () => buildColumnFilterOptions(indexedPayments, (payment) => getEntitlementsFilterValue(payment)),
     [indexedPayments],
   );
   const amountOptions = useMemo(
@@ -550,7 +538,6 @@ export const Subscriptions: React.FC<{
       matchesColumnFilter(companySelections, payment.displayCompanyName) &&
       matchesColumnFilter(emailSelections, payment.email || '-') &&
       matchesColumnFilter(planSelections, payment.planName || payment.planId || '-') &&
-      matchesColumnFilter(entitlementSelections, getEntitlementsFilterValue(payment)) &&
       matchesColumnFilter(amountSelections, getAmountFilterValue(payment)) &&
       matchesColumnFilter(dueDateSelections, formatDate(payment.dueDate)) &&
       matchesColumnFilter(trialEndSelections, formatDate(payment.trialEndsAt)) &&
@@ -572,7 +559,7 @@ export const Subscriptions: React.FC<{
       if (leftValue > rightValue) return sortDirection === 'asc' ? 1 : -1;
       return 0;
     });
-  }, [indexedPayments, normalizedCompanySearch, companySelections, emailSelections, planSelections, entitlementSelections, amountSelections, dueDateSelections, trialEndSelections, statusSelections, gatewaySelections, createdSelections, dueOnly, sortKey, sortDirection]);
+  }, [indexedPayments, normalizedCompanySearch, companySelections, emailSelections, planSelections, amountSelections, dueDateSelections, trialEndSelections, statusSelections, gatewaySelections, createdSelections, dueOnly, sortKey, sortDirection]);
 
   const cycleSort = (key: PaymentSortKey) => {
     if (sortKey !== key) {
@@ -681,7 +668,6 @@ export const Subscriptions: React.FC<{
                 setCompanySelections([]);
                 setEmailSelections([]);
                 setPlanSelections([]);
-                setEntitlementSelections([]);
                 setAmountSelections([]);
                 setDueDateSelections([]);
                 setTrialEndSelections([]);
@@ -713,13 +699,12 @@ export const Subscriptions: React.FC<{
 
       <div className="bg-white rounded-lg border border-slate-200">
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[1120px]">
+            <table className="w-full min-w-[1020px]">
               <thead className="bg-slate-50 border-b border-slate-200">
                 <tr>
                   <th className="py-3 px-3"><SortHeader label="Company" column="displayCompanyName" /></th>
                   <th className="py-3 px-3"><SortHeader label="Email" column="email" /></th>
                   <th className="py-3 px-3"><SortHeader label="Plan" column="planName" /></th>
-                  <th className="text-left py-3 px-3 font-semibold text-slate-700">Entitlements</th>
                   <th className="py-3 px-3"><SortHeader label="Amount" column="amount" /></th>
                   <th className="py-3 px-3"><SortHeader label="Due Date" column="dueDate" /></th>
                   <th className="py-3 px-3"><SortHeader label="Trial End" column="trialEndsAt" /></th>
@@ -752,14 +737,6 @@ export const Subscriptions: React.FC<{
                       options={planOptions}
                       selectedValues={planSelections}
                       onChange={setPlanSelections}
-                    />
-                  </th>
-                  <th className="px-3 py-2">
-                    <ColumnFilter
-                      label="Entitlements"
-                      options={entitlementOptions}
-                      selectedValues={entitlementSelections}
-                      onChange={setEntitlementSelections}
                     />
                   </th>
                   <th className="px-3 py-2">
@@ -827,13 +804,11 @@ export const Subscriptions: React.FC<{
               <tbody>
                 {filteredPayments.length === 0 ? (
                   <tr>
-                    <td colSpan={11} className="px-4 py-12 text-center text-slate-500">
+                    <td colSpan={10} className="px-4 py-12 text-center text-slate-500">
                       {payments.length === 0 ? 'No payments found' : 'No payments match your filters'}
                     </td>
                   </tr>
-                ) : filteredPayments.map((payment) => {
-                  const modules = payment.modulesList;
-                  return (
+                ) : filteredPayments.map((payment) => (
                     <tr key={payment.paymentIntentId} className="border-b border-slate-100 hover:bg-slate-50">
                       <td className="py-3 px-3 font-medium text-slate-800">
                         <div className="max-w-[150px] truncate" title={payment.displayCompanyName}>{payment.displayCompanyName}</div>
@@ -845,19 +820,6 @@ export const Subscriptions: React.FC<{
                         {payment.employeeCountSnapshot !== null && payment.employeeCountSnapshot !== undefined ? (
                           <div className="text-xs text-slate-500">{payment.employeeCountSnapshot} employees</div>
                         ) : null}
-                      </td>
-                      <td className="py-3 px-3">
-                        <div className="flex flex-wrap gap-1">
-                          {modules.length === 0 ? (
-                            <span className="text-slate-400 text-sm">No entitlements</span>
-                          ) : (
-                            modules.map((module) => (
-                              <span key={module} className="inline-block px-2 py-1 bg-slate-100 text-slate-700 text-xs rounded">
-                                {module}
-                              </span>
-                            ))
-                          )}
-                        </div>
                       </td>
                       <td className="py-3 px-3 font-semibold text-slate-800">
                         <div>{formatPrice(payment.finalAmountCents ?? payment.amount, payment.currency)}</div>
@@ -909,8 +871,7 @@ export const Subscriptions: React.FC<{
                         </div>
                       </td>
                     </tr>
-                  );
-                })}
+                ))}
               </tbody>
             </table>
           </div>
@@ -974,19 +935,6 @@ export const Subscriptions: React.FC<{
                   <p><strong>Sender ref:</strong> {viewingPayment.gatewayRefSenderMedium || '-'}</p>
                   <p><strong>Denied reason:</strong> {viewingPayment.deniedReason || '-'}</p>
                 </div>
-              </div>
-            </div>
-
-            <div className="mt-4 rounded-lg border border-slate-200 p-4">
-              <h4 className="mb-3 font-semibold text-slate-800">Entitlements</h4>
-              <div className="flex flex-wrap gap-2">
-                {viewingPayment.modulesList.length === 0 ? (
-                  <span className="text-sm text-slate-400">No entitlements</span>
-                ) : viewingPayment.modulesList.map((module) => (
-                  <span key={module} className="rounded bg-slate-100 px-2 py-1 text-xs text-slate-700">
-                    {module}
-                  </span>
-                ))}
               </div>
             </div>
 

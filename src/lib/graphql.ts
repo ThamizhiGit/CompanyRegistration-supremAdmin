@@ -416,8 +416,6 @@ export const ADMIN_COMPANIES_QUERY = gql`
       planId
       planName
       employeeCount
-      activeModules
-      latestPaymentModules
       createdAt
       isMultiLocationEnabled
       subscriptionStatus
@@ -468,7 +466,6 @@ export const ADMIN_COMPANY_PAYMENT_HISTORY_QUERY = gql`
       originalAmountCents
       finalAmountCents
       trialEndsAt
-      modules
       status
       amount
       currency
@@ -500,7 +497,6 @@ export const ADMIN_PAYMENTS_QUERY = gql`
       originalAmountCents
       finalAmountCents
       trialEndsAt
-      modules
       amount
       currency
       status
@@ -576,20 +572,6 @@ export const ADMIN_RESUME_COMPANY_MUTATION = gql`
       company {
         id
         company
-      }
-    }
-  }
-`;
-
-export const ADMIN_SET_COMPANY_MODULES_MUTATION = gql`
-  mutation AdminSetCompanyModules($companyId: Int!, $modules: [String!]!) {
-    adminSetCompanyModules(companyId: $companyId, modules: $modules) {
-      success
-      message
-      company {
-        id
-        company
-        activeModules
       }
     }
   }

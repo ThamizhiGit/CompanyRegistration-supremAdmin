@@ -165,7 +165,7 @@ const installGraphQLMock = async (page: any) => {
               {
                 id: 'crm',
                 name: 'AI CRM',
-                description: 'Legacy CRM entitlement',
+                description: 'AI CRM package',
                 price: 10000,
                 currency: 'USD',
                 active: true,
@@ -199,8 +199,6 @@ const installGraphQLMock = async (page: any) => {
                 planId: 'premium',
                 planName: 'Premium',
                 employeeCount: 42,
-                activeModules: ['crm'],
-                latestPaymentModules: ['crm'],
                 createdAt: '2026-06-01T00:00:00Z',
                 isMultiLocationEnabled: true,
                 subscriptionStatus: 'trial',
@@ -287,23 +285,6 @@ const installGraphQLMock = async (page: any) => {
       });
     }
 
-    if (payload.operationName === 'AdminSetCompanyModules') {
-      return route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({
-          data: {
-            adminSetCompanyModules: {
-              success: true,
-              message: 'Entitlements updated',
-              company: { id: variables.companyId, company: 'Acme Labs', activeModules: variables.modules, __typename: 'Company' },
-              __typename: 'AdminSetCompanyModulesPayload',
-            },
-          },
-        }),
-      });
-    }
-
     if (payload.operationName === 'AdminPayments') {
       return route.fulfill({
         status: 200,
@@ -320,7 +301,6 @@ const installGraphQLMock = async (page: any) => {
                 originalAmountCents: 50400,
                 finalAmountCents: 0,
                 trialEndsAt: '2027-01-10T00:00:00Z',
-                modules: ['crm'],
                 amount: 0,
                 currency: 'USD',
                 status: 'pending',
@@ -453,19 +433,22 @@ test('companies page shows plan billing context and assigns plan', async ({ page
 
   await page.locator('[title="Edit Company"]').click();
   await page.getByLabel('Subscription Plan').selectOption('free');
+  await expect(page.getByLabel('Subscription Status')).toHaveValue('active');
+  await expect(page.getByLabel('Reason for change')).toHaveCount(0);
   await page.getByRole('button', { name: /Save changes/ }).click();
 
   await expect.poll(() => capturedCompanyPlanInput?.planId).toBe('free');
   expect(capturedCompanyPlanInput.companyId).toBe(12);
 });
 
-test('subscriptions page prefers plan snapshots over legacy modules', async ({ page }) => {
+test('subscriptions page shows plan snapshots without module columns', async ({ page }) => {
   await installGraphQLMock(page);
   await login(page);
 
   await page.getByRole('button', { name: 'Subscriptions' }).click();
   await expect(page.getByRole('heading', { name: 'Subscriptions & Payments' })).toBeVisible();
   await expect(page.getByRole('columnheader', { name: 'Plan' })).toBeVisible();
+  await expect(page.getByRole('columnheader', { name: 'Modules' })).toHaveCount(0);
   await expect(page.getByText('Premium')).toBeVisible();
   await expect(page.getByText('42 employees')).toBeVisible();
   await expect(page.getByText('Original $504.00')).toBeVisible();

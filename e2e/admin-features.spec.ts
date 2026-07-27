@@ -85,8 +85,6 @@ const graphQLMocks: Record<OperationName, any> = {
         {
           id: 12,
           company: 'Acme Labs',
-          activeModules: [],
-          latestPaymentModules: ['crm'],
           createdAt: '2026-06-01T00:00:00Z',
           isMultiLocationEnabled: true,
           subscriptionStatus: 'trial',
@@ -116,7 +114,6 @@ const graphQLMocks: Record<OperationName, any> = {
         {
           paymentIntentId: 'pi_1',
           email: 'john@acme.com',
-          modules: ['crm'],
           amount: 10000,
           currency: 'USD',
           status: 'pending',
@@ -170,7 +167,6 @@ const graphQLMocks: Record<OperationName, any> = {
         {
           paymentIntentId: 'pi_1',
           email: 'john@acme.com',
-          modules: '["crm"]',
           status: 'succeeded',
           amount: 10000,
           currency: 'USD',
@@ -294,13 +290,13 @@ test('company filters, detail edit, and payment history popups', async ({ page }
   await expect(page.getByRole('heading', { name: 'Companies' })).toBeVisible();
   await expect(page.getByRole('columnheader', { name: 'Email' })).toBeVisible();
   await expect(page.getByRole('columnheader', { name: 'Gateway' })).toBeVisible();
-  await expect(page.getByRole('columnheader', { name: 'Entitlements' })).toBeVisible();
+  await expect(page.getByRole('columnheader', { name: 'Modules' })).toHaveCount(0);
   const acmeRow = page.getByRole('row').filter({ hasText: 'Acme Labs' }).first();
   await expect(acmeRow.getByText('active', { exact: true })).toBeVisible();
   await expect(page.getByText('john@acme.com')).toBeVisible();
   await expect(page.getByText('card')).toBeVisible();
-  await expect(page.getByText('CRM')).toBeVisible();
-  await expect(page.getByText('Latest paid modules')).toBeVisible();
+  await expect(page.getByText('CRM', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('Latest paid modules')).toHaveCount(0);
 
   const searchInput = page.getByPlaceholder('Search companies, email, payment...');
   await searchInput.fill('john@acme.com');
@@ -314,7 +310,10 @@ test('company filters, detail edit, and payment history popups', async ({ page }
   await page.locator('[title="Edit Company"]').click();
   await expect(page.getByRole('heading', { name: 'Edit Company' })).toBeVisible();
   await expect(page.getByText('Subscription Plan')).toBeVisible();
-  await expect(page.getByText('Legacy Entitlements', { exact: true })).toBeVisible();
+  await expect(page.getByText('Legacy Entitlements', { exact: true })).toHaveCount(0);
+  await page.getByLabel('Subscription Status').selectOption('trial');
+  await expect(page.getByLabel('Subscription Plan')).toHaveValue('premium');
+  await expect(page.getByText('Trial status uses the Premium plan and requires billing dates.')).toBeVisible();
   await page.getByRole('button', { name: 'Cancel' }).click();
 
   await page.locator('[title="View Company"]').click();

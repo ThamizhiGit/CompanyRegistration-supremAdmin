@@ -2,8 +2,6 @@ import React, { useMemo, useState } from 'react';
 import { useQuery, useMutation } from '@apollo/client/react';
 import {
   ADMIN_COMPANIES_QUERY,
-  ADMIN_MODULES_QUERY,
-  ADMIN_SET_COMPANY_MODULES_MUTATION,
   ADMIN_ASSIGN_COMPANY_PLAN_MUTATION,
   ADMIN_UPDATE_COMPANY_DETAIL_MUTATION,
   ADMIN_COMPANY_PAYMENT_HISTORY_QUERY,
@@ -11,7 +9,7 @@ import {
   ADMIN_REQUEST_REFUND_MUTATION,
   ADMIN_MANUAL_SUBSCRIPTION_MUTATION,
 } from '../../../lib/graphql';
-import { buildPayload, formatDate, formatDateTime, formatPrice, toDateTimeLocalValue, parseModules } from '../../../lib/admin-utils';
+import { buildPayload, formatDate, formatDateTime, formatPrice, toDateTimeLocalValue } from '../../../lib/admin-utils';
 import { Download, Edit2, Save, X, ClipboardList, Eye, Filter, HandCoins, Clipboard, Printer, Search } from 'lucide-react';
 import { buildColumnFilterOptions, ColumnFilter, matchesColumnFilter } from '../ColumnFilter';
 
@@ -20,7 +18,6 @@ interface EditingCompanyDetail {
   company: string;
   planId: string;
   originalPlanId: string;
-  modules: string[];
   originalSubscriptionStatus: string;
   subscriptionStatus: string;
   isActive?: boolean | null;
@@ -41,8 +38,6 @@ interface CompanyType {
   planId?: string | null;
   planName?: string | null;
   employeeCount?: number | null;
-  activeModules: string;
-  latestPaymentModules?: string | null;
   createdAt: string;
   isMultiLocationEnabled: boolean;
   subscriptionStatus: string;
@@ -70,12 +65,6 @@ interface CompanyType {
   latestPaymentCreatedAt?: string | null;
 }
 
-interface ModuleType {
-  id: string;
-  name: string;
-  description?: string;
-}
-
 interface CompanyPaymentType {
   paymentIntentId: string;
   email: string;
@@ -85,7 +74,6 @@ interface CompanyPaymentType {
   originalAmountCents?: number | null;
   finalAmountCents?: number | null;
   trialEndsAt?: string | null;
-  modules?: string;
   status: string;
   amount: number;
   currency: string;
@@ -120,6 +108,9 @@ const planOptions = [
   { id: 'premium', name: 'Premium' },
 ];
 
+const paidSubscriptionStatuses = new Set(['trial', 'active', 'pending']);
+const datedSubscriptionStatuses = new Set(['trial', 'active', 'pending']);
+
 const escapeHtml = (value: string) =>
   value
     .replace(/&/g, '&amp;')
@@ -148,7 +139,6 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
   const [dueDateSelections, setDueDateSelections] = useState<string[]>([]);
   const [recurringDateSelections, setRecurringDateSelections] = useState<string[]>([]);
   const [gatewaySelections, setGatewaySelections] = useState<string[]>([]);
-  const [moduleSelections, setModuleSelections] = useState<string[]>([]);
   const [filtersOpen, setFiltersOpen] = useState(true);
 
   const [viewingCompany, setViewingCompany] = useState<CompanyType | null>(null);
@@ -202,14 +192,6 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
     variables: companyQueryVariables,
   });
 
-  const { data: modulesData, loading: modulesLoading, error: modulesError } = useQuery<
-    { adminModules: ModuleType[] },
-    { includeInactive: boolean },
-    any
-  >(ADMIN_MODULES_QUERY, {
-    variables: { includeInactive: false }
-  });
-
   const { data: historyData, loading: historyLoading, refetch: refetchHistory } = useQuery<
     { adminCompanyPaymentHistory: CompanyPaymentType[] },
     { companyId: number; dateFrom: string | null; dateTo: string | null; status: string | null },
@@ -224,7 +206,6 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
     skip: selectedHistoryFor === null,
   });
 
-  const [setCompanyModules] = useMutation(ADMIN_SET_COMPANY_MODULES_MUTATION);
   const [assignCompanyPlan] = useMutation(ADMIN_ASSIGN_COMPANY_PLAN_MUTATION);
   const [updateCompanyDetail] = useMutation(ADMIN_UPDATE_COMPANY_DETAIL_MUTATION);
   const [updatePaymentStatus] = useMutation(ADMIN_UPDATE_PAYMENT_STATUS_MUTATION);
@@ -232,7 +213,6 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
   const [manualProcess] = useMutation(ADMIN_MANUAL_SUBSCRIPTION_MUTATION);
 
   const rawCompanies = companiesData?.adminCompanies || [];
-  const allModules = modulesData?.adminModules || [];
   const historyItems = historyData?.adminCompanyPaymentHistory || [];
   const paymentStatuses = ['pending', 'succeeded', 'failed', 'refunded'] as const;
   const normalizeStatus = (status?: string | null) => (status || '').trim().toLowerCase();
@@ -243,25 +223,10 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
     if (latestPaymentStatus) return latestPaymentStatus;
     return subscriptionStatus || 'trial';
   };
-  const getModuleName = (moduleId: string) => allModules.find((module) => module.id === moduleId)?.name || moduleId;
   const getCompanyPlanId = (company: CompanyType) =>
-    company.planId || company.latestPaymentPlanId || (parseModules(company.activeModules).length > 0 ? 'premium' : 'free');
+    company.planId || company.latestPaymentPlanId || 'free';
   const getCompanyPlanName = (company: CompanyType) =>
     company.planName || company.latestPaymentPlanName || planOptions.find((plan) => plan.id === getCompanyPlanId(company))?.name || '-';
-  const renderModulePills = (moduleIds: string[], tone: 'active' | 'payment' = 'active') => {
-    if (moduleIds.length === 0) return <span className="text-slate-400 text-sm">No modules</span>;
-
-    const className =
-      tone === 'payment'
-        ? 'inline-block px-2 py-1 bg-amber-100 text-amber-700 text-xs rounded-full leading-tight'
-        : 'inline-block px-2 py-1 bg-blue-100 text-blue-700 text-xs rounded-full leading-tight';
-
-    return moduleIds.map((moduleId) => (
-      <span key={moduleId} className={className}>
-        {getModuleName(moduleId)}
-      </span>
-    ));
-  };
   const getStatusBadgeClass = (status: string) => {
     if (status === 'active' || status === 'succeeded') return 'bg-emerald-50 text-emerald-700';
     if (status === 'pending' || status === 'trial') return 'bg-yellow-50 text-yellow-700';
@@ -272,11 +237,61 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
     company.latestPaymentGatewayMethod || company.latestPaymentSource || '-';
   const getPaymentGatewayLabel = (payment: CompanyPaymentType) =>
     payment.gatewayMethod || payment.source || '-';
-  const getCompanyModuleFilterValue = (company: CompanyType) => {
-    const moduleIds = parseModules(company.activeModules);
-    const latestPaymentModuleIds = parseModules(company.latestPaymentModules || '');
-    const effectiveModuleIds = moduleIds.length > 0 ? moduleIds : latestPaymentModuleIds;
-    return effectiveModuleIds.map((moduleId) => getModuleName(moduleId)).join(', ') || 'No entitlements';
+  const getStatusLabel = (value: string) =>
+    subscriptionStatusOptions.find((status) => status.value === value)?.label || value;
+  const syncEditingStatus = (detail: EditingCompanyDetail, nextStatus: string): EditingCompanyDetail => {
+    const normalizedStatus = normalizeStatus(nextStatus);
+    return {
+      ...detail,
+      subscriptionStatus: nextStatus,
+      planId: paidSubscriptionStatuses.has(normalizedStatus) ? 'premium' : detail.planId,
+    };
+  };
+  const syncEditingPlan = (detail: EditingCompanyDetail, nextPlanId: string): EditingCompanyDetail => {
+    if (nextPlanId === 'free') {
+      return {
+        ...detail,
+        planId: nextPlanId,
+        subscriptionStatus: 'active',
+        subscriptionDueDate: '',
+        subscriptionRecurringDate: '',
+      };
+    }
+
+    return {
+      ...detail,
+      planId: nextPlanId,
+      subscriptionStatus: detail.planId === 'free' ? 'trial' : detail.subscriptionStatus,
+    };
+  };
+  const getEditValidationError = (detail: EditingCompanyDetail): string => {
+    const normalizedStatus = normalizeStatus(detail.subscriptionStatus);
+    if (detail.planId === 'free') return '';
+    if (!datedSubscriptionStatuses.has(normalizedStatus)) return '';
+
+    if (!detail.subscriptionDueDate || !detail.subscriptionRecurringDate) {
+      return `${getStatusLabel(detail.subscriptionStatus)} subscriptions need both due and recurring dates.`;
+    }
+
+    const dueTime = new Date(detail.subscriptionDueDate).getTime();
+    const recurringTime = new Date(detail.subscriptionRecurringDate).getTime();
+    if (Number.isNaN(dueTime) || Number.isNaN(recurringTime)) {
+      return 'Enter valid due and recurring dates.';
+    }
+    if (recurringTime <= dueTime) {
+      return 'Recurring date must be after the due date.';
+    }
+
+    return '';
+  };
+  const getPlanSyncHint = (detail: EditingCompanyDetail) => {
+    if (detail.planId === 'free') {
+      return 'Free plan uses Active status and does not carry billing dates.';
+    }
+    if (paidSubscriptionStatuses.has(normalizeStatus(detail.subscriptionStatus))) {
+      return `${getStatusLabel(detail.subscriptionStatus)} status uses the Premium plan and requires billing dates.`;
+    }
+    return 'Plan drives billing and subscription pricing.';
   };
   const clearFilters = () => {
     setSearch('');
@@ -286,7 +301,6 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
     setDueDateSelections([]);
     setRecurringDateSelections([]);
     setGatewaySelections([]);
-    setModuleSelections([]);
   };
   const normalizedSearch = search.trim().toLowerCase();
   const companyStatusOptions = useMemo(
@@ -313,18 +327,8 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
     () => buildColumnFilterOptions(rawCompanies, (company) => getCompanyGatewayLabel(company)),
     [rawCompanies],
   );
-  const companyModuleOptions = useMemo(
-    () => buildColumnFilterOptions(rawCompanies, (company) => getCompanyModuleFilterValue(company)),
-    [rawCompanies, allModules],
-  );
   const companies = useMemo(() => (
     rawCompanies.filter((company) => {
-      const moduleIds = parseModules(company.activeModules);
-      const latestPaymentModuleIds = parseModules(company.latestPaymentModules || '');
-      const moduleText = [...moduleIds, ...latestPaymentModuleIds]
-        .map((moduleId) => getModuleName(moduleId))
-        .join(' ')
-        .toLowerCase();
       const planText = [getCompanyPlanId(company), getCompanyPlanName(company)]
         .filter(Boolean)
         .join(' ')
@@ -347,7 +351,6 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
         getEffectiveSubscriptionStatus(company),
         planText,
         gatewayText,
-        moduleText,
       ]
         .filter(Boolean)
         .join(' ')
@@ -360,7 +363,6 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
       if (!matchesColumnFilter(dueDateSelections, formatDate(company.subscriptionDueDate))) return false;
       if (!matchesColumnFilter(recurringDateSelections, formatDate(company.subscriptionRecurringDate))) return false;
       if (!matchesColumnFilter(gatewaySelections, getCompanyGatewayLabel(company))) return false;
-      if (!matchesColumnFilter(moduleSelections, getCompanyModuleFilterValue(company))) return false;
       return true;
     }).sort((left, right) => {
       if (!sortKey || !sortDirection) return 0;
@@ -406,8 +408,6 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
     dueDateSelections,
     recurringDateSelections,
     gatewaySelections,
-    moduleSelections,
-    allModules,
     sortKey,
     sortDirection,
   ]);
@@ -519,7 +519,7 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
     printWindow.print();
   };
 
-  if (companiesLoading || modulesLoading) {
+  if (companiesLoading) {
     return <div className="text-center py-12 text-slate-500">Loading companies...</div>;
   }
 
@@ -527,17 +527,19 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
     return <div className="text-center py-12 text-red-600">Error: {companiesError.message}</div>;
   }
 
-  if (modulesError) {
-    return <div className="text-center py-12 text-red-600">Error loading modules: {modulesError.message}</div>;
-  }
-
   const handleSaveCompany = async () => {
     if (!editingDetail) return;
     const statusChanged = normalizeStatus(editingDetail.subscriptionStatus) !== normalizeStatus(editingDetail.originalSubscriptionStatus);
+    const validationError = getEditValidationError(editingDetail);
+    if (validationError) {
+      onToast('error', validationError);
+      return;
+    }
     if (statusChanged && !editingDetail.subscriptionStatusReason.trim()) {
       onToast('error', 'Please add a reason for changing subscription status');
       return;
     }
+    const shouldClearBillingDates = editingDetail.planId === 'free';
     try {
       await updateCompanyDetail({
         variables: {
@@ -545,8 +547,8 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
             id: editingDetail.id,
             company: editingDetail.company,
             subscriptionStatus: editingDetail.subscriptionStatus,
-            subscriptionDueDate: editingDetail.subscriptionDueDate || null,
-            subscriptionRecurringDate: editingDetail.subscriptionRecurringDate || null,
+            subscriptionDueDate: shouldClearBillingDates ? null : editingDetail.subscriptionDueDate || null,
+            subscriptionRecurringDate: shouldClearBillingDates ? null : editingDetail.subscriptionRecurringDate || null,
             isMultiLocationEnabled: editingDetail.isMultiLocationEnabled,
           },
         },
@@ -560,12 +562,6 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
           },
         });
       }
-      await setCompanyModules({
-        variables: {
-          companyId: editingDetail.id,
-          modules: editingDetail.modules,
-        },
-      });
       onToast('success', 'Company detail updated');
       setEditingDetail(null);
       refetchCompanies();
@@ -659,11 +655,20 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
     }
   };
 
+  const editValidationError = editingDetail ? getEditValidationError(editingDetail) : '';
+  const editStatusReasonMissing = Boolean(
+    editingDetail &&
+      normalizeStatus(editingDetail.subscriptionStatus) !== normalizeStatus(editingDetail.originalSubscriptionStatus) &&
+      !editingDetail.subscriptionStatusReason.trim(),
+  );
+  const companySaveDisabled = Boolean(editValidationError) || editStatusReasonMissing;
+  const editingFreePlan = editingDetail?.planId === 'free';
+
   return (
     <div className="space-y-8">
       <div>
         <h2 className="text-2xl font-bold text-slate-800">Companies</h2>
-        <p className="text-slate-600">Manage tenants, plan assignments, subscriptions, and legacy entitlements</p>
+        <p className="text-slate-600">Manage tenants, plan assignments, subscriptions, and payment history</p>
       </div>
 
       <div className="bg-white rounded-lg border border-slate-200 p-4 space-y-3">
@@ -691,7 +696,6 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                   setDueDateSelections([]);
                   setRecurringDateSelections([]);
                   setGatewaySelections([]);
-                  setModuleSelections([]);
                 }
                 return !open;
               })}
@@ -737,13 +741,13 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
       <div className="bg-white rounded-lg border border-slate-200 overflow-hidden">
         {companies.length === 0 ? (
           <div className="text-center py-12 text-slate-500">
-            {search || statusSelections.length > 0 || planSelections.length > 0 || emailSelections.length > 0 || dueDateSelections.length > 0 || recurringDateSelections.length > 0 || gatewaySelections.length > 0 || moduleSelections.length > 0
+            {search || statusSelections.length > 0 || planSelections.length > 0 || emailSelections.length > 0 || dueDateSelections.length > 0 || recurringDateSelections.length > 0 || gatewaySelections.length > 0
               ? 'No companies match your filters'
               : 'No companies found'}
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[1320px]">
+            <table className="w-full min-w-[1160px]">
               <thead className="bg-slate-50 border-b border-slate-200">
                 <tr>
                   <th className="text-left py-3 px-4"><SortHeader label="Company" sort="company" /></th>
@@ -753,7 +757,6 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                   <th className="text-left py-3 px-4"><SortHeader label="Due Date" sort="subscriptionDueDate" /></th>
                   <th className="text-left py-3 px-4"><SortHeader label="Recurring Date" sort="subscriptionRecurringDate" /></th>
                   <th className="text-left py-3 px-4"><SortHeader label="Gateway" sort="latestPaymentGatewayMethod" /></th>
-                  <th className="text-left py-3 px-4 font-semibold text-slate-700">Entitlements</th>
                   <th className="sticky right-0 z-10 bg-slate-50 text-right py-3 px-4 font-semibold text-slate-700">Actions</th>
                 </tr>
                 {filtersOpen ? (
@@ -807,14 +810,6 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                       onChange={setGatewaySelections}
                     />
                   </th>
-                  <th className="px-4 py-2">
-                    <ColumnFilter
-                      label="Entitlements"
-                      options={companyModuleOptions}
-                      selectedValues={moduleSelections}
-                      onChange={setModuleSelections}
-                    />
-                  </th>
                   <th className="sticky right-0 z-10 bg-white px-4 py-2 text-right">
                     <button
                       type="button"
@@ -829,10 +824,6 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
               </thead>
               <tbody>
                 {companies.map((company) => {
-                  const moduleIds = parseModules(company.activeModules);
-                  const latestPaymentModuleIds = parseModules(company.latestPaymentModules || '');
-                  const shouldShowLatestPaidModules =
-                    moduleIds.length === 0 && company.latestPaymentStatus === 'succeeded' && latestPaymentModuleIds.length > 0;
                   const effectiveSubscriptionStatus = getEffectiveSubscriptionStatus(company);
                   const planName = getCompanyPlanName(company);
                   return (
@@ -858,47 +849,38 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                         <div>{getCompanyGatewayLabel(company)}</div>
                         <div className="text-xs text-slate-500">{company.latestPaymentGatewayStatus || '-'}</div>
                       </td>
-                      <td className="py-3 px-4 max-w-[280px]">
-                        <div className="flex flex-wrap gap-1">
-                          {shouldShowLatestPaidModules ? renderModulePills(latestPaymentModuleIds, 'payment') : renderModulePills(moduleIds)}
-                        </div>
-                        {shouldShowLatestPaidModules && (
-                          <div className="text-xs text-amber-700 mt-1">Latest paid modules</div>
-                        )}
-                      </td>
                       <td className="sticky right-0 bg-white py-3 px-4 group-hover:bg-slate-50">
                         <div className="flex items-center justify-end gap-1 whitespace-nowrap">
-                        <button
-                          title="View Company"
-                          onClick={() => {
-                            setViewingCompany(company);
-                            handleOpenHistory(company.id);
-                          }}
-                          className="p-2 hover:bg-blue-50 text-blue-600 rounded-lg"
-                        >
-                          <Eye className="w-4 h-4" />
-                        </button>
-                        <button
-                          title="Edit Company"
-                          onClick={() =>
-                            setEditingDetail({
-                              id: company.id,
-                              company: company.company,
-                              planId: getCompanyPlanId(company),
-                              originalPlanId: getCompanyPlanId(company),
-                              modules: moduleIds,
-                              originalSubscriptionStatus: getEffectiveSubscriptionStatus(company),
-                              subscriptionStatus: getEffectiveSubscriptionStatus(company),
-                              subscriptionStatusReason: '',
-                              subscriptionDueDate: company.subscriptionDueDate || '',
-                              subscriptionRecurringDate: company.subscriptionRecurringDate || '',
-                              isMultiLocationEnabled: company.isMultiLocationEnabled,
-                            })
-                          }
-                          className="p-2 hover:bg-emerald-50 text-emerald-600 rounded-lg"
-                        >
-                          <Edit2 className="w-4 h-4" />
-                        </button>
+                          <button
+                            title="View Company"
+                            onClick={() => {
+                              setViewingCompany(company);
+                              handleOpenHistory(company.id);
+                            }}
+                            className="p-2 hover:bg-blue-50 text-blue-600 rounded-lg"
+                          >
+                            <Eye className="w-4 h-4" />
+                          </button>
+                          <button
+                            title="Edit Company"
+                            onClick={() =>
+                              setEditingDetail({
+                                id: company.id,
+                                company: company.company,
+                                planId: getCompanyPlanId(company),
+                                originalPlanId: getCompanyPlanId(company),
+                                originalSubscriptionStatus: getEffectiveSubscriptionStatus(company),
+                                subscriptionStatus: getEffectiveSubscriptionStatus(company),
+                                subscriptionStatusReason: '',
+                                subscriptionDueDate: company.subscriptionDueDate || '',
+                                subscriptionRecurringDate: company.subscriptionRecurringDate || '',
+                                isMultiLocationEnabled: company.isMultiLocationEnabled,
+                              })
+                            }
+                            className="p-2 hover:bg-emerald-50 text-emerald-600 rounded-lg"
+                          >
+                            <Edit2 className="w-4 h-4" />
+                          </button>
                         </div>
                       </td>
                     </tr>
@@ -937,17 +919,14 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
               </div>
               <div>
                 <label htmlFor="company-subscription-status" className="block text-sm text-slate-700 mb-1">Subscription Status</label>
-                <select
-                  id="company-subscription-status"
-                  value={editingDetail.subscriptionStatus}
-                  onChange={(event) =>
-                    setEditingDetail({
-                      ...editingDetail,
-                      subscriptionStatus: event.target.value,
-                    })
-                  }
-                  className="w-full border border-slate-300 rounded-lg px-3 py-2 bg-white"
-                >
+	                <select
+	                  id="company-subscription-status"
+	                  value={editingDetail.subscriptionStatus}
+	                  onChange={(event) =>
+	                    setEditingDetail(syncEditingStatus(editingDetail, event.target.value))
+	                  }
+	                  className="w-full border border-slate-300 rounded-lg px-3 py-2 bg-white"
+	                >
                   {subscriptionStatusOptions.map((status) => (
                     <option key={status.value} value={status.value}>
                       {status.label}
@@ -960,27 +939,29 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
               </div>
               <div>
                 <label htmlFor="company-plan" className="block text-sm text-slate-700 mb-1">Subscription Plan</label>
-                <select
-                  id="company-plan"
-                  value={editingDetail.planId}
-                  onChange={(event) =>
-                    setEditingDetail({
-                      ...editingDetail,
-                      planId: event.target.value,
-                    })
-                  }
-                  className="w-full border border-slate-300 rounded-lg px-3 py-2 bg-white"
-                >
+	                <select
+	                  id="company-plan"
+	                  value={editingDetail.planId}
+	                  onChange={(event) =>
+	                    setEditingDetail(syncEditingPlan(editingDetail, event.target.value))
+	                  }
+	                  className="w-full border border-slate-300 rounded-lg px-3 py-2 bg-white"
+	                >
                   {planOptions.map((plan) => (
                     <option key={plan.id} value={plan.id}>
                       {plan.name}
                     </option>
                   ))}
                 </select>
-                <p className="mt-1 text-xs text-slate-500">
-                  Plan drives billing. Legacy modules below remain available during migration.
-                </p>
-              </div>
+	                <p className="mt-1 text-xs text-slate-500">
+	                  {getPlanSyncHint(editingDetail)}
+	                </p>
+	              </div>
+	              {editValidationError && (
+	                <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+	                  {editValidationError}
+	                </div>
+	              )}
               {normalizeStatus(editingDetail.subscriptionStatus) !== normalizeStatus(editingDetail.originalSubscriptionStatus) && (
                 <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 space-y-3">
                   <div className="flex flex-wrap items-center gap-2 text-sm">
@@ -1014,34 +995,42 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div>
                   <label htmlFor="company-subscription-due-date" className="block text-sm text-slate-700 mb-1">Due Date</label>
-                  <input
-                    id="company-subscription-due-date"
-                    type="datetime-local"
-                    value={toDateTimeLocalValue(editingDetail.subscriptionDueDate)}
-                    onChange={(event) =>
-                      setEditingDetail({
-                        ...editingDetail,
-                        subscriptionDueDate: event.target.value ? new Date(event.target.value).toISOString() : '',
-                      })
-                    }
-                    className="w-full border border-slate-300 rounded-lg px-3 py-2"
-                  />
-                </div>
-                <div>
-                  <label htmlFor="company-subscription-recurring-date" className="block text-sm text-slate-700 mb-1">Recurring Date</label>
-                  <input
-                    id="company-subscription-recurring-date"
-                    type="datetime-local"
-                    value={toDateTimeLocalValue(editingDetail.subscriptionRecurringDate)}
-                    onChange={(event) =>
-                      setEditingDetail({
-                        ...editingDetail,
-                        subscriptionRecurringDate: event.target.value ? new Date(event.target.value).toISOString() : '',
-                      })
-                    }
-                    className="w-full border border-slate-300 rounded-lg px-3 py-2"
-                  />
-                </div>
+	                  <input
+	                    id="company-subscription-due-date"
+	                    type="datetime-local"
+	                    value={editingFreePlan ? '' : toDateTimeLocalValue(editingDetail.subscriptionDueDate)}
+	                    onChange={(event) =>
+	                      setEditingDetail({
+	                        ...editingDetail,
+	                        subscriptionDueDate: event.target.value ? new Date(event.target.value).toISOString() : '',
+	                      })
+	                    }
+	                    disabled={editingFreePlan}
+	                    className={`w-full border border-slate-300 rounded-lg px-3 py-2 ${editingFreePlan ? 'bg-slate-100 text-slate-400 cursor-not-allowed' : ''}`}
+	                  />
+	                  {editingFreePlan && (
+	                    <p className="mt-1 text-xs text-slate-500">Free plan has no billing due date.</p>
+	                  )}
+	                </div>
+	                <div>
+	                  <label htmlFor="company-subscription-recurring-date" className="block text-sm text-slate-700 mb-1">Recurring Date</label>
+	                  <input
+	                    id="company-subscription-recurring-date"
+	                    type="datetime-local"
+	                    value={editingFreePlan ? '' : toDateTimeLocalValue(editingDetail.subscriptionRecurringDate)}
+	                    onChange={(event) =>
+	                      setEditingDetail({
+	                        ...editingDetail,
+	                        subscriptionRecurringDate: event.target.value ? new Date(event.target.value).toISOString() : '',
+	                      })
+	                    }
+	                    disabled={editingFreePlan}
+	                    className={`w-full border border-slate-300 rounded-lg px-3 py-2 ${editingFreePlan ? 'bg-slate-100 text-slate-400 cursor-not-allowed' : ''}`}
+	                  />
+	                  {editingFreePlan && (
+	                    <p className="mt-1 text-xs text-slate-500">Free plan has no recurring billing date.</p>
+	                  )}
+	                </div>
                 <label className="flex items-center gap-2 md:col-span-2">
                   <input
                     type="checkbox"
@@ -1053,57 +1042,23 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                   <span className="text-sm text-slate-700">Multi-location enabled</span>
                 </label>
               </div>
-              <div>
-                <p className="font-semibold text-slate-700 mb-2">Legacy Entitlements</p>
-                <div className="space-y-2 max-h-[32vh] overflow-auto border border-slate-200 rounded-lg p-2">
-                  {allModules.map((module) => (
-                    <label key={module.id} className="flex items-center gap-3 p-3 hover:bg-slate-50 rounded-lg cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={editingDetail.modules.includes(module.id)}
-                        onChange={(event) => {
-                          if (event.target.checked) {
-                            setEditingDetail({
-                              ...editingDetail,
-                              modules: [...editingDetail.modules, module.id],
-                            });
-                          } else {
-                            setEditingDetail({
-                              ...editingDetail,
-                              modules: editingDetail.modules.filter((moduleId) => moduleId !== module.id),
-                            });
-                          }
-                        }}
-                      />
-                      <div>
-                        <p className="font-medium text-slate-800">{module.name}</p>
-                        <p className="text-sm text-slate-500">{module.description}</p>
-                      </div>
-                    </label>
-                  ))}
-                </div>
-              </div>
               <div className="flex justify-end gap-2">
                 <button
                   className="px-4 py-2 border border-slate-200 rounded-lg text-slate-700 hover:bg-slate-100"
                   onClick={() => setEditingDetail(null)}
                 >
                   Cancel
-                </button>
-                <button
-                  className={`px-4 py-2 text-white rounded-lg ${
-                    normalizeStatus(editingDetail.subscriptionStatus) !== normalizeStatus(editingDetail.originalSubscriptionStatus) &&
-                    !editingDetail.subscriptionStatusReason.trim()
-                      ? 'opacity-60 cursor-not-allowed'
-                      : ''
-                  }`}
-                  style={{ background: 'linear-gradient(135deg, #00cbd6 0%, #10b981 100%)' }}
-                  disabled={
-                    normalizeStatus(editingDetail.subscriptionStatus) !== normalizeStatus(editingDetail.originalSubscriptionStatus) &&
-                    !editingDetail.subscriptionStatusReason.trim()
-                  }
-                  onClick={handleSaveCompany}
-                >
+	                </button>
+	                <button
+	                  className={`px-4 py-2 text-white rounded-lg ${
+	                    companySaveDisabled
+	                      ? 'opacity-60 cursor-not-allowed'
+	                      : ''
+	                  }`}
+	                  style={{ background: 'linear-gradient(135deg, #00cbd6 0%, #10b981 100%)' }}
+	                  disabled={companySaveDisabled}
+	                  onClick={handleSaveCompany}
+	                >
                   <Save className="w-4 h-4 inline-block mr-1" /> Save changes
                 </button>
               </div>
@@ -1135,18 +1090,6 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                     <p><strong>Multi-location:</strong> {viewingCompany.isMultiLocationEnabled ? 'Yes' : 'No'}</p>
                     <p><strong>Plan:</strong> {getCompanyPlanName(viewingCompany)}</p>
                     <p><strong>Employees:</strong> {viewingCompany.employeeCount ?? viewingCompany.latestPaymentEmployeeCountSnapshot ?? '-'}</p>
-                    <div>
-                      <p className="font-semibold text-slate-700">Legacy entitlements</p>
-                      <div className="flex flex-wrap gap-2 mt-1">
-                        {renderModulePills(parseModules(viewingCompany.activeModules))}
-                      </div>
-                    </div>
-                    <div>
-                      <p className="font-semibold text-slate-700">Latest payment entitlements</p>
-                      <div className="flex flex-wrap gap-2 mt-1">
-                        {renderModulePills(parseModules(viewingCompany.latestPaymentModules || ''), 'payment')}
-                      </div>
-                    </div>
                   </div>
                   <div className="rounded-lg border border-slate-200 p-4 space-y-2">
                     <h4 className="font-semibold text-slate-800">Subscription</h4>
@@ -1223,7 +1166,6 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                         <th className="text-left py-3 px-4">Payment</th>
                         <th className="text-left py-3 px-4">Email</th>
                         <th className="text-left py-3 px-4">Plan</th>
-                        <th className="text-left py-3 px-4">Entitlements</th>
                         <th className="text-left py-3 px-4">Status</th>
                         <th className="text-left py-3 px-4">Amount</th>
                         <th className="text-left py-3 px-4">Denied reason</th>
@@ -1237,9 +1179,7 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                       </tr>
                     </thead>
                     <tbody>
-                      {historyItems.map((payment) => {
-                        const modules = parseModules(payment.modules || '');
-                        return (
+                      {historyItems.map((payment) => (
                           <tr key={payment.paymentIntentId} className="border-t border-slate-100">
                             <td className="py-3 px-4 text-slate-700">{payment.paymentIntentId}</td>
                             <td className="py-3 px-4 text-slate-700">{payment.email}</td>
@@ -1247,19 +1187,6 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                               <div className="font-medium">{payment.planName || payment.planId || '-'}</div>
                               <div className="text-xs text-slate-500">
                                 {payment.employeeCountSnapshot ?? '-'} employees
-                              </div>
-                            </td>
-                            <td className="py-3 px-4">
-                              <div className="flex flex-wrap gap-1">
-                                {modules.length === 0 ? (
-                                  <span className="text-slate-400 text-sm">-</span>
-                                ) : (
-                                  modules.map((moduleId) => (
-                                    <span key={moduleId} className="inline-block px-2 py-1 bg-slate-100 text-slate-700 text-xs rounded">
-                                      {moduleId}
-                                    </span>
-                                  ))
-                                )}
                               </div>
                             </td>
                             <td className="py-3 px-4">
@@ -1307,8 +1234,7 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                               </select>
                             </td>
                           </tr>
-                        );
-                      })}
+                      ))}
                     </tbody>
                   </table>
                 </div>

@@ -4,9 +4,12 @@ node_modules
 .env
 .env.local
 
-# Playwright test files
-test-results/
-playwright-report/
+# Playwright generated artifacts
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+/.playwright/
 .auth/
 *.traceviewer
 
