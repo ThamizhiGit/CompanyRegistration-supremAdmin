@@ -8,8 +8,11 @@ const SESSION_EXPIRES_AT_KEY = 'adminExpiresAt';
 
 // Use environment variable for GraphQL URI, fallback to local development URL
 const GRAPHQL_URI = import.meta.env.VITE_GRAPHQL_URI || 'http://localhost:8000/graphql/';
+const GRAPHQL_DEBUG = import.meta.env.DEV && import.meta.env.VITE_GRAPHQL_DEBUG === '1';
 
-console.log('Connecting to GraphQL at:', GRAPHQL_URI);
+if (GRAPHQL_DEBUG) {
+  console.debug('Connecting to GraphQL at:', GRAPHQL_URI);
+}
 
 // Auth link to add the super-admin token if present in localStorage.
 // The admin API expects the raw token in X-SuperAdmin-Authorization (no "Bearer" prefix).
@@ -23,8 +26,9 @@ const authLink = new ApolloLink((operation, forward) => {
     }
   }));
 
-  // Log for debugging
-  console.log('GraphQL Request - Token:', token ? 'Present' : 'Missing', 'Headers:', operation.getContext().headers);
+  if (GRAPHQL_DEBUG) {
+    console.debug('GraphQL Request - Token:', token ? 'Present' : 'Missing');
+  }
 
   return forward(operation);
 });

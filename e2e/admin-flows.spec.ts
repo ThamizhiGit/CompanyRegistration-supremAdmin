@@ -56,7 +56,7 @@ const fillExpenseForm = async (page: any, expense: { title: string; vendor: stri
   await page.getByLabel('Vendor').fill(expense.vendor);
   await page.getByLabel('Category').selectOption(expense.category);
   await page.getByLabel('Expense date').fill(expense.expenseDateLocal);
-  await page.getByLabel('Currency').fill('USD');
+  await page.getByLabel('Currency').selectOption('USD');
   await page.getByLabel('Tax amount').fill('0');
 
   await page.getByRole('button', { name: 'Optional details' }).click();
@@ -85,7 +85,7 @@ const installFlowMocks = async (page: any, options: { legacyRevenue?: boolean } 
     success: true,
     message: 'ok',
     token: 'e2e-token',
-    expiresAt: '2026-07-13T10:00:00Z',
+    expiresAt: '2027-07-13T10:00:00Z',
     superAdmin: {
       id: '1',
       username: 'admin',
@@ -553,6 +553,8 @@ test.describe('Admin UI flow suite (mocked backend)', () => {
     const flow = await installFlowMocks(page);
     await login(page);
 
+    await page.getByRole('button', { name: 'Accounts' }).click();
+    await expect(page.getByRole('heading', { name: 'Accounts' })).toBeVisible();
     await page.getByRole('button', { name: 'Expenses' }).click();
     await expect(page.getByRole('heading', { name: 'Expenses' })).toBeVisible();
     await expect(page.getByText('No expenses recorded yet')).toBeVisible();
@@ -584,8 +586,9 @@ test.describe('Admin UI flow suite (mocked backend)', () => {
 
     await createdRow.locator('button[title="View"]').click();
     await expect(page.getByRole('heading', { name: /^EXP-/ })).toBeVisible();
-    await expect(page.getByText(expense.title, { exact: true })).toBeVisible();
-    await expect(page.getByText(expense.vendor, { exact: true })).toBeVisible();
+    const detailModal = page.locator('.fixed.inset-0').filter({ has: page.getByRole('heading', { name: /^EXP-/ }) });
+    await expect(detailModal.getByText(expense.title, { exact: true })).toBeVisible();
+    await expect(detailModal.getByText(expense.vendor, { exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'Close' }).last().click();
 
     await createdRow.locator('button[title="Edit"]').click();
@@ -611,10 +614,11 @@ test.describe('Admin UI flow suite (mocked backend)', () => {
     await installFlowMocks(page);
     await login(page);
 
-    await page.getByRole('button', { name: 'Infrastructure' }).click();
+    await page.getByRole('button', { name: 'Accounts' }).click();
+    await expect(page.getByRole('heading', { name: 'Accounts' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Infrastructure' })).toBeVisible();
 
-    const periodSelect = page.locator('select');
+    const periodSelect = page.getByLabel('Infrastructure reporting period');
     await expect(periodSelect).toBeVisible();
     await expect(page.getByText('Daily trend (30d)')).toBeVisible();
     await expect(page.getByText('$500.00')).toBeVisible();

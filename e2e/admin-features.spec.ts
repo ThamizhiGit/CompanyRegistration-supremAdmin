@@ -269,21 +269,21 @@ const login = async (page: any) => {
   await page.waitForTimeout(500);
 };
 
-test('admin navigation and package popup flows', async ({ page }) => {
+test('admin navigation and plans popup flows', async ({ page }) => {
   await installGraphQLMock(page);
   await login(page);
 
   await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible();
 
-  await page.getByRole('button', { name: 'Packages' }).click();
-  await expect(page.getByRole('heading', { name: 'Packages' })).toBeVisible();
+  await page.getByRole('button', { name: 'Plans' }).click();
+  await expect(page.getByRole('heading', { name: 'Plans & Pricing' })).toBeVisible();
 
-  await page.getByPlaceholder('Search packages').fill('crm');
-  await page.getByRole('button', { name: 'New Package' }).click();
-  await expect(page.getByRole('heading', { name: 'Create New Package' })).toBeVisible();
+  await page.getByPlaceholder('Search plans').fill('premium');
+  await page.getByRole('button', { name: 'New plan' }).click();
+  await expect(page.getByRole('heading', { name: 'Create Plan' })).toBeVisible();
   await page.getByRole('button', { name: 'Cancel' }).click();
-  await page.locator('[title="View package detail"]').click();
-  await expect(page.getByRole('heading', { name: 'Package Detail' })).toBeVisible();
+  await page.getByRole('button', { name: 'Edit plan' }).first().click();
+  await expect(page.getByRole('heading', { name: 'Edit Plan' })).toBeVisible();
 });
 
 test('company filters, detail edit, and payment history popups', async ({ page }) => {
@@ -292,35 +292,33 @@ test('company filters, detail edit, and payment history popups', async ({ page }
 
   await page.getByRole('button', { name: 'Companies' }).click();
   await expect(page.getByRole('heading', { name: 'Companies' })).toBeVisible();
-  await expect(page.getByText('Payment Email')).toBeVisible();
+  await expect(page.getByRole('columnheader', { name: 'Email' })).toBeVisible();
   await expect(page.getByRole('columnheader', { name: 'Gateway' })).toBeVisible();
-  await expect(page.getByRole('columnheader', { name: 'Modules' })).toBeVisible();
-  await expect(page.getByText('company status: trial')).toBeVisible();
+  await expect(page.getByRole('columnheader', { name: 'Entitlements' })).toBeVisible();
+  const acmeRow = page.getByRole('row').filter({ hasText: 'Acme Labs' }).first();
+  await expect(acmeRow.getByText('active', { exact: true })).toBeVisible();
   await expect(page.getByText('john@acme.com')).toBeVisible();
   await expect(page.getByText('card')).toBeVisible();
   await expect(page.getByText('CRM')).toBeVisible();
   await expect(page.getByText('Latest paid modules')).toBeVisible();
 
-  await page.locator('select').first().selectOption('succeeded');
+  const searchInput = page.getByPlaceholder('Search companies, email, payment...');
+  await searchInput.fill('john@acme.com');
   await expect(page.getByText('Acme Labs')).toBeVisible();
-  await page.getByPlaceholder('Email...').fill('john@acme.com');
+  await searchInput.fill('no matching tenant');
+  await expect(page.getByText('No companies match your filters')).toBeVisible();
+  await page.getByRole('button', { name: 'Clear' }).click();
+  await expect(searchInput).toHaveValue('');
   await expect(page.getByText('Acme Labs')).toBeVisible();
-  await page.getByPlaceholder('Method, status, ref...').fill('card');
-  await expect(page.getByText('Acme Labs')).toBeVisible();
-  await page.getByPlaceholder('Module name...').fill('crm');
-  await expect(page.getByText('Acme Labs')).toBeVisible();
-  await page.getByPlaceholder('Company name...').fill('Acme');
-  await page.locator('input[type="datetime-local"]').first().fill('2026-06-01T00:00');
-  await page.getByRole('button', { name: 'Clear filters' }).click();
-  await expect(page.getByPlaceholder('Company name...')).toHaveValue('');
 
   await page.locator('[title="Edit Company"]').click();
   await expect(page.getByRole('heading', { name: 'Edit Company' })).toBeVisible();
-  await expect(page.getByText('Active Modules')).toBeVisible();
+  await expect(page.getByText('Subscription Plan')).toBeVisible();
+  await expect(page.getByText('Legacy Entitlements', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Cancel' }).click();
 
   await page.locator('[title="View Company"]').click();
-  await expect(page.getByRole('heading', { name: 'View Company' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Company 360' })).toBeVisible();
 
   // Scroll the modal to reveal payment history table
   await page.evaluate(() => {
@@ -408,7 +406,7 @@ test('sidebar has all options and every page loads', async ({ page }) => {
 
   const sidebarOptions = [
     { label: 'Dashboard', heading: 'Dashboard' },
-    { label: 'Packages', heading: 'Packages' },
+    { label: 'Plans', heading: 'Plans & Pricing' },
     { label: 'Companies', heading: 'Companies' },
     { label: 'Subscriptions', heading: 'Subscriptions & Payments' },
     { label: 'Users', heading: 'Users' },

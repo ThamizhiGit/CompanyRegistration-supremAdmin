@@ -71,7 +71,7 @@ test.describe('Login Flow', () => {
                 success: true,
                 message: 'Login successful',
                 token: 'auth_token_xyz123',
-                expiresAt: '2026-07-13T09:12:00Z',
+                expiresAt: '2027-07-13T09:12:00Z',
                 superAdmin: {
                   id: '1',
                   username: 'admin',
@@ -123,7 +123,7 @@ test.describe('Login Flow', () => {
     // Verify token and username are stored
     expect(token).toBe('auth_token_xyz123');
     expect(adminUsername).toBe('admin');
-    expect(adminExpiresAt).toBe('2026-07-13T09:12:00Z');
+    expect(adminExpiresAt).toBe('2027-07-13T09:12:00Z');
   });
 });
 

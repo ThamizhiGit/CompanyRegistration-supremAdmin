@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { useMutation, useQuery } from '@apollo/client/react';
-import { Check, Download, Edit2, Filter, LayoutGrid, Plus, Printer, RotateCcw, Save, Search, Table2, Trash2, X } from 'lucide-react';
+import { Check, Download, Edit2, Filter, Plus, Printer, RotateCcw, Save, Search, Trash2, X } from 'lucide-react';
 import {
   ADMIN_DELETE_PLAN_MUTATION,
   ADMIN_DEACTIVATE_PROMO_CODE_MUTATION,
@@ -92,6 +92,29 @@ interface EditingPromo {
   appliesToPlanIds: string[];
   applicableBillingIntervals: BillingInterval[];
 }
+
+interface MutationPayload {
+  success: boolean;
+  message?: string | null;
+}
+
+type SavePromoCodeMutationData = {
+  adminSavePromoCode: MutationPayload & {
+    promoCode?: Partial<PromoCodeType> | null;
+  };
+};
+
+type DeletePlanMutationData = {
+  adminDeletePlan: MutationPayload & {
+    deletedId?: string | null;
+  };
+};
+
+type DeactivatePromoCodeMutationData = {
+  adminDeactivatePromoCode: MutationPayload & {
+    promoCode?: Pick<PromoCodeType, 'id' | 'active'> | null;
+  };
+};
 
 const canonicalPlans: PlanType[] = [
   {
@@ -350,9 +373,9 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
   });
 
   const [savePlan, { loading: saving }] = useMutation(ADMIN_SAVE_PLAN_MUTATION);
-  const [deletePlan, { loading: deleting }] = useMutation(ADMIN_DELETE_PLAN_MUTATION);
-  const [savePromoCode, { loading: savingPromo }] = useMutation(ADMIN_SAVE_PROMO_CODE_MUTATION);
-  const [deactivatePromoCode, { loading: deactivatingPromo }] = useMutation(ADMIN_DEACTIVATE_PROMO_CODE_MUTATION);
+  const [deletePlan, { loading: deleting }] = useMutation<DeletePlanMutationData, { id: string; reason: string }, any, any>(ADMIN_DELETE_PLAN_MUTATION);
+  const [savePromoCode, { loading: savingPromo }] = useMutation<SavePromoCodeMutationData, { input: ReturnType<typeof promoToInput> }, any, any>(ADMIN_SAVE_PROMO_CODE_MUTATION);
+  const [deactivatePromoCode, { loading: deactivatingPromo }] = useMutation<DeactivatePromoCodeMutationData, { id: string; reason: string }, any, any>(ADMIN_DEACTIVATE_PROMO_CODE_MUTATION);
 
   const backendPlans = data?.adminPlans || [];
   const sourcePlans = backendPlans.length > 0 ? backendPlans : canonicalPlans;
@@ -410,9 +433,9 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
     <button
       type="button"
       onClick={() => cycleSort(column)}
-      className={`inline-flex w-full items-center gap-1 text-sm font-semibold ${
+      className={`inline-flex w-full items-center gap-1 text-[13px] font-extrabold uppercase tracking-wide ${
         align === 'right' ? 'justify-end text-right' : 'justify-start text-left'
-      } ${sortKey === column && sortDirection ? 'text-cyan-700' : 'text-slate-700'}`}
+      } ${sortKey === column && sortDirection ? 'text-sky-700' : 'text-sky-600'}`}
     >
       <span>{label}</span>
       <span className="text-[10px]">{sortKey === column && sortDirection ? (sortDirection === 'asc' ? '▲' : '▼') : '↕'}</span>
@@ -597,11 +620,11 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
           ) : null}
         </div>
         {activeTab === 'plans' ? (
-        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-white p-2">
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-gray-200 bg-white p-2">
           <div className="relative min-w-[180px] max-w-[280px] flex-1">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
             <input
-              className="h-9 w-full rounded-lg border border-slate-200 bg-slate-50 pl-9 pr-3 text-[13px] outline-none transition focus:border-cyan-400 focus:bg-white focus:ring-2 focus:ring-cyan-50"
+              className="h-9 w-full rounded-lg border border-slate-200 bg-slate-50 pl-9 pr-3 text-[13px] text-slate-700 outline-none transition focus:border-sky-400 focus:bg-white focus:ring-2 focus:ring-sky-100"
               value={search}
               onChange={(event) => setSearch(event.target.value)}
               placeholder="Search plans"
@@ -620,15 +643,15 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
             title="Filters"
             className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border transition ${
               planFiltersOpen
-                ? 'border-cyan-400 bg-cyan-50 text-cyan-600'
-                : 'border-slate-200 bg-slate-50 text-slate-400 hover:border-cyan-300 hover:text-cyan-500'
+                ? 'border-sky-400 bg-sky-50 text-sky-500'
+                : 'border-slate-200 bg-slate-50 text-slate-400 hover:border-sky-300 hover:text-sky-400'
             }`}
           >
             <Filter className="h-4 w-4" />
           </button>
           {planFiltersOpen && viewMode === 'card' ? (
           <select
-            className="h-9 rounded-lg border border-slate-200 bg-slate-50 px-3 text-[13px] font-semibold text-slate-700"
+            className="h-9 rounded-lg border border-slate-200 bg-slate-50 px-3 text-[13px] font-semibold text-slate-700 outline-none focus:border-sky-400 focus:bg-white focus:ring-2 focus:ring-sky-100"
             value={activeFilter}
             onChange={(event) => setActiveFilter(event.target.value as 'all' | 'active' | 'inactive')}
           >
@@ -637,32 +660,10 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
             <option value="inactive">Inactive</option>
           </select>
           ) : null}
-          <div className="inline-flex h-9 rounded-lg border border-slate-200 bg-slate-50 p-1">
-            <button
-              type="button"
-              onClick={() => setViewMode('card')}
-              className={`inline-flex items-center gap-2 rounded-md px-3 py-1.5 text-sm font-semibold ${
-                viewMode === 'card' ? 'bg-white text-cyan-700 shadow-sm' : 'text-slate-500 hover:text-cyan-700'
-              }`}
-            >
-              <LayoutGrid className="h-4 w-4" />
-              Cards
-            </button>
-            <button
-              type="button"
-              onClick={() => setViewMode('table')}
-              className={`inline-flex items-center gap-2 rounded-md px-3 py-1.5 text-sm font-semibold ${
-                viewMode === 'table' ? 'bg-white text-cyan-700 shadow-sm' : 'text-slate-500 hover:text-cyan-700'
-              }`}
-            >
-              <Table2 className="h-4 w-4" />
-              Table
-            </button>
-          </div>
           <button
             type="button"
             onClick={() => refetch()}
-            className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-slate-200 px-3 text-sm font-medium text-slate-700 hover:bg-slate-50"
+            className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-slate-200/60 bg-slate-50 px-3 text-sm font-medium text-slate-600 transition hover:bg-slate-100"
           >
             <RotateCcw className="h-4 w-4" />
             Refresh
@@ -670,7 +671,7 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
           <button
             type="button"
             onClick={exportPlans}
-            className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-slate-200 px-3 text-sm font-medium text-slate-700 hover:bg-slate-50"
+            className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-slate-200/60 bg-slate-50 px-3 text-sm font-medium text-slate-600 transition hover:bg-slate-100"
           >
             <Download className="h-4 w-4" />
             Excel
@@ -678,7 +679,7 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
           <button
             type="button"
             onClick={printPlans}
-            className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-slate-200 px-3 text-sm font-medium text-slate-700 hover:bg-slate-50"
+            className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-slate-200/60 bg-slate-50 px-3 text-sm font-medium text-slate-600 transition hover:bg-slate-100"
           >
             <Printer className="h-4 w-4" />
             Print
@@ -686,18 +687,18 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
           <button
             type="button"
             onClick={openCreatePlan}
-            className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-[#0ea5b7] px-3 text-sm font-semibold text-white hover:bg-[#0b8fa0]"
+            className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-sky-500 to-cyan-400 px-4 text-[13px] font-semibold text-white shadow-sm transition hover:from-sky-600 hover:to-cyan-500"
           >
             <Plus className="h-4 w-4" />
             New plan
           </button>
         </div>
         ) : (
-        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-white p-2">
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-gray-200 bg-white p-2">
           <div className="relative min-w-[220px] max-w-[320px] flex-1">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
             <input
-              className="h-9 w-full rounded-lg border border-slate-200 bg-slate-50 pl-9 pr-3 text-[13px] outline-none transition focus:border-cyan-400 focus:bg-white focus:ring-2 focus:ring-cyan-50"
+              className="h-9 w-full rounded-lg border border-slate-200 bg-slate-50 pl-9 pr-3 text-[13px] text-slate-700 outline-none transition focus:border-sky-400 focus:bg-white focus:ring-2 focus:ring-sky-100"
               value={promoSearch}
               onChange={(event) => setPromoSearch(event.target.value)}
               placeholder="Search promo codes"
@@ -713,8 +714,8 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
             title="Filters"
             className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border transition ${
               promoFiltersOpen
-                ? 'border-cyan-400 bg-cyan-50 text-cyan-600'
-                : 'border-slate-200 bg-slate-50 text-slate-400 hover:border-cyan-300 hover:text-cyan-500'
+                ? 'border-sky-400 bg-sky-50 text-sky-500'
+                : 'border-slate-200 bg-slate-50 text-slate-400 hover:border-sky-300 hover:text-sky-400'
             }`}
           >
             <Filter className="h-4 w-4" />
@@ -722,7 +723,7 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
           <button
             type="button"
             onClick={() => refetchPromos()}
-            className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-slate-200 px-3 text-sm font-medium text-slate-700 hover:bg-slate-50"
+            className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-slate-200/60 bg-slate-50 px-3 text-sm font-medium text-slate-600 transition hover:bg-slate-100"
           >
             <RotateCcw className="h-4 w-4" />
             Refresh
@@ -730,7 +731,7 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
           <button
             type="button"
             onClick={openCreatePromo}
-            className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-[#0ea5b7] px-3 text-sm font-semibold text-white hover:bg-[#0b8fa0]"
+            className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-sky-500 to-cyan-400 px-4 text-[13px] font-semibold text-white shadow-sm transition hover:from-sky-600 hover:to-cyan-500"
           >
             <Plus className="h-4 w-4" />
             New promo
@@ -739,21 +740,45 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
         )}
       </div>
 
-      <div className="inline-flex rounded-xl border border-slate-200 bg-white p-1">
-        <button
-          type="button"
-          onClick={() => setActiveTab('plans')}
-          className={`rounded-lg px-4 py-2 text-sm font-bold ${activeTab === 'plans' ? 'bg-cyan-600 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50'}`}
-        >
-          Plans
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveTab('promos')}
-          className={`rounded-lg px-4 py-2 text-sm font-bold ${activeTab === 'promos' ? 'bg-cyan-600 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50'}`}
-        >
-          Promo Codes
-        </button>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="inline-flex self-start rounded-lg border border-gray-200 bg-white p-1">
+          <button
+            type="button"
+            onClick={() => setActiveTab('plans')}
+            className={`rounded-md px-4 py-2 text-sm font-bold transition ${activeTab === 'plans' ? 'bg-sky-500 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50'}`}
+          >
+            Plans
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('promos')}
+            className={`rounded-md px-4 py-2 text-sm font-bold transition ${activeTab === 'promos' ? 'bg-sky-500 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50'}`}
+          >
+            Promo Codes
+          </button>
+        </div>
+        {activeTab === 'plans' ? (
+          <div className="inline-flex h-10 self-start overflow-hidden rounded-full border border-sky-500 bg-white shadow-sm sm:self-auto">
+            <button
+              type="button"
+              onClick={() => setViewMode('card')}
+              className={`inline-flex h-full min-w-[116px] items-center justify-center px-5 text-sm font-semibold transition-colors duration-200 ${
+                viewMode === 'card' ? 'bg-sky-500 text-white' : 'bg-white text-sky-500 hover:text-sky-500'
+              }`}
+            >
+              Board View
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('table')}
+              className={`inline-flex h-full min-w-[116px] items-center justify-center px-5 text-sm font-semibold transition-colors duration-200 ${
+                viewMode === 'table' ? 'bg-sky-500 text-white' : 'bg-white text-sky-500 hover:text-sky-500'
+              }`}
+            >
+              Table View
+            </button>
+          </div>
+        ) : null}
       </div>
 
       {activeTab === 'plans' && loading && backendPlans.length === 0 ? (
@@ -763,25 +788,25 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
       ) : null}
 
       {activeTab === 'plans' && (viewMode === 'table' ? (
-        <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+        <div className="relative overflow-x-clip overflow-y-visible rounded-lg border border-gray-200 bg-white p-2">
           <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead className="bg-slate-50">
-                <tr>
-                  <th className="px-4 py-3"><SortHeader label="Plan" column="name" /></th>
-                  <th className="px-4 py-3"><SortHeader label="Price" column="basePriceCents" /></th>
-                  <th className="px-4 py-3"><SortHeader label="Billing" column="billingInterval" /></th>
-                  <th className="px-4 py-3"><SortHeader label="Trial" column="trialMonths" /></th>
-                  <th className="px-4 py-3"><SortHeader label="Status" column="active" /></th>
-                  <th className="px-4 py-3 text-right text-sm font-semibold text-slate-700">Actions</th>
+            <table className="w-full min-w-[880px] border-collapse text-left">
+              <thead>
+                <tr className="sticky top-0 z-10 bg-white">
+                  <th className="px-3 py-3.5 align-top"><SortHeader label="Plan" column="name" /></th>
+                  <th className="px-3 py-3.5 align-top"><SortHeader label="Price" column="basePriceCents" /></th>
+                  <th className="px-3 py-3.5 align-top"><SortHeader label="Billing" column="billingInterval" /></th>
+                  <th className="px-3 py-3.5 align-top"><SortHeader label="Trial" column="trialMonths" /></th>
+                  <th className="px-3 py-3.5 align-top"><SortHeader label="Status" column="active" /></th>
+                  <th className="px-3 py-3.5 text-right text-[13px] font-extrabold uppercase tracking-wide text-sky-600">Actions</th>
                 </tr>
                 {planFiltersOpen ? (
                 <tr className="border-t border-slate-200 bg-white">
-                  <th className="px-4 py-2"></th>
-                  <th className="px-4 py-2"></th>
-                  <th className="px-4 py-2"></th>
-                  <th className="px-4 py-2"></th>
-                  <th className="px-4 py-2">
+                  <th className="px-3 py-1.5"></th>
+                  <th className="px-3 py-1.5"></th>
+                  <th className="px-3 py-1.5"></th>
+                  <th className="px-3 py-1.5"></th>
+                  <th className="px-3 py-1.5">
                     <ColumnFilter
                       label="Status"
                       options={planStatusOptions}
@@ -789,55 +814,57 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
                       onChange={setPlanStatusSelections}
                     />
                   </th>
-                  <th className="px-4 py-2"></th>
+                  <th className="px-3 py-1.5"></th>
                 </tr>
                 ) : null}
               </thead>
               <tbody>
                 {plans.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="px-4 py-10 text-center text-slate-500">No plans found</td>
+                    <td colSpan={6} className="px-3 py-10 text-center text-slate-500">No plans found</td>
                   </tr>
                 ) : plans.map((plan) => (
-                  <tr key={plan.id} className="border-t border-slate-100 hover:bg-slate-50">
-                    <td className="px-4 py-3">
-                      <div className="font-bold text-slate-900">{plan.name}</div>
+                  <tr key={plan.id} className="h-[52px] border-t border-slate-100 transition-colors even:bg-sky-50/[0.18] hover:bg-sky-50">
+                    <td className="px-3 py-3 align-top text-[14px] text-slate-950">
+                      <div className="font-bold text-slate-950">{plan.name}</div>
                       <div className="text-xs text-slate-500">{plan.id}</div>
                       <div className="mt-1 max-w-md truncate text-xs text-slate-500">{plan.description}</div>
                     </td>
-                    <td className="px-4 py-3 font-semibold text-slate-800">
+                    <td className="px-3 py-3 align-top text-[14px] font-semibold text-slate-950">
                       {formatPrice(plan.basePriceCents, plan.currency)}
                     </td>
-                    <td className="px-4 py-3 text-sm text-slate-700">
+                    <td className="px-3 py-3 align-top text-[14px] text-slate-950">
                       <div>{plan.billingInterval}</div>
                       <div className="text-xs text-slate-500">{plan.perEmployee ? 'Per employee' : 'Flat'}</div>
                     </td>
-                    <td className="px-4 py-3 text-sm text-slate-700">{plan.trialMonths} months</td>
-                    <td className="px-4 py-3">
-                      <span className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                    <td className="px-3 py-3 align-top text-[14px] text-slate-950">{plan.trialMonths} months</td>
+                    <td className="px-3 py-3 align-top">
+                      <span className={`rounded-md px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide ${
                         plan.active ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'
                       }`}>
                         {plan.active ? 'Active' : 'Inactive'}
                       </span>
                     </td>
-                    <td className="px-4 py-3">
-                      <div className="flex justify-end gap-2">
+                    <td className="px-3 py-3 align-top">
+                      <div className="flex justify-end gap-1">
                         <button
                           type="button"
                           onClick={() => openEditPlan(plan)}
-                          className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-white"
+                          title={`Edit ${plan.name}`}
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-lg border-none text-slate-400 transition hover:bg-sky-400/10 hover:text-sky-500"
                         >
                           <Edit2 className="h-4 w-4" />
-                          Edit
+                          <span className="sr-only">Edit</span>
                         </button>
                         <button
                           type="button"
                           onClick={() => handleDeletePlan(plan)}
                           disabled={deleting}
-                          className="inline-flex items-center gap-1 rounded-lg border border-red-200 px-3 py-1.5 text-sm font-semibold text-red-700 hover:bg-red-50 disabled:opacity-50"
+                          title={`Delete ${plan.name}`}
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-lg border-none text-slate-400 transition hover:bg-red-50 hover:text-red-500 disabled:opacity-50"
                         >
                           <Trash2 className="h-4 w-4" />
-                          Delete
+                          <span className="sr-only">Delete</span>
                         </button>
                       </div>
                     </td>
@@ -848,7 +875,7 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
           </div>
         </div>
       ) : (
-      <div className="grid grid-cols-1 items-start gap-5 xl:grid-cols-2">
+      <div className="grid grid-cols-1 items-start gap-4 md:grid-cols-2 2xl:grid-cols-3">
         {plans.map((plan) => {
           const features = parseFeatures(plan.features);
           const isPremium = plan.id === 'premium' || plan.recommended;
@@ -856,76 +883,83 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
           return (
             <article
               key={plan.id}
-              className={`relative flex flex-col rounded-xl border p-5 ${
-                isPremium
-                  ? 'border-[#00a8c6] bg-[#eefdff]'
-                  : 'border-slate-200 bg-white shadow-[0_8px_22px_rgba(15,23,42,0.10)]'
+              className={`group relative flex min-h-[320px] flex-col justify-between overflow-hidden rounded-lg border bg-white p-4 shadow-sm transition-all hover:shadow-md ${
+                isPremium ? 'border-sky-300 ring-2 ring-sky-50' : 'border-gray-100 hover:border-sky-200'
               } ${plan.active ? '' : 'opacity-70'}`}
             >
-              {isPremium ? (
-                <span className="absolute left-1/2 top-0 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#08a7bd] px-4 py-1 text-xs font-bold text-white shadow-md">
-                  Free for 6 months
-                </span>
-              ) : null}
+              <div>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-[10px] font-bold uppercase tracking-widest text-gray-400">
+                        {isPremium ? 'Recommended plan' : 'Plan'}
+                      </span>
+                    </div>
+                    <div className="mt-1 flex flex-wrap items-center gap-2">
+                      <h3 className="text-base font-black leading-tight text-gray-800 transition-colors group-hover:text-sky-600">{plan.name}</h3>
+                      {isPremium ? (
+                        <span className="rounded-md border border-sky-200 bg-sky-50 px-2 py-0.5 text-[10px] font-black uppercase tracking-tight text-sky-700">
+                          Free for 6 months
+                        </span>
+                      ) : null}
+                    </div>
+                    <p className="mt-1 line-clamp-2 text-[13px] leading-5 text-gray-500">{plan.description}</p>
+                  </div>
+                  <span
+                    className={`shrink-0 rounded-md px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide ${
+                      plan.active ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'
+                    }`}
+                  >
+                    {plan.active ? 'Active' : 'Inactive'}
+                  </span>
+                </div>
 
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <h3 className="text-lg font-bold text-slate-950">{plan.name}</h3>
-                  <div className="mt-3 flex items-end gap-2">
-                    <span className="text-3xl font-black text-black">
+                <div className="mt-4 grid grid-cols-2 gap-3">
+                  <div className="rounded-lg border border-sky-100 bg-sky-50/60 p-2.5">
+                    <span className="mb-0.5 block text-[11px] font-black uppercase tracking-tight text-sky-600">Price</span>
+                    <div className="text-lg font-black leading-tight text-gray-800">
                       {formatPrice(plan.basePriceCents, plan.currency).replace('.00', '')}
-                    </span>
-                    <span className="pb-1 text-sm text-slate-500">{billingCopy(plan)}</span>
+                    </div>
+                    <p className="mt-0.5 text-xs text-gray-500">{billingCopy(plan)}</p>
+                  </div>
+                  <div className="rounded-lg border border-amber-100 bg-amber-50/60 p-2.5">
+                    <span className="mb-0.5 block text-[11px] font-black uppercase tracking-tight text-amber-600">Trial</span>
+                    <div className="text-sm font-bold text-gray-800">{plan.trialMonths} months</div>
+                    {plan.trialMonths > 0 ? (
+                      <p className="mt-0.5 text-xs font-semibold text-amber-700">after free period</p>
+                    ) : null}
+                  </div>
+                  <div className="rounded-lg border border-indigo-100 bg-indigo-50/60 p-2.5">
+                    <span className="mb-0.5 block text-[11px] font-black uppercase tracking-tight text-indigo-600">Employees</span>
+                    <div className="text-sm font-bold text-gray-800">{plan.employeeLimit ?? 'Unlimited'}</div>
+                  </div>
+                  <div className="rounded-lg border border-emerald-100 bg-emerald-50/60 p-2.5">
+                    <span className="mb-0.5 block text-[11px] font-black uppercase tracking-tight text-emerald-600">Billing</span>
+                    <div className="text-sm font-bold text-gray-800">{plan.perEmployee ? 'Per employee' : 'Flat'}</div>
+                    <p className="mt-0.5 text-xs text-gray-500">{plan.currency}</p>
                   </div>
                 </div>
-                <span
-                  className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                    plan.active ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'
-                  }`}
-                >
-                  {plan.active ? 'Active' : 'Inactive'}
-                </span>
+
+                <ul className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  {features.slice(0, 6).map((feature) => (
+                    <li key={feature} className="flex items-start gap-2 text-[13px] leading-5 text-slate-700">
+                      <Check className="mt-0.5 h-3.5 w-3.5 flex-none text-sky-500" />
+                      <span>{feature}</span>
+                    </li>
+                  ))}
+                  {features.length > 6 ? (
+                    <li className="text-[13px] font-semibold text-slate-500">
+                      +{features.length - 6} more features
+                    </li>
+                  ) : null}
+                </ul>
               </div>
 
-              {plan.trialMonths > 0 ? (
-                <p className="mt-4 text-xs font-bold text-[#0095aa]">after {plan.trialMonths}-month free period</p>
-              ) : null}
-
-              <p className="mt-3 text-sm leading-5 text-slate-600">{plan.description}</p>
-
-              <ul className={`mt-4 ${isPremium ? 'grid grid-cols-1 gap-x-4 gap-y-2 sm:grid-cols-2' : 'space-y-2'}`}>
-                {features.map((feature) => (
-                  <li key={feature} className="flex items-start gap-2 text-[13px] leading-5 text-slate-700">
-                    <Check className="mt-0.5 h-3.5 w-3.5 flex-none text-[#08a7bd]" />
-                    <span>{feature}</span>
-                  </li>
-                ))}
-              </ul>
-
-              <div className="mt-4 grid grid-cols-2 gap-2 border-t border-slate-200 pt-4 text-xs text-slate-600">
-                <div>
-                  <p className="font-semibold text-slate-800">Employee limit</p>
-                  <p>{plan.employeeLimit ?? 'Unlimited'}</p>
-                </div>
-                <div>
-                  <p className="font-semibold text-slate-800">Billing</p>
-                  <p>{plan.perEmployee ? 'Per employee' : 'Flat'}</p>
-                </div>
-                <div>
-                  <p className="font-semibold text-slate-800">Currency</p>
-                  <p>{plan.currency}</p>
-                </div>
-                <div>
-                  <p className="font-semibold text-slate-800">Trial</p>
-                  <p>{plan.trialMonths} months</p>
-                </div>
-              </div>
-
-              <div className="mt-4 grid grid-cols-2 gap-2">
+              <div className="mt-4 flex justify-end gap-2 border-t border-gray-100 pt-4">
                 <button
                   type="button"
                   onClick={() => openEditPlan(plan)}
-                  className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-white"
+                  className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-slate-200/70 bg-slate-50 px-3 text-[13px] font-semibold text-slate-600 transition hover:border-sky-300 hover:bg-sky-50 hover:text-sky-600"
                 >
                   <Edit2 className="h-4 w-4" />
                   Edit plan
@@ -934,12 +968,13 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
                   type="button"
                   onClick={() => handleDeletePlan(plan)}
                   disabled={deleting}
-                  className="inline-flex items-center justify-center gap-2 rounded-lg border border-red-200 px-4 py-2 text-sm font-semibold text-red-700 hover:bg-red-50 disabled:opacity-50"
+                  className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-red-100 bg-white px-3 text-[13px] font-semibold text-red-600 transition hover:bg-red-50 disabled:opacity-50"
                 >
                   <Trash2 className="h-4 w-4" />
                   Delete
                 </button>
               </div>
+              <div className={`absolute bottom-0 left-0 h-0.5 bg-sky-500 transition-all duration-500 ${isPremium ? 'w-full' : 'w-0 group-hover:w-full'}`} />
             </article>
           );
         })}
@@ -947,32 +982,32 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
       ))}
 
       {activeTab === 'promos' ? (
-        <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+        <div className="relative overflow-x-clip overflow-y-visible rounded-lg border border-gray-200 bg-white p-2">
           {promoLoading ? (
             <div className="p-8 text-center text-slate-500">Loading promo codes...</div>
           ) : displayedPromoCodes.length === 0 ? (
             <div className="p-8 text-center text-slate-500">No promo codes found</div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[980px]">
-                <thead className="bg-slate-50">
-                  <tr>
-                    <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Code</th>
-                    <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Discount</th>
-                    <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Applies To</th>
-                    <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Limits</th>
-                    <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Window</th>
-                    <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Status</th>
-                    <th className="px-4 py-3 text-right text-sm font-semibold text-slate-700">Actions</th>
+              <table className="w-full min-w-[980px] border-collapse text-left">
+                <thead>
+                  <tr className="sticky top-0 z-10 bg-white">
+                    <th className="px-3 py-3.5 text-left text-[13px] font-extrabold uppercase tracking-wide text-sky-600">Code</th>
+                    <th className="px-3 py-3.5 text-left text-[13px] font-extrabold uppercase tracking-wide text-sky-600">Discount</th>
+                    <th className="px-3 py-3.5 text-left text-[13px] font-extrabold uppercase tracking-wide text-sky-600">Applies To</th>
+                    <th className="px-3 py-3.5 text-left text-[13px] font-extrabold uppercase tracking-wide text-sky-600">Limits</th>
+                    <th className="px-3 py-3.5 text-left text-[13px] font-extrabold uppercase tracking-wide text-sky-600">Window</th>
+                    <th className="px-3 py-3.5 text-left text-[13px] font-extrabold uppercase tracking-wide text-sky-600">Status</th>
+                    <th className="px-3 py-3.5 text-right text-[13px] font-extrabold uppercase tracking-wide text-sky-600">Actions</th>
                   </tr>
                   {promoFiltersOpen ? (
                   <tr className="border-t border-slate-200 bg-white">
-                    <th className="px-4 py-2"></th>
-                    <th className="px-4 py-2"></th>
-                    <th className="px-4 py-2"></th>
-                    <th className="px-4 py-2"></th>
-                    <th className="px-4 py-2"></th>
-                    <th className="px-4 py-2">
+                    <th className="px-3 py-1.5"></th>
+                    <th className="px-3 py-1.5"></th>
+                    <th className="px-3 py-1.5"></th>
+                    <th className="px-3 py-1.5"></th>
+                    <th className="px-3 py-1.5"></th>
+                    <th className="px-3 py-1.5">
                       <ColumnFilter
                         label="Status"
                         options={promoStatusOptions}
@@ -980,63 +1015,65 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
                         onChange={setPromoStatusSelections}
                       />
                     </th>
-                    <th className="px-4 py-2"></th>
+                    <th className="px-3 py-1.5"></th>
                   </tr>
                   ) : null}
                 </thead>
                 <tbody>
                   {displayedPromoCodes.map((promo) => (
-                    <tr key={promo.id} className="border-t border-slate-100 hover:bg-slate-50">
-                      <td className="px-4 py-3">
-                        <div className="font-bold text-slate-900">{promo.code}</div>
+                    <tr key={promo.id} className="h-[52px] border-t border-slate-100 transition-colors even:bg-sky-50/[0.18] hover:bg-sky-50">
+                      <td className="px-3 py-3 align-top text-[14px] text-slate-950">
+                        <div className="font-bold text-slate-950">{promo.code}</div>
                         <div className="text-xs text-slate-500">{promo.name || 'No label'}</div>
                       </td>
-                      <td className="px-4 py-3 font-semibold text-slate-800">
+                      <td className="px-3 py-3 align-top text-[14px] font-semibold text-slate-950">
                         {promo.discountType === 'percent'
                           ? `${promo.discountValue}%`
                           : formatPrice(promo.discountValue, promo.currency || 'USD')}
                       </td>
-                      <td className="px-4 py-3 text-sm text-slate-700">
+                      <td className="px-3 py-3 align-top text-[14px] text-slate-950">
                         <div>{promo.appliesToPlanIds.length ? promo.appliesToPlanIds.join(', ') : 'All paid plans'}</div>
                         <div className="text-xs text-slate-500">
                           {promo.applicableBillingIntervals.length ? promo.applicableBillingIntervals.join(', ') : 'All billing intervals'}
                         </div>
                       </td>
-                      <td className="px-4 py-3 text-sm text-slate-700">
+                      <td className="px-3 py-3 align-top text-[14px] text-slate-950">
                         <div>{promo.redeemedCount}{promo.maxRedemptions ? ` / ${promo.maxRedemptions}` : ''} redeemed</div>
                         <div className="text-xs text-slate-500">
                           {promo.perEmailLimit ? `${promo.perEmailLimit}/email` : 'No email limit'}
                         </div>
                       </td>
-                      <td className="px-4 py-3 text-sm text-slate-700">
+                      <td className="px-3 py-3 align-top text-[14px] text-slate-950">
                         <div>{promo.startsAt ? new Date(promo.startsAt).toLocaleDateString() : 'Any start'}</div>
                         <div className="text-xs text-slate-500">{promo.endsAt ? new Date(promo.endsAt).toLocaleDateString() : 'No end'}</div>
                       </td>
-                      <td className="px-4 py-3">
-                        <span className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                      <td className="px-3 py-3 align-top">
+                        <span className={`rounded-md px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide ${
                           promo.active ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'
                         }`}>
                           {promo.active ? 'Active' : 'Inactive'}
                         </span>
                       </td>
-                      <td className="px-4 py-3">
-                        <div className="flex justify-end gap-2">
+                      <td className="px-3 py-3 align-top">
+                        <div className="flex justify-end gap-1">
                           <button
                             type="button"
                             onClick={() => openEditPromo(promo)}
-                            className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-white"
+                            title={`Edit ${promo.code}`}
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border-none text-slate-400 transition hover:bg-sky-400/10 hover:text-sky-500"
                           >
                             <Edit2 className="h-4 w-4" />
-                            Edit
+                            <span className="sr-only">Edit</span>
                           </button>
                           <button
                             type="button"
                             onClick={() => handleDeactivatePromo(promo)}
                             disabled={!promo.active || deactivatingPromo}
-                            className="inline-flex items-center gap-1 rounded-lg border border-red-200 px-3 py-1.5 text-sm font-semibold text-red-700 hover:bg-red-50 disabled:opacity-50"
+                            title={`Deactivate ${promo.code}`}
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border-none text-slate-400 transition hover:bg-red-50 hover:text-red-500 disabled:opacity-50"
                           >
                             <Trash2 className="h-4 w-4" />
-                            Deactivate
+                            <span className="sr-only">Deactivate</span>
                           </button>
                         </div>
                       </td>

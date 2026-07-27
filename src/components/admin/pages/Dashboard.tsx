@@ -30,22 +30,17 @@ export const Dashboard: React.FC = () => {
   }
 
   if (error) {
-    const token = window.sessionStorage.getItem('token');
     const errorMsg = (error as any).graphQLErrors?.[0]?.message || error.message;
-    console.error('Dashboard Error:', { error, token: token ? 'Present' : 'Missing' });
+    if (import.meta.env.DEV) {
+      console.error('Dashboard Error:', error);
+    }
 
     return (
       <div className="text-center py-12">
         <div className="max-w-md mx-auto">
-          <div className="text-red-600 text-5xl mb-4">⚠️</div>
+          <div className="text-red-600 text-5xl mb-4">!</div>
           <h3 className="text-xl font-bold text-red-600 mb-2">Error Loading Dashboard</h3>
           <p className="text-red-600 text-sm mb-4">{errorMsg}</p>
-            <div className="bg-slate-50 border border-slate-200 rounded p-3 text-left text-xs text-slate-600 space-y-1">
-              <p><strong>Debug Info:</strong></p>
-            <p>Token: {token ? '✅ Present' : '❌ Missing'}</p>
-            <p>User: {window.sessionStorage.getItem('adminUsername') || '—'}</p>
-            <p>Error: {errorMsg}</p>
-          </div>
         </div>
       </div>
     );
@@ -58,7 +53,7 @@ export const Dashboard: React.FC = () => {
   }
 
   const totalExpenses = summary.totalExpenses ?? 0;
-  const netRevenue = summary.grossRevenue - totalExpenses;
+  const netRevenue = summary.netRevenue ?? (summary.grossRevenue - totalExpenses);
 
   const cards = [
     {

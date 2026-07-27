@@ -95,7 +95,7 @@ const installGraphQLMock = async (page: any) => {
               success: true,
               message: 'ok',
               token: 'expense-e2e-token',
-              expiresAt: '2026-07-13T09:12:00Z',
+              expiresAt: '2027-07-13T09:12:00Z',
               superAdmin: {
                 id: '1',
                 username: 'admin',
@@ -220,7 +220,7 @@ const fillDigitalOceanExpenseForm = async (page: any, expense: ExpenseTestData) 
   await page.getByLabel('Vendor').fill(expense.vendor);
   await page.getByLabel('Category').selectOption(expense.category);
   await page.getByLabel('Expense date').fill(expense.expenseDateLocal);
-  await page.getByLabel('Currency').fill('USD');
+  await page.getByLabel('Currency').selectOption('USD');
   await page.getByLabel('Tax amount').fill('0');
 
   await page.getByRole('button', { name: 'Optional details' }).click();
@@ -249,6 +249,8 @@ test('creates a DigitalOcean App Platform hosting expense', async ({ page }) => 
   const graphQL = await installGraphQLMock(page);
   await login(page);
 
+  await page.getByRole('button', { name: 'Accounts' }).click();
+  await expect(page.getByRole('heading', { name: 'Accounts' })).toBeVisible();
   await page.getByRole('button', { name: 'Expenses' }).click();
   await expect(page.getByRole('heading', { name: 'Expenses' })).toBeVisible();
   await expect(page.getByText('No expenses recorded yet')).toBeVisible();
@@ -300,6 +302,8 @@ test('creates a DigitalOcean App Platform hosting expense in the real backend', 
   const expense = createExpenseTestData();
   await login(page, username, password);
 
+  await page.getByRole('button', { name: 'Accounts' }).click();
+  await expect(page.getByRole('heading', { name: 'Accounts' })).toBeVisible();
   await page.getByRole('button', { name: 'Expenses' }).click();
   await expect(page.getByRole('heading', { name: 'Expenses' })).toBeVisible();
 
