@@ -77,6 +77,18 @@ test.describe('commerce / subscriptions', () => {
     await expect(component.getByText('Error: payments unavailable')).toBeVisible();
   });
 
+  test('opens the responsive subscription payment detail', async ({ mount }) => {
+    const component = await mount(<SubscriptionsHarness scenario="data" />);
+
+    await component.getByTitle('View subscription').click();
+    await expect(component.getByRole('heading', { name: 'Subscription Payment Detail' })).toBeVisible();
+    await expect(component.getByRole('heading', { name: 'Company information' })).toBeVisible();
+    await expect(component.getByRole('heading', { name: 'Payment information' })).toBeVisible();
+    await expect(component.getByRole('heading', { name: 'Billing schedule' })).toBeVisible();
+    await expect(component.getByRole('heading', { name: 'Gateway information' })).toBeVisible();
+    await expect(component.getByRole('button', { name: 'Edit Payment' })).toBeVisible();
+  });
+
   test('opens all subscription administration actions and validates their required reasons', async ({ mount }) => {
     const component = await mount(<SubscriptionsHarness scenario="data" />);
     await component.getByTitle('Edit subscription').click();

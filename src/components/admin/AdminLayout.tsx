@@ -428,20 +428,9 @@ export const AdminLayout: React.FC<AdminLayoutProps> = ({
             >
               <Menu className="h-5 w-5" />
             </button>
-            <h1 className="truncate text-xl font-black text-[#00cbd6] sm:text-2xl">Supreme Admin</h1>
           </div>
 
           <div className="flex shrink-0 items-center gap-3">
-            <button
-              type="button"
-              aria-label="Logout"
-              title="Sign out"
-              onClick={onLogout}
-              className="hidden h-9 cursor-pointer items-center gap-2 rounded-full border border-[#16bce5] bg-white px-4 font-mono text-xs font-semibold text-[#0aaed5] transition-[background-color,color,transform] duration-150 ease-out hover:bg-[#eaf8fa] active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#20b9e6] focus-visible:ring-offset-2 motion-reduce:transform-none motion-reduce:transition-none sm:flex"
-            >
-              <LogOut className="h-4 w-4" strokeWidth={1.8} aria-hidden="true" />
-              <span>{sessionRemaining}</span>
-            </button>
 
             <div className="hidden h-8 w-px bg-slate-200 sm:block" aria-hidden="true" />
 

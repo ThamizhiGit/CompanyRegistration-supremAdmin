@@ -100,6 +100,24 @@ test.describe('commerce / companies', () => {
     await expect(empty.getByText('No companies found')).toBeVisible();
   });
 
+  test('opens the Company 360 date-range picker from payment history', async ({ mount, page }) => {
+    const component = await mount(<CompaniesHarness scenario="actions" />);
+
+    await component.getByTitle('View Company').click();
+    await component.getByRole('button', { name: 'Payment History' }).click();
+    await component.getByRole('button', { name: /Select Date Range/ }).click();
+
+    const picker = page.getByRole('dialog', { name: 'Choose date range' });
+    await expect(picker).toBeVisible();
+    await expect(picker.getByRole('button', { name: 'Today' })).toBeVisible();
+    await expect(picker.getByRole('button', { name: 'Last 7 Days' })).toBeVisible();
+    await expect(picker.getByRole('button', { name: 'Last 30 Days' })).toBeVisible();
+    await expect(picker.getByRole('button', { name: 'This Month' })).toBeVisible();
+    await expect(picker.getByRole('button', { name: 'Last Month' })).toBeVisible();
+    await picker.getByRole('button', { name: 'Cancel' }).click();
+    await expect(picker).not.toBeVisible();
+  });
+
   test('requests a partial refund and sends a manual subscription action', async ({ mount }) => {
     const mocks: MockedResponse[] = [
       companiesMock([company]),

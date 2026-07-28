@@ -10,8 +10,29 @@ import {
   ADMIN_MANUAL_SUBSCRIPTION_MUTATION,
 } from '../../../lib/graphql';
 import { buildPayload, formatDate, formatDateTime, formatPrice, toDateTimeLocalValue } from '../../../lib/admin-utils';
-import { Download, Edit2, Save, X, ClipboardList, Eye, Filter, HandCoins, Clipboard, Printer, Search } from 'lucide-react';
+import {
+  ArrowLeft,
+  Building2,
+  CalendarDays,
+  CheckCircle2,
+  Clipboard,
+  CreditCard,
+  Download,
+  Edit2,
+  Eye,
+  Filter,
+  HandCoins,
+  Landmark,
+  MapPin,
+  Printer,
+  ReceiptText,
+  Save,
+  Search,
+  Users,
+  X,
+} from 'lucide-react';
 import { buildColumnFilterOptions, ColumnFilter, matchesColumnFilter } from '../ColumnFilter';
+import { DateRangePicker, DateRangeValue } from '../DateRangePicker';
 
 interface EditingCompanyDetail {
   id: number;
@@ -142,6 +163,7 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
   const [filtersOpen, setFiltersOpen] = useState(true);
 
   const [viewingCompany, setViewingCompany] = useState<CompanyType | null>(null);
+  const [company360Tab, setCompany360Tab] = useState<'overview' | 'subscription' | 'payments'>('overview');
   const [editingDetail, setEditingDetail] = useState<EditingCompanyDetail | null>(null);
   const [selectedHistoryFor, setSelectedHistoryFor] = useState<number | null>(null);
   const [historyStatus, setHistoryStatus] = useState('all');
@@ -572,6 +594,9 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
 
   const handleOpenHistory = (companyId: number) => {
     setSelectedHistoryFor(companyId);
+    setCompany360Tab('overview');
+    setHistoryDateFrom('');
+    setHistoryDateTo('');
     setSelectedPayment(null);
     setRefundReason('');
     setRefundAmount('');
@@ -584,6 +609,17 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
     setViewingCompany(null);
     setSelectedHistoryFor(null);
     setSelectedPayment(null);
+    setCompany360Tab('overview');
+  };
+
+  const applyHistoryDateRange = ({ from, to }: DateRangeValue) => {
+    setHistoryDateFrom(new Date(`${from}T00:00:00`).toISOString());
+    setHistoryDateTo(new Date(`${to}T23:59:59.999`).toISOString());
+  };
+
+  const clearHistoryDateFilter = () => {
+    setHistoryDateFrom('');
+    setHistoryDateTo('');
   };
 
   const handlePaymentStatusChange = async (paymentIntentId: string, status: string) => {
@@ -666,6 +702,8 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
 
   return (
     <div className="space-y-8">
+      {!viewingCompany && (
+        <>
       <div>
         <h2 className="text-2xl font-bold text-slate-800">Companies</h2>
         <p className="text-slate-600">Manage tenants, plan assignments, subscriptions, and payment history</p>
@@ -1066,67 +1104,270 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
           </div>
         </div>
       )}
+        </>
+      )}
 
-      {selectedHistoryFor !== null && (
-        <div className="fixed inset-0 z-40 bg-black/30 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl border border-slate-200 w-full max-w-6xl max-h-[85vh] overflow-y-auto">
-            <div className="p-5 border-b border-slate-100 flex items-center justify-between">
-              <h3 className="font-bold text-lg">{viewingCompany ? 'Company 360' : 'Company Payment History'}</h3>
+      {viewingCompany && selectedHistoryFor !== null && (
+        <div className="space-y-5">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <div>
+                <div className="flex items-center gap-2 text-sm text-slate-500 mb-1">
+                  <button
+                    type="button"
+                    onClick={closeCompanyView}
+                    className="hover:text-cyan-600 transition-colors"
+                  >
+                    Companies
+                  </button>
+                  <span>/</span>
+                  <span className="text-slate-700">Company 360</span>
+                </div>
+                <h2 className="font-bold text-2xl text-slate-950">Company 360</h2>
+                <p className="text-sm text-slate-500 mt-0.5">Company, subscription and payment information</p>
+              </div>
               <button
-                className="px-2 py-1 text-slate-500 hover:text-slate-700"
+                type="button"
+                className="inline-flex items-center justify-center gap-2 px-4 h-10 rounded-lg border border-slate-200 bg-white text-sm font-semibold text-slate-600 hover:text-cyan-700 hover:border-cyan-200 hover:bg-cyan-50 transition-colors"
                 onClick={closeCompanyView}
+                title="Back to Companies"
               >
-                <X className="w-5 h-5" />
+                <ArrowLeft className="w-4 h-4" />
+                Back to Companies
               </button>
             </div>
-            <div className="p-5 space-y-4">
+
+            <div>
               {viewingCompany && (
-                <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
-                  <div className="rounded-lg border border-slate-200 p-4 space-y-2">
-                    <h4 className="font-semibold text-slate-800">Company</h4>
-                    <p><strong>Name:</strong> {viewingCompany.company}</p>
-                    <p><strong>ID:</strong> {viewingCompany.id}</p>
-                    <p><strong>Created:</strong> {formatDate(viewingCompany.createdAt)}</p>
-                    <p><strong>Multi-location:</strong> {viewingCompany.isMultiLocationEnabled ? 'Yes' : 'No'}</p>
-                    <p><strong>Plan:</strong> {getCompanyPlanName(viewingCompany)}</p>
-                    <p><strong>Employees:</strong> {viewingCompany.employeeCount ?? viewingCompany.latestPaymentEmployeeCountSnapshot ?? '-'}</p>
-                  </div>
-                  <div className="rounded-lg border border-slate-200 p-4 space-y-2">
-                    <h4 className="font-semibold text-slate-800">Subscription</h4>
-                    <p><strong>Status:</strong> {getEffectiveSubscriptionStatus(viewingCompany)}</p>
-                    <p><strong>Raw status:</strong> {viewingCompany.subscriptionStatus || '-'}</p>
-                    <p><strong>Trial ends:</strong> {formatDateTime(viewingCompany.trialEndsAt || '')}</p>
-                    <p><strong>Next billing:</strong> {formatDateTime(viewingCompany.nextBillingDate || '')}</p>
-                    <p><strong>Next amount:</strong> {viewingCompany.nextBillingAmountCents !== null && viewingCompany.nextBillingAmountCents !== undefined ? formatPrice(viewingCompany.nextBillingAmountCents, viewingCompany.latestPaymentCurrency || 'USD') : '-'}</p>
-                    <p><strong>Due:</strong> {formatDateTime(viewingCompany.subscriptionDueDate || '')}</p>
-                    <p><strong>Recurring:</strong> {formatDateTime(viewingCompany.subscriptionRecurringDate || '')}</p>
-                    <p><strong>Payment count:</strong> {viewingCompany.paymentHistoryCount ?? 0}</p>
-                    <p><strong>Latest payment status:</strong> {viewingCompany.latestPaymentStatus || '-'}</p>
-                  </div>
-                  <div className="rounded-lg border border-slate-200 p-4 space-y-2">
-                    <h4 className="font-semibold text-slate-800">Latest Payment</h4>
-                    <p><strong>Payment ID:</strong> {viewingCompany.latestPaymentIntentId || '-'}</p>
-                    <p><strong>Email:</strong> {viewingCompany.latestPaymentEmail || '-'}</p>
-                    <p><strong>Plan:</strong> {viewingCompany.latestPaymentPlanName || getCompanyPlanName(viewingCompany)}</p>
-                    <p><strong>Employees:</strong> {viewingCompany.latestPaymentEmployeeCountSnapshot ?? viewingCompany.employeeCount ?? '-'}</p>
-                    <p><strong>Amount:</strong> {viewingCompany.latestPaymentFinalAmountCents !== null && viewingCompany.latestPaymentFinalAmountCents !== undefined ? formatPrice(viewingCompany.latestPaymentFinalAmountCents, viewingCompany.latestPaymentCurrency || 'USD') : viewingCompany.latestPaymentAmount !== null && viewingCompany.latestPaymentAmount !== undefined ? formatPrice(viewingCompany.latestPaymentAmount, viewingCompany.latestPaymentCurrency || 'USD') : '-'}</p>
-                    <p><strong>Source:</strong> {viewingCompany.latestPaymentSource || '-'}</p>
-                    <p><strong>Denied reason:</strong> {viewingCompany.latestPaymentDeniedReason || '-'}</p>
-                    <p><strong>Gateway:</strong> {getCompanyGatewayLabel(viewingCompany)} / {viewingCompany.latestPaymentGatewayStatus || '-'}</p>
-                    <p><strong>Receiver ref:</strong> {viewingCompany.latestPaymentGatewayRefReceiverMedium || '-'}</p>
-                    <p><strong>Sender ref:</strong> {viewingCompany.latestPaymentGatewayRefSenderMedium || '-'}</p>
-                    <p><strong>Created:</strong> {formatDateTime(viewingCompany.latestPaymentCreatedAt || '')}</p>
-                  </div>
-                </div>
+                <>
+                  <section className="relative overflow-hidden bg-white border border-slate-200 rounded-2xl shadow-sm px-5 py-5 sm:px-7 sm:py-6 mb-5">
+                    <div className="absolute inset-x-0 top-0 h-1 bg-cyan-500" />
+                    <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
+                      <div className="flex items-start gap-4 sm:gap-5 min-w-0">
+                        <div className="w-20 h-20 sm:w-24 sm:h-24 shrink-0 rounded-2xl bg-cyan-50 border border-cyan-100 flex items-center justify-center text-cyan-600">
+                          <Building2 className="w-10 h-10 sm:w-12 sm:h-12" strokeWidth={1.7} />
+                        </div>
+                        <div className="min-w-0 pt-1">
+                          <div className="flex flex-wrap items-center gap-2.5">
+                            <h2 className="text-2xl font-bold text-slate-950 tracking-tight truncate">
+                              {viewingCompany.company}
+                            </h2>
+                            <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold uppercase tracking-wide ${getStatusBadgeClass(getEffectiveSubscriptionStatus(viewingCompany))}`}>
+                              <span className="w-1.5 h-1.5 rounded-full bg-current" />
+                              {getEffectiveSubscriptionStatus(viewingCompany)}
+                            </span>
+                          </div>
+                          <p className="text-sm text-slate-500 mt-1.5">
+                            Company ID #{viewingCompany.id} &bull; Created {formatDate(viewingCompany.createdAt)}
+                          </p>
+                          <div className="flex flex-wrap gap-2 mt-4">
+                            <span className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-50 border border-slate-200 text-sm text-slate-700">
+                              <Landmark className="w-4 h-4 text-cyan-500" />
+                              {getCompanyPlanName(viewingCompany)} plan
+                            </span>
+                            <span className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-50 border border-slate-200 text-sm text-slate-700">
+                              <MapPin className="w-4 h-4 text-cyan-500" />
+                              {viewingCompany.isMultiLocationEnabled ? 'Multi-location' : 'Single location'}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-2 sm:gap-3">
+                        <div className="min-w-[96px] rounded-xl border border-dashed border-slate-300 bg-slate-50 px-3 py-3">
+                          <Users className="w-5 h-5 text-violet-500 mb-2" />
+                          <p className="text-lg font-bold text-slate-900">{viewingCompany.employeeCount ?? viewingCompany.latestPaymentEmployeeCountSnapshot ?? '-'}</p>
+                          <p className="text-[11px] text-slate-500">Employees</p>
+                        </div>
+                        <div className="min-w-[96px] rounded-xl border border-dashed border-slate-300 bg-slate-50 px-3 py-3">
+                          <ReceiptText className="w-5 h-5 text-blue-500 mb-2" />
+                          <p className="text-lg font-bold text-slate-900">{viewingCompany.paymentHistoryCount ?? historyItems.length}</p>
+                          <p className="text-[11px] text-slate-500">Payments</p>
+                        </div>
+                        <div className="min-w-[96px] rounded-xl border border-dashed border-slate-300 bg-slate-50 px-3 py-3">
+                          <CreditCard className="w-5 h-5 text-emerald-500 mb-2" />
+                          <p className="text-lg font-bold text-slate-900">
+                            {viewingCompany.latestPaymentFinalAmountCents !== null && viewingCompany.latestPaymentFinalAmountCents !== undefined
+                              ? formatPrice(viewingCompany.latestPaymentFinalAmountCents, viewingCompany.latestPaymentCurrency || 'USD')
+                              : viewingCompany.latestPaymentAmount !== null && viewingCompany.latestPaymentAmount !== undefined
+                                ? formatPrice(viewingCompany.latestPaymentAmount, viewingCompany.latestPaymentCurrency || 'USD')
+                                : '-'}
+                          </p>
+                          <p className="text-[11px] text-slate-500">Latest amount</p>
+                        </div>
+                      </div>
+                    </div>
+                  </section>
+
+                  <nav className="flex overflow-x-auto whitespace-nowrap border-b border-slate-200 mb-6" aria-label="Company 360 sections">
+                    {([
+                      { id: 'overview', label: 'Overview', icon: Building2 },
+                      { id: 'subscription', label: 'Subscription', icon: CalendarDays },
+                      { id: 'payments', label: 'Payment History', icon: ReceiptText },
+                    ] as const).map((tab) => {
+                      const Icon = tab.icon;
+                      const active = company360Tab === tab.id;
+                      return (
+                        <button
+                          key={tab.id}
+                          type="button"
+                          onClick={() => setCompany360Tab(tab.id)}
+                          className={`flex-1 min-w-fit px-5 py-3 inline-flex justify-center items-center gap-2 border-b-[3px] text-sm transition-colors ${
+                            active
+                              ? 'text-cyan-600 border-cyan-500 font-semibold'
+                              : 'text-slate-500 border-transparent hover:text-slate-700 hover:border-slate-300'
+                          }`}
+                          aria-current={active ? 'page' : undefined}
+                        >
+                          <Icon className="w-[18px] h-[18px]" />
+                          {tab.label}
+                        </button>
+                      );
+                    })}
+                  </nav>
+
+                  {company360Tab === 'overview' && (
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+                      <section className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+                        <div className="px-5 py-4 border-b border-slate-100 flex items-center gap-3">
+                          <div className="w-9 h-9 rounded-lg bg-cyan-50 text-cyan-600 flex items-center justify-center">
+                            <Building2 className="w-5 h-5" />
+                          </div>
+                          <div>
+                            <h4 className="font-semibold text-slate-900">Company Overview</h4>
+                            <p className="text-xs text-slate-500">Core company details</p>
+                          </div>
+                        </div>
+                        <dl className="px-5 divide-y divide-slate-100">
+                          {[
+                            ['Company name', viewingCompany.company],
+                            ['Company ID', `#${viewingCompany.id}`],
+                            ['Created', formatDate(viewingCompany.createdAt)],
+                            ['Location setup', viewingCompany.isMultiLocationEnabled ? 'Multi-location enabled' : 'Single location'],
+                            ['Current plan', getCompanyPlanName(viewingCompany)],
+                            ['Employees', String(viewingCompany.employeeCount ?? viewingCompany.latestPaymentEmployeeCountSnapshot ?? '-')],
+                          ].map(([label, value]) => (
+                            <div key={label} className="flex items-center justify-between gap-4 py-3.5">
+                              <dt className="text-sm text-slate-500">{label}</dt>
+                              <dd className="text-sm font-semibold text-slate-800 text-right">{value}</dd>
+                            </div>
+                          ))}
+                        </dl>
+                      </section>
+
+                      <section className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+                        <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between gap-3">
+                          <div className="flex items-center gap-3">
+                            <div className="w-9 h-9 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center">
+                              <CreditCard className="w-5 h-5" />
+                            </div>
+                            <div>
+                              <h4 className="font-semibold text-slate-900">Latest Payment</h4>
+                              <p className="text-xs text-slate-500">Most recent billing activity</p>
+                            </div>
+                          </div>
+                          {historyItems[0] && (
+                            <button
+                              type="button"
+                              onClick={() => setSelectedPayment(historyItems[0])}
+                              className="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-cyan-700 border border-cyan-200 rounded-lg hover:bg-cyan-50"
+                            >
+                              <Eye className="w-4 h-4" /> Detail
+                            </button>
+                          )}
+                        </div>
+                        <dl className="px-5 divide-y divide-slate-100">
+                          {[
+                            ['Payment ID', viewingCompany.latestPaymentIntentId || '-'],
+                            ['Billing email', viewingCompany.latestPaymentEmail || '-'],
+                            ['Payment status', viewingCompany.latestPaymentStatus || '-'],
+                            ['Gateway', `${getCompanyGatewayLabel(viewingCompany)} / ${viewingCompany.latestPaymentGatewayStatus || '-'}`],
+                            ['Source', viewingCompany.latestPaymentSource || '-'],
+                            ['Created', formatDateTime(viewingCompany.latestPaymentCreatedAt || '')],
+                          ].map(([label, value]) => (
+                            <div key={label} className="flex items-center justify-between gap-4 py-3.5">
+                              <dt className="text-sm text-slate-500">{label}</dt>
+                              <dd className="text-sm font-semibold text-slate-800 text-right break-all">{value}</dd>
+                            </div>
+                          ))}
+                        </dl>
+                      </section>
+                    </div>
+                  )}
+
+                  {company360Tab === 'subscription' && (
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+                      <section className="lg:col-span-2 bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+                        <div className="px-5 py-4 border-b border-slate-100 flex items-center gap-3">
+                          <div className="w-9 h-9 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center">
+                            <CalendarDays className="w-5 h-5" />
+                          </div>
+                          <div>
+                            <h4 className="font-semibold text-slate-900">Subscription Details</h4>
+                            <p className="text-xs text-slate-500">Plan status and billing schedule</p>
+                          </div>
+                        </div>
+                        <dl className="px-5 grid sm:grid-cols-2 gap-x-8">
+                          {[
+                            ['Effective status', getEffectiveSubscriptionStatus(viewingCompany)],
+                            ['Recorded status', viewingCompany.subscriptionStatus || '-'],
+                            ['Plan', getCompanyPlanName(viewingCompany)],
+                            ['Trial ends', formatDateTime(viewingCompany.trialEndsAt || '')],
+                            ['Next billing date', formatDateTime(viewingCompany.nextBillingDate || '')],
+                            ['Next billing amount', viewingCompany.nextBillingAmountCents !== null && viewingCompany.nextBillingAmountCents !== undefined ? formatPrice(viewingCompany.nextBillingAmountCents, viewingCompany.latestPaymentCurrency || 'USD') : '-'],
+                            ['Due date', formatDateTime(viewingCompany.subscriptionDueDate || '')],
+                            ['Recurring date', formatDateTime(viewingCompany.subscriptionRecurringDate || '')],
+                          ].map(([label, value]) => (
+                            <div key={label} className="py-4 border-b border-slate-100">
+                              <dt className="text-xs font-medium uppercase tracking-wide text-slate-400">{label}</dt>
+                              <dd className="text-sm font-semibold text-slate-800 mt-1.5">{value}</dd>
+                            </div>
+                          ))}
+                        </dl>
+                      </section>
+                      <section className="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+                        <div className="w-11 h-11 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center mb-4">
+                          <CheckCircle2 className="w-6 h-6" />
+                        </div>
+                        <p className="text-sm text-slate-500">Latest payment status</p>
+                        <p className="text-xl font-bold text-slate-900 mt-1 capitalize">{viewingCompany.latestPaymentStatus || 'No payment'}</p>
+                        <div className="border-t border-slate-100 mt-5 pt-5 space-y-3">
+                          <div>
+                            <p className="text-xs text-slate-400">Payment records</p>
+                            <p className="font-semibold text-slate-800">{viewingCompany.paymentHistoryCount ?? historyItems.length}</p>
+                          </div>
+                          <div>
+                            <p className="text-xs text-slate-400">Latest plan</p>
+                            <p className="font-semibold text-slate-800">{viewingCompany.latestPaymentPlanName || getCompanyPlanName(viewingCompany)}</p>
+                          </div>
+                        </div>
+                      </section>
+                    </div>
+                  )}
+                </>
               )}
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                <div>
-                  <label className="block text-sm text-slate-700 mb-1">Payment Status</label>
+              {company360Tab === 'payments' && (
+                <section className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+                  <div className="px-5 py-4 border-b border-slate-100 flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-lg bg-violet-50 text-violet-600 flex items-center justify-center">
+                      <ReceiptText className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h4 className="font-semibold text-slate-900">Payment History</h4>
+                      <p className="text-xs text-slate-500">Transactions, gateway details and payment actions</p>
+                    </div>
+                  </div>
+
+                  <div className="p-5 flex flex-col lg:flex-row lg:items-end gap-3">
+                <div className="w-full lg:w-52">
+                  <label htmlFor="payment-history-status" className="block text-sm font-medium text-slate-700 mb-1.5">
+                    Payment Status
+                  </label>
                   <select
+                    id="payment-history-status"
                     value={historyStatus}
                     onChange={(event) => setHistoryStatus(event.target.value)}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg"
+                    className="w-full h-10 px-3 border border-slate-300 rounded-lg bg-white text-sm focus:outline-none focus:ring-2 focus:ring-cyan-100 focus:border-cyan-400"
                   >
                     <option value="all">All</option>
                     {paymentStatuses.map((status) => (
@@ -1134,32 +1375,24 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                     ))}
                   </select>
                 </div>
-                <div>
-                  <label className="block text-sm text-slate-700 mb-1">Date From</label>
-                  <input
-                    type="datetime-local"
-                    value={toDateTimeLocalValue(historyDateFrom)}
-                    onChange={(event) => setHistoryDateFrom(event.target.value ? new Date(event.target.value).toISOString() : '')}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm text-slate-700 mb-1">Date To</label>
-                  <input
-                    type="datetime-local"
-                    value={toDateTimeLocalValue(historyDateTo)}
-                    onChange={(event) => setHistoryDateTo(event.target.value ? new Date(event.target.value).toISOString() : '')}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg"
+                <div className="pb-0.5">
+                  <DateRangePicker
+                    from={historyDateFrom ? toDateTimeLocalValue(historyDateFrom).slice(0, 10) : ''}
+                    to={historyDateTo ? toDateTimeLocalValue(historyDateTo).slice(0, 10) : ''}
+                    onChange={applyHistoryDateRange}
+                    onClear={clearHistoryDateFilter}
                   />
                 </div>
               </div>
 
               {historyLoading ? (
-                <div className="text-center py-8 text-slate-500">Loading payment history...</div>
+                <div className="mx-5 mb-5 text-center py-10 text-slate-500">Loading payment history...</div>
               ) : historyItems.length === 0 ? (
-                <div className="text-center py-8 text-slate-500">No payment history</div>
+                <div className="mx-5 mb-5 text-center py-10 rounded-xl bg-slate-50 border border-dashed border-slate-200 text-slate-500">
+                  No payment history
+                </div>
               ) : (
-                <div className="overflow-x-auto border border-slate-200 rounded-lg">
+                <div className="custom-scrollbar mx-5 mb-5 overflow-x-auto border border-slate-200 rounded-lg">
                   <table className="w-full">
                     <thead className="bg-slate-50 border-b border-slate-200">
                       <tr>
@@ -1168,21 +1401,26 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                         <th className="text-left py-3 px-4">Plan</th>
                         <th className="text-left py-3 px-4">Status</th>
                         <th className="text-left py-3 px-4">Amount</th>
-                        <th className="text-left py-3 px-4">Denied reason</th>
-                        <th className="text-left py-3 px-4">Source</th>
-                        <th className="text-left py-3 px-4">Gateway</th>
-                        <th className="text-left py-3 px-4">Refs</th>
-                        <th className="text-left py-3 px-4">Due</th>
-                        <th className="text-left py-3 px-4">Recurring</th>
+                        <th className="text-left py-3 px-4">Method</th>
                         <th className="text-left py-3 px-4">Created</th>
-                        <th className="text-right py-3 px-4">Actions</th>
+                        <th className="min-w-[185px] text-right py-3 px-4">Actions</th>
                       </tr>
                     </thead>
                     <tbody>
                       {historyItems.map((payment) => (
                           <tr key={payment.paymentIntentId} className="border-t border-slate-100">
-                            <td className="py-3 px-4 text-slate-700">{payment.paymentIntentId}</td>
-                            <td className="py-3 px-4 text-slate-700">{payment.email}</td>
+                            <td
+                              className="max-w-[220px] py-3 px-4 text-slate-700 truncate"
+                              title={payment.paymentIntentId}
+                            >
+                              {payment.paymentIntentId}
+                            </td>
+                            <td
+                              className="max-w-[220px] py-3 px-4 text-slate-700 truncate"
+                              title={payment.email}
+                            >
+                              {payment.email}
+                            </td>
                             <td className="py-3 px-4 text-slate-700">
                               <div className="font-medium">{payment.planName || payment.planId || '-'}</div>
                               <div className="text-xs text-slate-500">
@@ -1200,38 +1438,36 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                               </span>
                             </td>
                             <td className="py-3 px-4 text-slate-700">{formatPrice(payment.finalAmountCents ?? payment.amount, payment.currency)}</td>
-                            <td className="py-3 px-4 text-slate-700 max-w-[220px] truncate" title={payment.deniedReason || ''}>
-                              {payment.deniedReason || '-'}
-                            </td>
-                            <td className="py-3 px-4 text-slate-700">{payment.source || '-'}</td>
                             <td className="py-3 px-4 text-slate-700">
-                              <div>{getPaymentGatewayLabel(payment)}</div>
-                              <div className="text-xs text-slate-500">{payment.paymentGatewayStatus || '-'}</div>
+                              <div className="font-medium capitalize">{getPaymentGatewayLabel(payment)}</div>
+                              <div className="text-xs text-slate-500">
+                                {[payment.source, payment.paymentGatewayStatus]
+                                  .filter((value, index, values) => value && value !== getPaymentGatewayLabel(payment) && values.indexOf(value) === index)
+                                  .join(' · ') || '-'}
+                              </div>
                             </td>
-                            <td className="py-3 px-4 text-slate-700">
-                              <div className="text-xs">Receiver: {payment.gatewayRefReceiverMedium || '-'}</div>
-                              <div className="text-xs">Sender: {payment.gatewayRefSenderMedium || '-'}</div>
-                            </td>
-                            <td className="py-3 px-4 text-slate-700">{formatDateTime(payment.dueDate)}</td>
-                            <td className="py-3 px-4 text-slate-700">{formatDateTime(payment.recurringDate)}</td>
                             <td className="py-3 px-4 text-slate-700">{formatDateTime(payment.createdAt)}</td>
-                            <td className="py-3 px-4 text-right space-x-2">
-                              <button
-                                title="Open payment detail"
-                                onClick={() => setSelectedPayment(payment)}
-                                className="inline-flex items-center gap-1 px-3 py-2 border border-slate-200 rounded-lg hover:bg-slate-100"
-                              >
-                                <Eye className="w-4 h-4" /> Detail
-                              </button>
-                              <select
-                                value={payment.status}
-                                onChange={(event) => handlePaymentStatusChange(payment.paymentIntentId, event.target.value)}
-                                className="px-3 py-2 border border-slate-300 rounded text-sm bg-white"
-                              >
-                                {paymentStatuses.map((status) => (
-                                  <option key={status} value={status}>{status}</option>
-                                ))}
-                              </select>
+                            <td className="py-3 px-4">
+                              <div className="flex items-center justify-end gap-2 whitespace-nowrap">
+                                <button
+                                  title="Open payment detail"
+                                  aria-label={`Open details for ${payment.paymentIntentId}`}
+                                  onClick={() => setSelectedPayment(payment)}
+                                  className="w-9 h-9 inline-flex shrink-0 items-center justify-center border border-slate-200 rounded-full text-blue-600 hover:border-blue-200 hover:bg-blue-50 transition-colors"
+                                >
+                                  <Eye className="w-4 h-4" />
+                                </button>
+                                <select
+                                  aria-label={`Update status for ${payment.paymentIntentId}`}
+                                  value={payment.status}
+                                  onChange={(event) => handlePaymentStatusChange(payment.paymentIntentId, event.target.value)}
+                                  className="h-9 min-w-[120px] shrink-0 px-3 border border-slate-300 rounded-lg text-sm bg-white"
+                                >
+                                  {paymentStatuses.map((status) => (
+                                    <option key={status} value={status}>{status}</option>
+                                  ))}
+                                </select>
+                              </div>
                             </td>
                           </tr>
                       ))}
@@ -1239,130 +1475,234 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                   </table>
                 </div>
               )}
+                </section>
+              )}
             </div>
-            <div className="p-5 border-t border-slate-100 flex justify-end">
-              <button
-                className="px-4 py-2 border border-slate-200 rounded-lg text-slate-700 hover:bg-slate-100"
-                onClick={closeCompanyView}
-              >
-                <ClipboardList className="w-4 h-4 inline-block mr-1" /> Close
-              </button>
-            </div>
-          </div>
         </div>
       )}
 
       {selectedPayment && (
-        <div className="fixed inset-0 z-50 bg-black/30 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl border border-slate-200 w-full max-w-4xl max-h-[90vh] overflow-auto">
-            <div className="p-4 border-b border-slate-100 flex items-center justify-between">
-              <h3 className="font-bold text-lg text-slate-700">Payment Detail</h3>
-              <button onClick={() => setSelectedPayment(null)} className="px-2 py-1 rounded border border-slate-200">
-                <X className="w-5 h-5" />
+        <div className="fixed inset-0 z-50 bg-slate-950/40 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="payment-detail-title"
+            className="bg-white rounded-2xl border border-slate-200 shadow-2xl w-full max-w-5xl max-h-[92vh] flex flex-col overflow-hidden"
+          >
+            <div className="px-5 py-4 sm:px-6 sm:py-5 border-b border-slate-100 flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <h3 id="payment-detail-title" className="text-[22px] font-bold tracking-[-0.3px] text-slate-800">
+                  Payment Detail
+                </h3>
+                <p className="mt-1 text-[13px] text-slate-400 truncate">
+                  Transaction {selectedPayment.paymentIntentId}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedPayment(null)}
+                className="rounded-lg p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors"
+                title="Close payment detail"
+                aria-label="Close payment detail"
+              >
+                <X className="w-[18px] h-[18px]" />
               </button>
             </div>
-            <div className="p-4 space-y-4 text-sm text-slate-700">
-              <div className="grid md:grid-cols-2 gap-4">
-                <div>
-                  <p><strong>Payment Id:</strong> {selectedPayment.paymentIntentId}</p>
-                  <p><strong>Company:</strong> {selectedPayment.companyName || selectedHistoryFor || '-'}</p>
-                  <p><strong>Email:</strong> {selectedPayment.email}</p>
-                  <p><strong>Plan:</strong> {selectedPayment.planName || selectedPayment.planId || '-'}</p>
-                  <p><strong>Employees:</strong> {selectedPayment.employeeCountSnapshot ?? '-'}</p>
-                  <p><strong>Original amount:</strong> {selectedPayment.originalAmountCents !== null && selectedPayment.originalAmountCents !== undefined ? formatPrice(selectedPayment.originalAmountCents, selectedPayment.currency) : '-'}</p>
-                  <p><strong>Final amount:</strong> {formatPrice(selectedPayment.finalAmountCents ?? selectedPayment.amount, selectedPayment.currency)}</p>
-                  <p><strong>Trial ends:</strong> {formatDateTime(selectedPayment.trialEndsAt || '')}</p>
-                  <p><strong>Status:</strong> {selectedPayment.status}</p>
-                  <p><strong>Source:</strong> {selectedPayment.source || '-'}</p>
-                  <p><strong>Gateway method:</strong> {getPaymentGatewayLabel(selectedPayment)}</p>
-                  <p><strong>Ref receiver:</strong> {selectedPayment.gatewayRefReceiverMedium || '-'}</p>
-                  <p><strong>Ref sender:</strong> {selectedPayment.gatewayRefSenderMedium || '-'}</p>
-                  <p><strong>Due:</strong> {formatDateTime(selectedPayment.dueDate || '')}</p>
-                  <p><strong>Recurring:</strong> {formatDateTime(selectedPayment.recurringDate || '')}</p>
-                  <p><strong>Gateway status:</strong> {selectedPayment.paymentGatewayStatus || '-'}</p>
-                  <p><strong>Denied reason:</strong> {selectedPayment.deniedReason || '-'}</p>
+
+            <div className="custom-scrollbar flex-1 overflow-y-auto overflow-x-hidden p-4 sm:p-6">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Final amount</p>
+                  <p className="mt-1.5 text-xl font-bold text-slate-900">
+                    {formatPrice(selectedPayment.finalAmountCents ?? selectedPayment.amount, selectedPayment.currency)}
+                  </p>
                 </div>
-                <div className="space-y-3">
-                  <label className="block">
-                    <span className="block text-slate-700 mb-1">Refund reason</span>
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Payment status</p>
+                  <span className={`mt-2 inline-flex px-2.5 py-1 rounded-full text-xs font-semibold capitalize ${
+                    selectedPayment.status === 'succeeded' ? 'bg-emerald-100 text-emerald-700' :
+                    selectedPayment.status === 'pending' ? 'bg-amber-100 text-amber-700' :
+                    selectedPayment.status === 'failed' ? 'bg-rose-100 text-rose-700' :
+                    'bg-slate-200 text-slate-700'
+                  }`}>
+                    {selectedPayment.status}
+                  </span>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Gateway</p>
+                  <p className="mt-1.5 text-base font-bold text-slate-800 capitalize">
+                    {getPaymentGatewayLabel(selectedPayment)}
+                  </p>
+                  <p className="mt-0.5 text-xs text-slate-500">{selectedPayment.paymentGatewayStatus || '-'}</p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 xl:grid-cols-[1.15fr_0.85fr] gap-4">
+                <section className="bg-slate-50 border border-slate-200 rounded-xl p-4 sm:p-5">
+                  <div className="flex items-center gap-2.5 mb-4">
+                    <span className="w-[30px] h-[30px] shrink-0 rounded-lg bg-blue-100 text-blue-600 flex items-center justify-center">
+                      <CreditCard className="w-4 h-4" />
+                    </span>
+                    <div>
+                      <h4 className="text-[13px] font-bold uppercase tracking-[0.5px] text-slate-800">Payment information</h4>
+                      <p className="text-xs text-slate-400 mt-0.5">Transaction and billing details</p>
+                    </div>
+                  </div>
+                  <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-6">
+                    {[
+                      ['Payment ID', selectedPayment.paymentIntentId],
+                      ['Company', selectedPayment.companyName || String(selectedHistoryFor || '-')],
+                      ['Billing email', selectedPayment.email],
+                      ['Plan', selectedPayment.planName || selectedPayment.planId || '-'],
+                      ['Employees', String(selectedPayment.employeeCountSnapshot ?? '-')],
+                      ['Original amount', selectedPayment.originalAmountCents !== null && selectedPayment.originalAmountCents !== undefined ? formatPrice(selectedPayment.originalAmountCents, selectedPayment.currency) : '-'],
+                      ['Trial ends', formatDateTime(selectedPayment.trialEndsAt || '')],
+                      ['Source', selectedPayment.source || '-'],
+                      ['Receiver reference', selectedPayment.gatewayRefReceiverMedium || '-'],
+                      ['Sender reference', selectedPayment.gatewayRefSenderMedium || '-'],
+                      ['Due date', formatDateTime(selectedPayment.dueDate || '')],
+                      ['Recurring date', formatDateTime(selectedPayment.recurringDate || '')],
+                      ['Denied reason', selectedPayment.deniedReason || '-'],
+                    ].map(([label, value]) => (
+                      <div key={label} className="py-3 border-b border-slate-200/80 min-w-0">
+                        <dt className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">{label}</dt>
+                        <dd className="mt-1 text-sm font-semibold text-slate-700 break-words">{value}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                </section>
+
+                <section className="bg-slate-50 border border-slate-200 rounded-xl p-4 sm:p-5">
+                  <div className="flex items-center gap-2.5 mb-4">
+                    <span className="w-[30px] h-[30px] shrink-0 rounded-lg bg-pink-100 text-pink-600 flex items-center justify-center">
+                      <HandCoins className="w-4 h-4" />
+                    </span>
+                    <div>
+                      <h4 className="text-[13px] font-bold uppercase tracking-[0.5px] text-slate-800">Request refund</h4>
+                      <p className="text-xs text-slate-400 mt-0.5">Refund all or part of this payment</p>
+                    </div>
+                  </div>
+                  <div className="space-y-4">
+                    <label className="block">
+                      <span className="block text-xs font-semibold text-slate-600 mb-1.5">Refund reason</span>
                     <input
                       value={refundReason}
                       onChange={(event) => setRefundReason(event.target.value)}
-                      className="w-full border border-slate-300 rounded-lg px-3 py-2"
+                      className="w-full h-10 border border-slate-300 bg-white rounded-lg px-3 text-sm focus:outline-none focus:ring-2 focus:ring-pink-100 focus:border-pink-400"
                       placeholder="Refund reason"
                     />
                   </label>
                   <label className="block">
-                    <span className="block text-slate-700 mb-1">Refund amount (USD)</span>
+                      <span className="block text-xs font-semibold text-slate-600 mb-1.5">
+                        Refund amount ({selectedPayment.currency?.toUpperCase() || 'USD'})
+                      </span>
                     <input
                       value={refundAmount}
                       onChange={(event) => setRefundAmount(event.target.value)}
-                      className="w-full border border-slate-300 rounded-lg px-3 py-2"
+                      className="w-full h-10 border border-slate-300 bg-white rounded-lg px-3 text-sm focus:outline-none focus:ring-2 focus:ring-pink-100 focus:border-pink-400"
                       placeholder="Amount"
                       type="number"
                       step="0.01"
+                      min="0"
                     />
                   </label>
                   <button
-                    className="w-full px-4 py-2 rounded-lg text-white"
-                    style={{ background: 'linear-gradient(135deg, #e11d48 0%, #db2777 100%)' }}
+                      type="button"
+                      className="w-full h-10 inline-flex items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-pink-600 to-rose-500 text-white text-sm font-semibold shadow-sm hover:from-pink-700 hover:to-rose-600 transition-colors"
                     onClick={handleRefund}
                   >
-                    <HandCoins className="w-4 h-4 inline-block mr-1" /> Apply refund
+                      <HandCoins className="w-4 h-4" /> Apply refund
                   </button>
+                  </div>
+                  <p className="mt-3 text-[11px] leading-relaxed text-slate-400">
+                    Leave the amount empty to request a full refund.
+                  </p>
+                </section>
+              </div>
+
+              <section className="mt-4 bg-slate-50 border border-slate-200 rounded-xl p-4 sm:p-5">
+                <div className="flex items-center gap-2.5 mb-4">
+                  <span className="w-[30px] h-[30px] shrink-0 rounded-lg bg-violet-100 text-violet-600 flex items-center justify-center">
+                    <ReceiptText className="w-4 h-4" />
+                  </span>
+                  <div>
+                    <h4 className="text-[13px] font-bold uppercase tracking-[0.5px] text-slate-800">Gateway details</h4>
+                    <p className="text-xs text-slate-400 mt-0.5">Raw response received from the payment provider</p>
+                  </div>
                 </div>
-              </div>
+                <pre className="custom-scrollbar max-h-44 overflow-auto whitespace-pre-wrap break-words text-xs leading-5 text-slate-600 bg-white border border-slate-200 p-4 rounded-lg">
+                  {buildPayload(selectedPayment.gatewayPayload || '')}
+                </pre>
+              </section>
 
-              <div className="rounded border border-slate-200 p-3">
-                <p className="font-semibold mb-2">Raw gateway details</p>
-                <pre className="text-xs bg-slate-50 border border-slate-100 p-3 rounded overflow-auto">{buildPayload(selectedPayment.gatewayPayload || '')}</pre>
-              </div>
-
-              <div className="rounded border border-slate-200 p-3 space-y-2">
-                <p className="font-semibold">Manual subscription trigger</p>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                  <input
+              <section className="mt-4 bg-slate-50 border border-slate-200 rounded-xl p-4 sm:p-5">
+                <div className="flex items-center gap-2.5 mb-4">
+                  <span className="w-[30px] h-[30px] shrink-0 rounded-lg bg-cyan-100 text-cyan-600 flex items-center justify-center">
+                    <Clipboard className="w-4 h-4" />
+                  </span>
+                  <div>
+                    <h4 className="text-[13px] font-bold uppercase tracking-[0.5px] text-slate-800">Manual subscription action</h4>
+                    <p className="text-xs text-slate-400 mt-0.5">Record a verified subscription event manually</p>
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <label className="block">
+                    <span className="block text-xs font-semibold text-slate-600 mb-1.5">Source</span>
+                    <input
                     value={manualSource}
                     onChange={(event) => setManualSource(event.target.value)}
-                    className="border border-slate-300 rounded-lg px-3 py-2"
+                      className="w-full h-10 border border-slate-300 bg-white rounded-lg px-3 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-100 focus:border-cyan-400"
                     placeholder="Source"
                   />
-                  <input
+                  </label>
+                  <label className="block">
+                    <span className="block text-xs font-semibold text-slate-600 mb-1.5">Payment method</span>
+                    <input
                     value={manualMethod}
                     onChange={(event) => setManualMethod(event.target.value)}
-                    className="border border-slate-300 rounded-lg px-3 py-2"
+                      className="w-full h-10 border border-slate-300 bg-white rounded-lg px-3 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-100 focus:border-cyan-400"
                     placeholder="Payment method"
                   />
-                  <input
+                  </label>
+                  <label className="block">
+                    <span className="block text-xs font-semibold text-slate-600 mb-1.5">Receiver medium</span>
+                    <input
                     value={manualReceiver}
                     onChange={(event) => setManualReceiver(event.target.value)}
-                    className="border border-slate-300 rounded-lg px-3 py-2"
+                      className="w-full h-10 border border-slate-300 bg-white rounded-lg px-3 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-100 focus:border-cyan-400"
                     placeholder="Receiver medium"
                   />
-                  <input
+                  </label>
+                  <label className="block">
+                    <span className="block text-xs font-semibold text-slate-600 mb-1.5">Sender medium</span>
+                    <input
                     value={manualSender}
                     onChange={(event) => setManualSender(event.target.value)}
-                    className="border border-slate-300 rounded-lg px-3 py-2"
+                      className="w-full h-10 border border-slate-300 bg-white rounded-lg px-3 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-100 focus:border-cyan-400"
                     placeholder="Sender medium"
                   />
+                  </label>
+                  <label className="block sm:col-span-2">
+                    <span className="block text-xs font-semibold text-slate-600 mb-1.5">Reason / notes</span>
                   <textarea
-                    rows={2}
-                    className="md:col-span-2 border border-slate-300 rounded-lg px-3 py-2"
+                      rows={3}
+                      className="w-full resize-y border border-slate-300 bg-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-100 focus:border-cyan-400"
                     placeholder="Reason / notes"
                     value={manualReason}
                     onChange={(event) => setManualReason(event.target.value)}
                   />
+                  </label>
                 </div>
-                <div className="flex justify-end">
+                <div className="mt-4 flex justify-end">
                   <button
-                    className="px-4 py-2 rounded-lg text-white"
-                    style={{ background: 'linear-gradient(135deg, #0284c7 0%, #0891b2 100%)' }}
+                    type="button"
+                    className="w-full sm:w-auto h-10 inline-flex items-center justify-center gap-2 px-5 rounded-lg bg-gradient-to-r from-cyan-500 to-sky-500 text-white text-sm font-semibold shadow-sm hover:from-cyan-600 hover:to-sky-600 transition-colors"
                     onClick={handleManualSubscription}
                   >
-                    <Clipboard className="w-4 h-4 inline-block mr-1" /> Trigger Manual
+                    <Clipboard className="w-4 h-4" /> Trigger Manual
                   </button>
                 </div>
-              </div>
+              </section>
             </div>
           </div>
         </div>

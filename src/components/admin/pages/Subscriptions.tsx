@@ -10,7 +10,21 @@ import {
   ADMIN_MANUAL_SUBSCRIPTION_MUTATION,
 } from '../../../lib/graphql';
 import { formatPrice, formatDate, formatDateTime, toDateTimeLocalValue } from '../../../lib/admin-utils';
-import { Clipboard, Download, Edit2, Eye, Filter, Printer, RefreshCw, Search, X } from 'lucide-react';
+import {
+  Building2,
+  CalendarDays,
+  Clipboard,
+  CreditCard,
+  Download,
+  Edit2,
+  Eye,
+  Filter,
+  Landmark,
+  Printer,
+  RefreshCw,
+  Search,
+  X,
+} from 'lucide-react';
 import { buildColumnFilterOptions, ColumnFilter, matchesColumnFilter } from '../ColumnFilter';
 
 type PaymentStatus = 'pending' | 'succeeded' | 'failed' | 'refunded' | null;
@@ -878,84 +892,160 @@ export const Subscriptions: React.FC<{
       </div>
 
       {viewingPayment ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
-          <div className="max-h-[90vh] w-full max-w-4xl overflow-y-auto rounded-xl bg-white p-6 shadow-xl">
-            <div className="mb-5 flex items-center justify-between gap-3">
-              <div>
-                <h3 className="text-lg font-bold text-slate-800">Subscription Payment Detail</h3>
-                <p className="text-sm text-slate-500">{viewingPayment.paymentIntentId}</p>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 backdrop-blur-sm p-3 sm:p-6">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="subscription-payment-detail-title"
+            className="max-h-[92vh] w-full max-w-5xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl flex flex-col"
+          >
+            <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-5 py-4 sm:px-6 sm:py-5">
+              <div className="min-w-0">
+                <h3
+                  id="subscription-payment-detail-title"
+                  className="text-[22px] font-bold tracking-[-0.3px] text-slate-800"
+                >
+                  Subscription Payment Detail
+                </h3>
+                <p className="mt-1 truncate text-[13px] text-slate-400">
+                  {viewingPayment.displayCompanyName} &bull; {viewingPayment.paymentIntentId}
+                </p>
               </div>
               <button
                 type="button"
                 onClick={() => setViewingPayment(null)}
-                className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"
+                className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
+                title="Close subscription payment detail"
+                aria-label="Close subscription payment detail"
               >
-                <X className="h-5 w-5" />
+                <X className="h-[18px] w-[18px]" />
               </button>
             </div>
 
-            <div className="grid gap-4 md:grid-cols-2">
-              <div className="rounded-lg border border-slate-200 p-4">
-                <h4 className="mb-3 font-semibold text-slate-800">Company</h4>
-                <div className="space-y-2 text-sm text-slate-700">
-                  <p><strong>Company:</strong> {viewingPayment.displayCompanyName}</p>
-                  <p><strong>Company ID:</strong> {viewingPayment.companyId ?? '-'}</p>
-                  <p><strong>Email:</strong> {viewingPayment.email || '-'}</p>
-                  <p><strong>Plan:</strong> {viewingPayment.planName || viewingPayment.planId || '-'}</p>
-                  <p><strong>Employees:</strong> {viewingPayment.employeeCountSnapshot ?? '-'}</p>
+            <div className="custom-scrollbar flex-1 overflow-y-auto overflow-x-hidden p-4 sm:p-6">
+              <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Final amount</p>
+                  <p className="mt-1.5 text-xl font-bold text-slate-900">
+                    {formatPrice(viewingPayment.finalAmountCents ?? viewingPayment.amount, viewingPayment.currency)}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Payment status</p>
+                  <span className={`mt-2 inline-flex rounded-full px-2.5 py-1 text-xs font-semibold capitalize ${getPaymentStatusClass(viewingPayment.status)}`}>
+                    {viewingPayment.status}
+                  </span>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Subscription plan</p>
+                  <p className="mt-1.5 text-base font-bold text-slate-800">
+                    {viewingPayment.planName || viewingPayment.planId || '-'}
+                  </p>
+                  <p className="mt-0.5 text-xs text-slate-500">
+                    {viewingPayment.employeeCountSnapshot ?? '-'} employees
+                  </p>
                 </div>
               </div>
 
-              <div className="rounded-lg border border-slate-200 p-4">
-                <h4 className="mb-3 font-semibold text-slate-800">Payment</h4>
-                <div className="space-y-2 text-sm text-slate-700">
-                  <p><strong>Status:</strong> {viewingPayment.status}</p>
-                  <p><strong>Final amount:</strong> {formatPrice(viewingPayment.finalAmountCents ?? viewingPayment.amount, viewingPayment.currency)}</p>
-                  <p><strong>Original amount:</strong> {viewingPayment.originalAmountCents !== null && viewingPayment.originalAmountCents !== undefined ? formatPrice(viewingPayment.originalAmountCents, viewingPayment.currency) : '-'}</p>
-                  <p><strong>Created:</strong> {formatDateTime(viewingPayment.createdAt || null)}</p>
-                  <p><strong>Updated:</strong> {formatDateTime(viewingPayment.updatedAt || null)}</p>
-                </div>
-              </div>
-
-              <div className="rounded-lg border border-slate-200 p-4">
-                <h4 className="mb-3 font-semibold text-slate-800">Billing Dates</h4>
-                <div className="space-y-2 text-sm text-slate-700">
-                  <p><strong>Due date:</strong> {formatDateTime(viewingPayment.dueDate || null)}</p>
-                  <p><strong>Recurring date:</strong> {formatDateTime(viewingPayment.recurringDate || null)}</p>
-                  <p><strong>Trial end:</strong> {formatDateTime(viewingPayment.trialEndsAt || null)}</p>
-                </div>
-              </div>
-
-              <div className="rounded-lg border border-slate-200 p-4">
-                <h4 className="mb-3 font-semibold text-slate-800">Gateway</h4>
-                <div className="space-y-2 text-sm text-slate-700">
-                  <p><strong>Method:</strong> {getGatewayLabel(viewingPayment)}</p>
-                  <p><strong>Gateway status:</strong> {viewingPayment.paymentGatewayStatus || '-'}</p>
-                  <p><strong>Receiver ref:</strong> {viewingPayment.gatewayRefReceiverMedium || '-'}</p>
-                  <p><strong>Sender ref:</strong> {viewingPayment.gatewayRefSenderMedium || '-'}</p>
-                  <p><strong>Denied reason:</strong> {viewingPayment.deniedReason || '-'}</p>
-                </div>
+              <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                {[
+                  {
+                    title: 'Company information',
+                    subtitle: 'Tenant and billing contact',
+                    icon: Building2,
+                    iconClass: 'bg-blue-100 text-blue-600',
+                    rows: [
+                      ['Company', viewingPayment.displayCompanyName],
+                      ['Company ID', String(viewingPayment.companyId ?? '-')],
+                      ['Billing email', viewingPayment.email || '-'],
+                      ['Employees', String(viewingPayment.employeeCountSnapshot ?? '-')],
+                    ],
+                  },
+                  {
+                    title: 'Payment information',
+                    subtitle: 'Transaction value and activity',
+                    icon: CreditCard,
+                    iconClass: 'bg-pink-100 text-pink-600',
+                    rows: [
+                      ['Payment ID', viewingPayment.paymentIntentId],
+                      ['Original amount', viewingPayment.originalAmountCents !== null && viewingPayment.originalAmountCents !== undefined ? formatPrice(viewingPayment.originalAmountCents, viewingPayment.currency) : '-'],
+                      ['Created', formatDateTime(viewingPayment.createdAt || null)],
+                      ['Updated', formatDateTime(viewingPayment.updatedAt || null)],
+                    ],
+                  },
+                  {
+                    title: 'Billing schedule',
+                    subtitle: 'Subscription dates and renewal',
+                    icon: CalendarDays,
+                    iconClass: 'bg-amber-100 text-amber-600',
+                    rows: [
+                      ['Due date', formatDateTime(viewingPayment.dueDate || null)],
+                      ['Recurring date', formatDateTime(viewingPayment.recurringDate || null)],
+                      ['Trial end', formatDateTime(viewingPayment.trialEndsAt || null)],
+                    ],
+                  },
+                  {
+                    title: 'Gateway information',
+                    subtitle: 'Provider status and references',
+                    icon: Landmark,
+                    iconClass: 'bg-violet-100 text-violet-600',
+                    rows: [
+                      ['Method', getGatewayLabel(viewingPayment)],
+                      ['Gateway status', viewingPayment.paymentGatewayStatus || '-'],
+                      ['Receiver reference', viewingPayment.gatewayRefReceiverMedium || '-'],
+                      ['Sender reference', viewingPayment.gatewayRefSenderMedium || '-'],
+                      ['Denied reason', viewingPayment.deniedReason || '-'],
+                    ],
+                  },
+                ].map((section) => {
+                  const Icon = section.icon;
+                  return (
+                    <section key={section.title} className="rounded-xl border border-slate-200 bg-slate-50 p-4 sm:p-5">
+                      <div className="mb-4 flex items-center gap-2.5">
+                        <span className={`flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-lg ${section.iconClass}`}>
+                          <Icon className="h-4 w-4" />
+                        </span>
+                        <div>
+                          <h4 className="text-[13px] font-bold uppercase tracking-[0.5px] text-slate-800">
+                            {section.title}
+                          </h4>
+                          <p className="mt-0.5 text-xs text-slate-400">{section.subtitle}</p>
+                        </div>
+                      </div>
+                      <dl>
+                        {section.rows.map(([label, value]) => (
+                          <div key={label} className="flex flex-col gap-1 border-b border-slate-200/80 py-3 last:border-b-0 sm:flex-row sm:items-start sm:justify-between sm:gap-6">
+                            <dt className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">{label}</dt>
+                            <dd className="min-w-0 break-words text-sm font-semibold text-slate-700 sm:max-w-[65%] sm:text-right">
+                              {value}
+                            </dd>
+                          </div>
+                        ))}
+                      </dl>
+                    </section>
+                  );
+                })}
               </div>
             </div>
 
-            <div className="mt-5 flex justify-end gap-2">
+            <div className="flex flex-col-reverse gap-2 border-t border-slate-100 bg-white px-5 py-4 sm:flex-row sm:justify-end sm:px-6">
+              <button
+                type="button"
+                onClick={() => setViewingPayment(null)}
+                className="h-10 w-full rounded-lg border border-slate-300 bg-white px-5 text-sm font-semibold text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-800 sm:w-auto"
+              >
+                Close
+              </button>
               <button
                 type="button"
                 onClick={() => {
                   openEditPayment(viewingPayment);
                   setViewingPayment(null);
                 }}
-                className="inline-flex items-center gap-2 rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-700"
+                className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-cyan-500 to-sky-500 px-5 text-sm font-semibold text-white shadow-sm transition-colors hover:from-cyan-600 hover:to-sky-600 sm:w-auto"
               >
                 <Edit2 className="h-4 w-4" />
-                Edit
-              </button>
-              <button
-                type="button"
-                onClick={() => setViewingPayment(null)}
-                className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-              >
-                Close
+                Edit Payment
               </button>
             </div>
           </div>
