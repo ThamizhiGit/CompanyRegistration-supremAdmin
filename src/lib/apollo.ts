@@ -6,13 +6,20 @@ const SESSION_TOKEN_KEY = 'token';
 const SESSION_USERNAME_KEY = 'adminUsername';
 const SESSION_EXPIRES_AT_KEY = 'adminExpiresAt';
 
-// Use environment variable for GraphQL URI, fallback to local development URL
+// Set via .env.local (dev) / .env.production (build). See .env.example.
+// Vite inlines this at BUILD time — changing it requires a rebuild.
 const GRAPHQL_URI = import.meta.env.VITE_GRAPHQL_URI || 'http://localhost:8000/graphql/';
 const GRAPHQL_DEBUG = import.meta.env.DEV && import.meta.env.VITE_GRAPHQL_DEBUG === '1';
 
-if (GRAPHQL_DEBUG) {
-  console.debug('Connecting to GraphQL at:', GRAPHQL_URI);
+if (import.meta.env.PROD && !import.meta.env.VITE_GRAPHQL_URI) {
+  console.error(
+    '[config] VITE_GRAPHQL_URI is not set for this build. ' +
+    'Falling back to http://localhost:8000/graphql/, which will fail in the browser. ' +
+    'Set it in .env.production or as a BUILD-time env var on your host, then rebuild.'
+  );
 }
+
+console.log('Connecting to GraphQL at:', GRAPHQL_URI);
 
 // Auth link to add the super-admin token if present in localStorage.
 // The admin API expects the raw token in X-SuperAdmin-Authorization (no "Bearer" prefix).
