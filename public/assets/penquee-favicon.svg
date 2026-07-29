@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96">
+  <g fill="none" stroke="#fff" stroke-linecap="round" stroke-linejoin="round" stroke-width="4">
+    <rect width="28" height="28" x="2" y="2" rx="6" fill="#6b98db" stroke="none"/>
+    <path d="m9 16 5 5 9-11"/>
+
+    <rect width="28" height="28" x="34" y="2" rx="6" fill="#f3454f" stroke="none"/>
+    <path d="m41 16 5 5 9-11"/>
+
+    <rect width="28" height="28" x="66" y="2" rx="6" fill="#ed1762" stroke="none"/>
+    <path d="m73 16 5 5 9-11"/>
+
+    <rect width="28" height="28" x="2" y="34" rx="6" fill="#22bc79" stroke="none"/>
+    <path d="m9 48 5 5 9-11"/>
+
+    <rect width="28" height="28" x="34" y="34" rx="6" fill="#2c4192" stroke="none"/>
+    <path d="m41 48 5 5 9-11"/>
+
+    <rect width="28" height="28" x="66" y="34" rx="6" fill="#f6a91d" stroke="none"/>
+    <path d="m73 48 5 5 9-11"/>
+
+    <rect width="28" height="28" x="2" y="66" rx="6" fill="#9237b4" stroke="none"/>
+    <path d="m9 80 5 5 9-11"/>
+
+    <rect width="28" height="28" x="34" y="66" rx="6" fill="#ffc21a" stroke="none"/>
+    <path d="m41 80 5 5 9-11"/>
+
+    <rect width="28" height="28" x="66" y="66" rx="6" fill="#267b73" stroke="none"/>
+    <path d="m73 80 5 5 9-11"/>
+  </g>
+</svg>

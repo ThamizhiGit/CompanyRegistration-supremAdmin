@@ -2,17 +2,38 @@ import React from 'react';
 import { useQuery } from '@apollo/client/react';
 import { ADMIN_REVENUE_SUMMARY_QUERY } from '../../../lib/graphql';
 import { formatPrice } from '../../../lib/admin-utils';
-import { BarChart3, Building2, Users, CreditCard, TrendingUp } from 'lucide-react';
+import { Building2, CreditCard, ReceiptText, TrendingUp, Users, WalletCards, type LucideIcon } from 'lucide-react';
+
+interface RevenueStatusSummary {
+  status: string;
+  count: number;
+  amount: number;
+}
+
+interface RevenueSummary {
+  totalCompanies: number;
+  totalUsers: number;
+  totalPayments: number;
+  grossRevenue: number;
+  totalExpenses?: number | null;
+  netRevenue?: number | null;
+  byStatus: RevenueStatusSummary[];
+}
+
+interface DashboardCard {
+  label: string;
+  eyebrow: string;
+  value: string | number;
+  icon: LucideIcon;
+  panel: string;
+  textColor: string;
+  iconColor: string;
+  shadowColor: string;
+}
 
 export const Dashboard: React.FC = () => {
   const { data, loading, error } = useQuery<{
-    adminRevenueSummary: {
-      totalCompanies: number;
-      totalUsers: number;
-      totalPayments: number;
-      grossRevenue: number;
-      byStatus: Array<{ status: string; count: number; amount: number }>;
-    };
+    adminRevenueSummary: RevenueSummary;
   }, Record<string, never>, any>(ADMIN_REVENUE_SUMMARY_QUERY);
 
   if (loading) {
@@ -20,22 +41,17 @@ export const Dashboard: React.FC = () => {
   }
 
   if (error) {
-    const token = localStorage.getItem('token');
     const errorMsg = (error as any).graphQLErrors?.[0]?.message || error.message;
-    console.error('Dashboard Error:', { error, token: token ? 'Present' : 'Missing' });
+    if (import.meta.env.DEV) {
+      console.error('Dashboard Error:', error);
+    }
 
     return (
       <div className="text-center py-12">
         <div className="max-w-md mx-auto">
-          <div className="text-red-600 text-5xl mb-4">⚠️</div>
+          <div className="text-red-600 text-5xl mb-4">!</div>
           <h3 className="text-xl font-bold text-red-600 mb-2">Error Loading Dashboard</h3>
           <p className="text-red-600 text-sm mb-4">{errorMsg}</p>
-          <div className="bg-slate-50 border border-slate-200 rounded p-3 text-left text-xs text-slate-600 space-y-1">
-            <p><strong>Debug Info:</strong></p>
-            <p>Token: {token ? '✅ Present' : '❌ Missing'}</p>
-            <p>User: {localStorage.getItem('adminUsername')}</p>
-            <p>Error: {errorMsg}</p>
-          </div>
         </div>
       </div>
     );
@@ -47,38 +63,71 @@ export const Dashboard: React.FC = () => {
     return <div className="text-center py-12 text-slate-500">No data available</div>;
   }
 
-  const cards = [
+  const totalExpenses = summary.totalExpenses ?? 0;
+  const netRevenue = summary.netRevenue ?? (summary.grossRevenue - totalExpenses);
+
+  const cards: DashboardCard[] = [
     {
-      label: 'Total Companies',
+      label: 'Companies',
+      eyebrow: 'Total Count',
       value: summary.totalCompanies || 0,
       icon: Building2,
-      gradient: 'linear-gradient(135deg, #e8fcf9 0%, #b3e5fc 100%)',
-      textColor: '#0288d1',
-      accentColor: '#00cbd6'
+      panel: 'linear-gradient(135deg, #eef3ff 0%, #f6f4ff 100%)',
+      textColor: '#2452d6',
+      iconColor: '#4f6df5',
+      shadowColor: 'rgba(79, 109, 245, 0.24)'
     },
     {
-      label: 'Total Users',
+      label: 'Users',
+      eyebrow: 'Total Count',
       value: summary.totalUsers || 0,
       icon: Users,
-      gradient: 'linear-gradient(135deg, #e0f2f1 0%, #c8e6c9 100%)',
-      textColor: '#00695c',
-      accentColor: '#10b981'
+      panel: 'linear-gradient(135deg, #effcf8 0%, #e3fbfb 100%)',
+      textColor: '#04745f',
+      iconColor: '#10b99c',
+      shadowColor: 'rgba(16, 185, 156, 0.22)'
     },
     {
-      label: 'Total Payments',
+      label: 'Payments',
+      eyebrow: 'Total Count',
       value: summary.totalPayments || 0,
       icon: CreditCard,
-      gradient: 'linear-gradient(135deg, #f3e5f5 0%, #ede7f6 100%)',
-      textColor: '#6a1b9a',
-      accentColor: '#7c4dff'
+      panel: 'linear-gradient(135deg, #fff7e8 0%, #fff8cf 100%)',
+      textColor: '#b65608',
+      iconColor: '#f57c00',
+      shadowColor: 'rgba(245, 124, 0, 0.24)'
     },
     {
       label: 'Gross Revenue',
+      eyebrow: 'Total Amount',
       value: formatPrice(summary.grossRevenue),
       icon: TrendingUp,
-      gradient: 'linear-gradient(135deg, #fff3e0 0%, #ffe0b2 100%)',
-      textColor: '#e65100',
-      accentColor: '#ff6f00'
+      panel: 'linear-gradient(135deg, #fff0f6 0%, #f8efff 100%)',
+      textColor: '#c41463',
+      iconColor: '#ec3a78',
+      shadowColor: 'rgba(236, 58, 120, 0.22)'
+    },
+    {
+      label: 'Total Expenses',
+      eyebrow: 'Total Amount',
+      value: formatPrice(totalExpenses),
+      icon: ReceiptText,
+      panel: 'linear-gradient(135deg, #f7f0ff 0%, #eef2ff 100%)',
+      textColor: '#6b2de6',
+      iconColor: '#8b4cf0',
+      shadowColor: 'rgba(139, 76, 240, 0.22)'
+    },
+    {
+      label: 'Net Revenue',
+      eyebrow: 'Net Amount',
+      value: formatPrice(netRevenue),
+      icon: WalletCards,
+      panel: netRevenue >= 0
+        ? 'linear-gradient(135deg, #eefdf3 0%, #e7fbec 100%)'
+        : 'linear-gradient(135deg, #fff1f2 0%, #ffe4e6 100%)',
+      textColor: netRevenue >= 0 ? '#087c4d' : '#be123c',
+      iconColor: netRevenue >= 0 ? '#15b66c' : '#e83c64',
+      shadowColor: netRevenue >= 0 ? 'rgba(21, 182, 108, 0.22)' : 'rgba(232, 60, 100, 0.22)'
     }
   ];
 
@@ -89,29 +138,39 @@ export const Dashboard: React.FC = () => {
         <p className="text-slate-600">Platform overview and key metrics</p>
       </div>
 
-      {/* KPI Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        {cards.map((card: any) => {
+      <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
+        {cards.map((card) => {
           const Icon = card.icon;
+
           return (
             <div
               key={card.label}
-              className="rounded-2xl p-6 backdrop-blur-md transition-all hover:scale-105 hover:shadow-lg group"
+              className="group flex min-h-[104px] items-center gap-4 rounded-2xl border border-white/70 p-4 transition-transform hover:-translate-y-0.5"
               style={{
-                background: card.gradient,
-                border: `2px solid rgba(255, 255, 255, 0.4)`,
-                boxShadow: '0 8px 16px rgba(0, 203, 214, 0.1)'
+                background: card.panel,
+                boxShadow: `0 10px 22px ${card.shadowColor}, 0 2px 8px rgba(15, 23, 42, 0.08)`
               }}
             >
-              <div className="flex items-start justify-between mb-4">
-                <span className="text-sm font-bold" style={{color: card.textColor}}>{card.label}</span>
-                <div className="p-2 rounded-lg transition-transform group-hover:scale-110" style={{
-                  backgroundColor: `rgba(${card.accentColor === '#00cbd6' ? '0, 203, 214' : card.accentColor === '#10b981' ? '16, 185, 129' : card.accentColor === '#7c4dff' ? '124, 77, 255' : '255, 111, 0'}, 0.15)`
-                }}>
-                  <Icon className="w-5 h-5" style={{color: card.accentColor}} />
-                </div>
+              <div
+                className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl text-white transition-transform group-hover:-translate-y-0.5"
+                style={{
+                  backgroundColor: card.iconColor,
+                  boxShadow: `0 12px 18px ${card.shadowColor}`
+                }}
+              >
+                <Icon className="h-6 w-6" aria-hidden="true" />
               </div>
-              <div className="text-4xl font-black" style={{color: card.textColor}}>{card.value}</div>
+              <div className="min-w-0">
+                <p className="truncate text-[15px] font-bold leading-5" style={{ color: card.textColor }}>
+                  {card.label}
+                </p>
+                <p className="mt-0.5 text-xs font-semibold leading-4" style={{ color: card.textColor }}>
+                  {card.eyebrow}
+                </p>
+                <p className="mt-1 truncate text-2xl font-black leading-7" style={{ color: card.textColor }} title={String(card.value)}>
+                  {card.value}
+                </p>
+              </div>
             </div>
           );
         })}
@@ -152,6 +211,7 @@ export const Dashboard: React.FC = () => {
           </div>
         </div>
       )}
+
     </div>
   );
 };

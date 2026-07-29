@@ -8,9 +8,15 @@
     "build": "vite build",
     "preview": "vite preview --port=3001 --host=0.0.0.0",
     "lint": "tsc --noEmit",
-    "test": "playwright test",
-    "test:ui": "playwright test --ui",
-    "test:debug": "playwright test --debug"
+    "test": "npm run test:e2e && npm run test:ct",
+    "test:e2e": "playwright test",
+    "test:mocked": "playwright test --project=mocked-chromium",
+    "test:integration": "playwright test --project=real-backend-chromium",
+    "test:all": "npm test",
+    "test:ct": "playwright test --config=playwright-ct.config.ts",
+    "test:ct:ui": "playwright test --config=playwright-ct.config.ts --ui",
+    "test:ui": "playwright test --project=mocked-chromium --ui",
+    "test:debug": "playwright test --project=mocked-chromium --debug"
   },
   "dependencies": {
     "@apollo/client": "^4.1.5",
@@ -24,6 +30,7 @@
     "vite": "^6.2.0"
   },
   "devDependencies": {
+    "@playwright/experimental-ct-react": "^1.61.1",
     "@playwright/test": "^1.61.1",
     "@types/node": "^22.14.0",
     "@types/react": "^19.2.17",
