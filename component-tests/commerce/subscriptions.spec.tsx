@@ -86,7 +86,8 @@ test.describe('commerce / subscriptions', () => {
     await expect(component.getByRole('heading', { name: 'Payment information' })).toBeVisible();
     await expect(component.getByRole('heading', { name: 'Billing schedule' })).toBeVisible();
     await expect(component.getByRole('heading', { name: 'Gateway information' })).toBeVisible();
-    await expect(component.getByRole('button', { name: 'Edit Payment' })).toBeVisible();
+    await expect(component.getByRole('button', { name: 'Edit Payment' })).toHaveCount(0);
+    await expect(component.getByRole('button', { name: 'Close', exact: true })).toBeVisible();
   });
 
   test('opens all subscription administration actions and validates their required reasons', async ({ mount }) => {

@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { useQuery } from '@apollo/client/react';
-import { BarChart3, CalendarDays, Download, FileText, ReceiptText, WalletCards } from 'lucide-react';
+import { BarChart3, CalendarDays, Download, Printer, ReceiptText, RefreshCw, WalletCards } from 'lucide-react';
 import { ADMIN_ACCOUNTS_REPORT_QUERY } from '../../../lib/graphql';
 import { formatPrice } from '../../../lib/admin-utils';
 import { Infrastructure } from './Infrastructure';
@@ -230,25 +230,29 @@ const AccountsReportTable: React.FC<{ period: 'monthly' | 'annual' }> = ({ perio
         </div>
         <div className="flex flex-wrap gap-2">
           <button
+            type="button"
             onClick={() => refetch(variables)}
-            className="inline-flex h-9 items-center rounded-lg border border-slate-200 px-4 text-sm font-bold text-slate-700 hover:bg-slate-50"
+            className="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
           >
+            <RefreshCw className="h-4 w-4" />
             Refresh
           </button>
           <button
+            type="button"
             onClick={exportExcel}
             disabled={!report}
-            className="inline-flex h-9 items-center gap-2 rounded-lg border border-slate-200 px-4 text-sm font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+            className="inline-flex items-center gap-2 rounded-lg border border-emerald-200 px-3 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Download className="h-4 w-4" />
             Excel
           </button>
           <button
+            type="button"
             onClick={exportPdf}
             disabled={!report}
-            className="inline-flex h-9 items-center gap-2 rounded-lg border border-slate-200 px-4 text-sm font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+            className="inline-flex items-center gap-2 rounded-lg border border-blue-200 px-3 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            <FileText className="h-4 w-4" />
+            <Printer className="h-4 w-4" />
             PDF
           </button>
         </div>

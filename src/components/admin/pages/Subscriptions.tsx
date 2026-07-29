@@ -29,7 +29,7 @@ import { buildColumnFilterOptions, ColumnFilter, matchesColumnFilter } from '../
 
 type PaymentStatus = 'pending' | 'succeeded' | 'failed' | 'refunded' | null;
 type SortDirection = 'asc' | 'desc' | null;
-type PaymentSortKey = 'displayCompanyName' | 'email' | 'planName' | 'amount' | 'dueDate' | 'trialEndsAt' | 'status' | 'createdAt';
+type PaymentSortKey = 'displayCompanyName' | 'email' | 'planName' | 'amount' | 'dueDate' | 'trialEndsAt' | 'status' | 'createdAt' | 'recurringDate';
 
 interface PaymentType {
   paymentIntentId: string;
@@ -131,6 +131,7 @@ export const Subscriptions: React.FC<{
   const [planSelections, setPlanSelections] = useState<string[]>([]);
   const [amountSelections, setAmountSelections] = useState<string[]>([]);
   const [dueDateSelections, setDueDateSelections] = useState<string[]>([]);
+  const [recurringDateSelections, setRecurringDateSelections] = useState<string[]>([]);
   const [trialEndSelections, setTrialEndSelections] = useState<string[]>([]);
   const [statusSelections, setStatusSelections] = useState<string[]>([]);
   const [gatewaySelections, setGatewaySelections] = useState<string[]>([]);
@@ -520,6 +521,10 @@ export const Subscriptions: React.FC<{
     () => buildColumnFilterOptions(indexedPayments, (payment) => formatDate(payment.dueDate)),
     [indexedPayments],
   );
+  const recurringDateOptions = useMemo(
+    () => buildColumnFilterOptions(indexedPayments, (payment) => formatDate(payment.recurringDate)),
+    [indexedPayments],
+  );
   const trialEndOptions = useMemo(
     () => buildColumnFilterOptions(indexedPayments, (payment) => formatDate(payment.trialEndsAt)),
     [indexedPayments],
@@ -554,6 +559,7 @@ export const Subscriptions: React.FC<{
       matchesColumnFilter(planSelections, payment.planName || payment.planId || '-') &&
       matchesColumnFilter(amountSelections, getAmountFilterValue(payment)) &&
       matchesColumnFilter(dueDateSelections, formatDate(payment.dueDate)) &&
+      matchesColumnFilter(recurringDateSelections, formatDate(payment.recurringDate)) &&
       matchesColumnFilter(trialEndSelections, formatDate(payment.trialEndsAt)) &&
       matchesColumnFilter(statusSelections, payment.status) &&
       matchesColumnFilter(gatewaySelections, getGatewayLabel(payment)) &&
@@ -573,7 +579,7 @@ export const Subscriptions: React.FC<{
       if (leftValue > rightValue) return sortDirection === 'asc' ? 1 : -1;
       return 0;
     });
-  }, [indexedPayments, normalizedCompanySearch, companySelections, emailSelections, planSelections, amountSelections, dueDateSelections, trialEndSelections, statusSelections, gatewaySelections, createdSelections, dueOnly, sortKey, sortDirection]);
+  }, [indexedPayments, normalizedCompanySearch, companySelections, emailSelections, planSelections, amountSelections, dueDateSelections, recurringDateSelections, trialEndSelections, statusSelections, gatewaySelections, createdSelections, dueOnly, sortKey, sortDirection]);
 
   const cycleSort = (key: PaymentSortKey) => {
     if (sortKey !== key) {
@@ -603,11 +609,11 @@ export const Subscriptions: React.FC<{
       return;
     }
     const rows = filteredPayments.map((payment) => (
-      `<tr><td>${escapeHtml(payment.displayCompanyName)}</td><td>${escapeHtml(payment.email)}</td><td>${escapeHtml(payment.planName || payment.planId || '-')}</td><td>${escapeHtml(formatPrice(payment.finalAmountCents ?? payment.amount, payment.currency))}</td><td>${escapeHtml(payment.status)}</td><td>${escapeHtml(formatDate(payment.dueDate || null))}</td><td>${escapeHtml(formatDate(payment.createdAt))}</td></tr>`
+      `<tr><td>${escapeHtml(payment.displayCompanyName)}</td><td>${escapeHtml(payment.email)}</td><td>${escapeHtml(payment.planName || payment.planId || '-')}</td><td>${escapeHtml(formatPrice(payment.finalAmountCents ?? payment.amount, payment.currency))}</td><td>${escapeHtml(payment.status)}</td><td>${escapeHtml(formatDate(payment.dueDate || null))}</td><td>${escapeHtml(formatDate(payment.recurringDate || null))}</td><td>${escapeHtml(formatDate(payment.createdAt))}</td></tr>`
     )).join('');
     downloadTextFile(
       'superadmin-subscriptions.xls',
-      `<!doctype html><html><head><meta charset="utf-8" /></head><body><table><thead><tr><th>Company</th><th>Email</th><th>Plan</th><th>Amount</th><th>Status</th><th>Due Date</th><th>Created</th></tr></thead><tbody>${rows}</tbody></table></body></html>`,
+      `<!doctype html><html><head><meta charset="utf-8" /></head><body><table><thead><tr><th>Company</th><th>Email</th><th>Plan</th><th>Amount</th><th>Status</th><th>Due Date</th><th>Recurring Date</th><th>Created</th></tr></thead><tbody>${rows}</tbody></table></body></html>`,
       'application/vnd.ms-excel;charset=utf-8',
     );
     onToast('success', 'Excel file downloaded successfully!');
@@ -619,11 +625,11 @@ export const Subscriptions: React.FC<{
       return;
     }
     const rows = filteredPayments.map((payment) => (
-      `<tr><td>${escapeHtml(payment.displayCompanyName)}</td><td>${escapeHtml(payment.email)}</td><td>${escapeHtml(payment.planName || payment.planId || '-')}</td><td>${escapeHtml(formatPrice(payment.finalAmountCents ?? payment.amount, payment.currency))}</td><td>${escapeHtml(payment.status)}</td><td>${escapeHtml(formatDate(payment.dueDate || null))}</td></tr>`
+      `<tr><td>${escapeHtml(payment.displayCompanyName)}</td><td>${escapeHtml(payment.email)}</td><td>${escapeHtml(payment.planName || payment.planId || '-')}</td><td>${escapeHtml(formatPrice(payment.finalAmountCents ?? payment.amount, payment.currency))}</td><td>${escapeHtml(payment.status)}</td><td>${escapeHtml(formatDate(payment.dueDate || null))}</td><td>${escapeHtml(formatDate(payment.recurringDate || null))}</td></tr>`
     )).join('');
     const printWindow = window.open('', '_blank', 'noopener,noreferrer,width=1024,height=768');
     if (!printWindow) return;
-    printWindow.document.write(`<!doctype html><html><head><title>Subscriptions</title><style>body{font-family:Arial,sans-serif;padding:28px;color:#0f172a}table{border-collapse:collapse;width:100%}th,td{border:1px solid #cbd5e1;padding:8px 10px;text-align:left}th{background:#f1f5f9}</style></head><body><h1>Subscriptions & Payments</h1><table><thead><tr><th>Company</th><th>Email</th><th>Plan</th><th>Amount</th><th>Status</th><th>Due Date</th></tr></thead><tbody>${rows}</tbody></table></body></html>`);
+    printWindow.document.write(`<!doctype html><html><head><title>Subscriptions</title><style>body{font-family:Arial,sans-serif;padding:28px;color:#0f172a}table{border-collapse:collapse;width:100%}th,td{border:1px solid #cbd5e1;padding:8px 10px;text-align:left}th{background:#f1f5f9}</style></head><body><h1>Subscriptions & Payments</h1><table><thead><tr><th>Company</th><th>Email</th><th>Plan</th><th>Amount</th><th>Status</th><th>Due Date</th><th>Recurring Date</th></tr></thead><tbody>${rows}</tbody></table></body></html>`);
     printWindow.document.close();
     printWindow.focus();
     printWindow.print();
@@ -684,6 +690,7 @@ export const Subscriptions: React.FC<{
                 setPlanSelections([]);
                 setAmountSelections([]);
                 setDueDateSelections([]);
+                setRecurringDateSelections([]);
                 setTrialEndSelections([]);
                 setStatusSelections([]);
                 setGatewaySelections([]);
@@ -702,11 +709,17 @@ export const Subscriptions: React.FC<{
           >
             <Filter className="h-4 w-4" />
           </button>
-          <button onClick={exportPayments} className="inline-flex h-9 items-center gap-2 rounded-lg border border-slate-200 px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+          <button
+            onClick={exportPayments}
+            className="inline-flex h-10 items-center gap-2 rounded-lg border border-emerald-200 px-3 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-50"
+          >
             <Download className="h-4 w-4" /> Excel
           </button>
-          <button onClick={printPayments} className="inline-flex h-9 items-center gap-2 rounded-lg border border-slate-200 px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">
-            <Printer className="h-4 w-4" /> Print
+          <button
+            onClick={printPayments}
+            className="inline-flex h-10 items-center gap-2 rounded-lg border border-blue-200 px-3 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-50"
+          >
+            <Printer className="h-4 w-4" /> PDF
           </button>
         </div>
       </div>
@@ -721,6 +734,7 @@ export const Subscriptions: React.FC<{
                   <th className="py-3 px-3"><SortHeader label="Plan" column="planName" /></th>
                   <th className="py-3 px-3"><SortHeader label="Amount" column="amount" /></th>
                   <th className="py-3 px-3"><SortHeader label="Due Date" column="dueDate" /></th>
+                  <th className="py-3 px-3"><SortHeader label="Recurring Date" column="recurringDate" /></th>
                   <th className="py-3 px-3"><SortHeader label="Trial End" column="trialEndsAt" /></th>
                   <th className="py-3 px-3"><SortHeader label="Status" column="status" /></th>
                   <th className="text-left py-3 px-3 font-semibold text-slate-700">Gateway</th>
@@ -781,6 +795,14 @@ export const Subscriptions: React.FC<{
                   </th>
                   <th className="px-3 py-2">
                     <ColumnFilter
+                      label="Recurring Date"
+                      options={recurringDateOptions}
+                      selectedValues={recurringDateSelections}
+                      onChange={setRecurringDateSelections}
+                    />
+                  </th>
+                  <th className="px-3 py-2">
+                    <ColumnFilter
                       label="Trial End"
                       options={trialEndOptions}
                       selectedValues={trialEndSelections}
@@ -818,7 +840,7 @@ export const Subscriptions: React.FC<{
               <tbody>
                 {filteredPayments.length === 0 ? (
                   <tr>
-                    <td colSpan={10} className="px-4 py-12 text-center text-slate-500">
+                    <td colSpan={11} className="px-4 py-12 text-center text-slate-500">
                       {payments.length === 0 ? 'No payments found' : 'No payments match your filters'}
                     </td>
                   </tr>
@@ -844,8 +866,10 @@ export const Subscriptions: React.FC<{
                         ) : null}
                       </td>
                       <td className="py-3 px-3 text-slate-600 text-sm">
-                        <div>{formatDate(payment.dueDate || null)}</div>
-                        <div className="text-xs text-slate-400">Recurring {formatDate(payment.recurringDate || null)}</div>
+                        {formatDate(payment.dueDate || null)}
+                      </td>
+                      <td className="py-3 px-3 text-slate-600 text-sm">
+                        {formatDate(payment.recurringDate || null)}
                       </td>
                       <td className="py-3 px-3 text-slate-600 text-sm">
                         {formatDate(payment.trialEndsAt || null)}
@@ -1028,24 +1052,13 @@ export const Subscriptions: React.FC<{
               </div>
             </div>
 
-            <div className="flex flex-col-reverse gap-2 border-t border-slate-100 bg-white px-5 py-4 sm:flex-row sm:justify-end sm:px-6">
+            <div className="flex border-t border-slate-100 bg-white px-5 py-4 sm:justify-end sm:px-6">
               <button
                 type="button"
                 onClick={() => setViewingPayment(null)}
                 className="h-10 w-full rounded-lg border border-slate-300 bg-white px-5 text-sm font-semibold text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-800 sm:w-auto"
               >
                 Close
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  openEditPayment(viewingPayment);
-                  setViewingPayment(null);
-                }}
-                className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-cyan-500 to-sky-500 px-5 text-sm font-semibold text-white shadow-sm transition-colors hover:from-cyan-600 hover:to-sky-600 sm:w-auto"
-              >
-                <Edit2 className="h-4 w-4" />
-                Edit Payment
               </button>
             </div>
           </div>
