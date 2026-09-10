@@ -451,6 +451,13 @@ export const ADMIN_COMPANIES_QUERY = gql`
       latestPaymentGatewayRefSenderMedium
       latestPaymentGatewayStatus
       latestPaymentCreatedAt
+      paymentSummary {
+        latestStatus
+        lastPaymentAt
+        nextDueDate
+        totalPaid
+        outstanding
+      }
     }
   }
 `;
@@ -464,8 +471,15 @@ export const ADMIN_COMPANY_PAYMENT_HISTORY_QUERY = gql`
       planName
       employeeCountSnapshot
       originalAmountCents
+      discountAmountCents
       finalAmountCents
+      billingInterval
+      promoCode
+      promoLabel
+      trialStartsAt
       trialEndsAt
+      nextBillingDate
+      invoiceNumber
       status
       amount
       currency
@@ -489,14 +503,22 @@ export const ADMIN_COMPANY_PAYMENT_HISTORY_QUERY = gql`
 export const ADMIN_PAYMENTS_QUERY = gql`
   query AdminPayments($status: String, $companyId: Int, $dateFrom: DateTime, $dateTo: DateTime, $search: String) {
     adminPayments(status: $status, companyId: $companyId, dateFrom: $dateFrom, dateTo: $dateTo, search: $search) {
+      invoiceNumber
+      receiptNumber
       paymentIntentId
       email
       planId
       planName
       employeeCountSnapshot
       originalAmountCents
+      discountAmountCents
       finalAmountCents
+      billingInterval
+      promoCode
+      promoLabel
+      trialStartsAt
       trialEndsAt
+      nextBillingDate
       amount
       currency
       status

@@ -84,17 +84,31 @@ interface CompanyType {
   latestPaymentGatewayRefSenderMedium?: string | null;
   latestPaymentGatewayStatus?: string | null;
   latestPaymentCreatedAt?: string | null;
+  paymentSummary?: {
+    latestStatus?: string | null;
+    lastPaymentAt?: string | null;
+    nextDueDate?: string | null;
+    totalPaid?: number | null;
+    outstanding?: number | null;
+  } | null;
 }
 
 interface CompanyPaymentType {
   paymentIntentId: string;
+  invoiceNumber?: string | null;
   email: string;
   planId?: string | null;
   planName?: string | null;
   employeeCountSnapshot?: number | null;
   originalAmountCents?: number | null;
+  discountAmountCents?: number | null;
   finalAmountCents?: number | null;
+  billingInterval?: string | null;
+  promoCode?: string | null;
+  promoLabel?: string | null;
+  trialStartsAt?: string | null;
   trialEndsAt?: string | null;
+  nextBillingDate?: string | null;
   status: string;
   amount: number;
   currency: string;
@@ -1339,6 +1353,14 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                             <p className="text-xs text-slate-400">Latest plan</p>
                             <p className="font-semibold text-slate-800">{viewingCompany.latestPaymentPlanName || getCompanyPlanName(viewingCompany)}</p>
                           </div>
+                          <div>
+                            <p className="text-xs text-slate-400">Total paid</p>
+                            <p className="font-semibold text-slate-800">{formatPrice(viewingCompany.paymentSummary?.totalPaid ?? 0, viewingCompany.latestPaymentCurrency || 'USD')}</p>
+                          </div>
+                          <div>
+                            <p className="text-xs text-slate-400">Outstanding</p>
+                            <p className="font-semibold text-slate-800">{formatPrice(viewingCompany.paymentSummary?.outstanding ?? 0, viewingCompany.latestPaymentCurrency || 'USD')}</p>
+                          </div>
                         </div>
                       </section>
                     </div>
@@ -1413,7 +1435,10 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                               className="max-w-[220px] py-3 px-4 text-slate-700 truncate"
                               title={payment.paymentIntentId}
                             >
-                              {payment.paymentIntentId}
+                              <div className="truncate">{payment.paymentIntentId}</div>
+                              {payment.invoiceNumber ? (
+                                <div className="truncate text-xs font-mono font-semibold text-cyan-700">{payment.invoiceNumber}</div>
+                              ) : null}
                             </td>
                             <td
                               className="max-w-[220px] py-3 px-4 text-slate-700 truncate"
@@ -1551,12 +1576,18 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                   <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-6">
                     {[
                       ['Payment ID', selectedPayment.paymentIntentId],
+                      ['Invoice / Receipt #', selectedPayment.invoiceNumber || '-'],
                       ['Company', selectedPayment.companyName || String(selectedHistoryFor || '-')],
                       ['Billing email', selectedPayment.email],
                       ['Plan', selectedPayment.planName || selectedPayment.planId || '-'],
+                      ['Billing interval', selectedPayment.billingInterval || '-'],
                       ['Employees', String(selectedPayment.employeeCountSnapshot ?? '-')],
                       ['Original amount', selectedPayment.originalAmountCents !== null && selectedPayment.originalAmountCents !== undefined ? formatPrice(selectedPayment.originalAmountCents, selectedPayment.currency) : '-'],
+                      ['Discount', selectedPayment.discountAmountCents ? formatPrice(selectedPayment.discountAmountCents, selectedPayment.currency) : '-'],
+                      ['Promo code', selectedPayment.promoCode ? `${selectedPayment.promoCode}${selectedPayment.promoLabel && selectedPayment.promoLabel !== selectedPayment.promoCode ? ` (${selectedPayment.promoLabel})` : ''}` : '-'],
+                      ['Trial starts', formatDateTime(selectedPayment.trialStartsAt || '')],
                       ['Trial ends', formatDateTime(selectedPayment.trialEndsAt || '')],
+                      ['Next billing date', formatDateTime(selectedPayment.nextBillingDate || '')],
                       ['Source', selectedPayment.source || '-'],
                       ['Receiver reference', selectedPayment.gatewayRefReceiverMedium || '-'],
                       ['Sender reference', selectedPayment.gatewayRefSenderMedium || '-'],

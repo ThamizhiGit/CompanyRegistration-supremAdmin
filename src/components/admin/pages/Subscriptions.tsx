@@ -32,14 +32,22 @@ type SortDirection = 'asc' | 'desc' | null;
 type PaymentSortKey = 'displayCompanyName' | 'email' | 'planName' | 'amount' | 'dueDate' | 'trialEndsAt' | 'status' | 'createdAt';
 
 interface PaymentType {
+  invoiceNumber?: string | null;
+  receiptNumber?: string | null;
   paymentIntentId: string;
   email: string;
   planId?: string | null;
   planName?: string | null;
   employeeCountSnapshot?: number | null;
   originalAmountCents?: number | null;
+  discountAmountCents?: number | null;
   finalAmountCents?: number | null;
+  billingInterval?: string | null;
+  promoCode?: string | null;
+  promoLabel?: string | null;
+  trialStartsAt?: string | null;
   trialEndsAt?: string | null;
+  nextBillingDate?: string | null;
   amount: number;
   currency: string;
   status: string;
@@ -54,8 +62,25 @@ interface PaymentType {
   gatewayMethod?: string | null;
   gatewayRefReceiverMedium?: string | null;
   gatewayRefSenderMedium?: string | null;
+  gatewayPayload?: Record<string, unknown> | string | null;
   paymentGatewayStatus?: string | null;
 }
+
+const getCardSummary = (payload: PaymentType['gatewayPayload']) => {
+  let parsed: unknown = payload;
+  if (typeof payload === 'string') {
+    try {
+      parsed = JSON.parse(payload);
+    } catch {
+      return '';
+    }
+  }
+  const card = parsed && typeof parsed === 'object' ? (parsed as { card?: Record<string, unknown> }).card : null;
+  if (!card || typeof card !== 'object' || !card.last4) return '';
+  const brand = String(card.brand || 'Card');
+  const expiry = card.exp_month && card.exp_year ? ` · exp ${card.exp_month}/${card.exp_year}` : '';
+  return `${brand.charAt(0).toUpperCase()}${brand.slice(1)} •••• ${card.last4}${expiry}`;
+};
 
 interface IndexedPaymentType extends PaymentType {
   searchableText: string;
@@ -826,7 +851,9 @@ export const Subscriptions: React.FC<{
                     <tr key={payment.paymentIntentId} className="border-b border-slate-100 hover:bg-slate-50">
                       <td className="py-3 px-3 font-medium text-slate-800">
                         <div className="max-w-[150px] truncate" title={payment.displayCompanyName}>{payment.displayCompanyName}</div>
-                        <div className="max-w-[150px] truncate text-xs text-slate-500" title={payment.paymentIntentId}>{payment.paymentIntentId}</div>
+                        <div className="max-w-[150px] truncate text-xs font-mono font-semibold text-cyan-700" title={payment.invoiceNumber || payment.paymentIntentId}>
+                          {payment.invoiceNumber ? payment.invoiceNumber : payment.paymentIntentId}
+                        </div>
                       </td>
                       <td className="py-3 px-3 text-slate-700"><div className="max-w-[160px] truncate" title={payment.email}>{payment.email}</div></td>
                       <td className="py-3 px-3 text-slate-700">
@@ -967,8 +994,11 @@ export const Subscriptions: React.FC<{
                     icon: CreditCard,
                     iconClass: 'bg-pink-100 text-pink-600',
                     rows: [
+                      ['Invoice / Receipt #', viewingPayment.invoiceNumber || viewingPayment.paymentIntentId],
                       ['Payment ID', viewingPayment.paymentIntentId],
                       ['Original amount', viewingPayment.originalAmountCents !== null && viewingPayment.originalAmountCents !== undefined ? formatPrice(viewingPayment.originalAmountCents, viewingPayment.currency) : '-'],
+                      ['Discount', viewingPayment.discountAmountCents ? formatPrice(viewingPayment.discountAmountCents, viewingPayment.currency) : '-'],
+                      ['Promo code', viewingPayment.promoCode ? `${viewingPayment.promoCode}${viewingPayment.promoLabel && viewingPayment.promoLabel !== viewingPayment.promoCode ? ` (${viewingPayment.promoLabel})` : ''}` : '-'],
                       ['Created', formatDateTime(viewingPayment.createdAt || null)],
                       ['Updated', formatDateTime(viewingPayment.updatedAt || null)],
                     ],
@@ -979,9 +1009,12 @@ export const Subscriptions: React.FC<{
                     icon: CalendarDays,
                     iconClass: 'bg-amber-100 text-amber-600',
                     rows: [
+                      ['Billing interval', viewingPayment.billingInterval || '-'],
                       ['Due date', formatDateTime(viewingPayment.dueDate || null)],
                       ['Recurring date', formatDateTime(viewingPayment.recurringDate || null)],
+                      ['Trial start', formatDateTime(viewingPayment.trialStartsAt || null)],
                       ['Trial end', formatDateTime(viewingPayment.trialEndsAt || null)],
+                      ['Next billing date', formatDateTime(viewingPayment.nextBillingDate || null)],
                     ],
                   },
                   {
@@ -991,6 +1024,7 @@ export const Subscriptions: React.FC<{
                     iconClass: 'bg-violet-100 text-violet-600',
                     rows: [
                       ['Method', getGatewayLabel(viewingPayment)],
+                      ['Card', getCardSummary(viewingPayment.gatewayPayload) || '-'],
                       ['Gateway status', viewingPayment.paymentGatewayStatus || '-'],
                       ['Receiver reference', viewingPayment.gatewayRefReceiverMedium || '-'],
                       ['Sender reference', viewingPayment.gatewayRefSenderMedium || '-'],
