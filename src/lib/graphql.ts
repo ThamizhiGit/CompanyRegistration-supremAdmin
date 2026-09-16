@@ -895,9 +895,6 @@ export const ADMIN_PACKAGE_MODULES_QUERY = gql`
       id
       name
       description
-      price
-      effectivePrice
-      currency
       active
       sortOrder
       category
@@ -931,41 +928,6 @@ export const ADMIN_PLANS_PACKAGING_QUERY = gql`
         monthlyPriceCents
         yearlyPriceCents
         savingsPct
-      }
-    }
-  }
-`;
-
-export const ADMIN_PREVIEW_PLAN_PRICE_QUERY = gql`
-  query AdminPreviewPlanPrice(
-    $pricingMode: String!
-    $billingInterval: String!
-    $basePriceCents: Int
-    $bundleDiscountPct: Float
-    $yearlyPriceCents: Int
-    $yearlyDiscountPct: Float
-    $modules: [AdminPlanModuleInput!]
-  ) {
-    adminPreviewPlanPrice(
-      pricingMode: $pricingMode
-      billingInterval: $billingInterval
-      basePriceCents: $basePriceCents
-      bundleDiscountPct: $bundleDiscountPct
-      yearlyPriceCents: $yearlyPriceCents
-      yearlyDiscountPct: $yearlyDiscountPct
-      modules: $modules
-    ) {
-      pricingMode
-      currency
-      subtotalCents
-      discountCents
-      monthlyPriceCents
-      yearlyPriceCents
-      savingsPct
-      lines {
-        moduleId
-        name
-        unitCents
       }
     }
   }
