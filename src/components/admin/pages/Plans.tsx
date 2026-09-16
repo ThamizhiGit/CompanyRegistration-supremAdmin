@@ -13,7 +13,6 @@ import {
 import {
   PackageBuilder,
   PackageModuleSelection,
-  PRICING_MODE_LABELS,
   PricingMode,
   draftToPlanInputFields,
 } from './PackageBuilder';
@@ -241,7 +240,7 @@ const toEditingPlan = (plan: PlanType, packaging?: PlanPackaging): EditingPlan =
 });
 
 const newEditingPlan = (plans: PlanType[]): EditingPlan => ({
-  pricingMode: 'sum_modules',
+  pricingMode: 'fixed',
   bundleDiscountPct: 0,
   yearlyPriceOverride: '',
   yearlyDiscountPct: 0,
@@ -539,8 +538,8 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
       return;
     }
 
-    if (editing.pricingMode !== 'fixed' && editing.modules.length === 0) {
-      onToast('error', 'Select at least one module for module-based pricing');
+    if (editing.modules.length === 0) {
+      onToast('error', 'Select the modules this package unlocks');
       return;
     }
     const subscribers = packagingById.get(editing.id)?.companiesCount || 0;
@@ -1037,8 +1036,7 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
                     <div className="mb-1.5 flex items-center justify-between text-[11px] font-black uppercase tracking-tight text-slate-500">
                       <span>Modules</span>
                       <span className="font-semibold normal-case text-slate-400">
-                        {PRICING_MODE_LABELS[packagingById.get(plan.id)!.pricingMode] || ''}
-                        {packagingById.get(plan.id)!.isPublic ? '' : ' · private'}
+                        {packagingById.get(plan.id)!.isPublic ? '' : 'Private'}
                       </span>
                     </div>
                     {packagingById.get(plan.id)!.modules.length ? (
@@ -1239,7 +1237,9 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
                   />
                 </label>
                 <label className="block">
-                  <span className="mb-1 block text-sm font-medium text-slate-700">Base price ($)</span>
+                  <span className="mb-1 block text-sm font-medium text-slate-700">
+                    Package price ($ / {editing.billingInterval === 'yearly' ? 'year' : 'month'})
+                  </span>
                   <input
                     type="number"
                     step="0.01"
