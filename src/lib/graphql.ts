@@ -861,3 +861,90 @@ export const ADMIN_SET_EXPENSE_STATUS_MUTATION = gql`
     }
   }
 `;
+
+// ---------------------------------------------------------------------------
+// Dynamic packages (modules + custom pricing)
+// Kept as separate documents so existing plan queries/mocks stay unchanged.
+// ---------------------------------------------------------------------------
+
+export const ADMIN_PACKAGE_MODULES_QUERY = gql`
+  query AdminPackageModules {
+    adminModules(includeInactive: false) {
+      id
+      name
+      description
+      price
+      effectivePrice
+      currency
+      active
+      sortOrder
+      category
+      isCore
+      icon
+      dependsOn
+    }
+  }
+`;
+
+export const ADMIN_PLANS_PACKAGING_QUERY = gql`
+  query AdminPlansPackaging {
+    adminPlans(includeInactive: true) {
+      id
+      pricingMode
+      bundleDiscountPct
+      yearlyPriceCents
+      yearlyDiscountPct
+      isPublic
+      version
+      companiesCount
+      modules {
+        moduleId
+        name
+        category
+        priceOverrideCents
+        unitCents
+      }
+      pricing {
+        currency
+        monthlyPriceCents
+        yearlyPriceCents
+        savingsPct
+      }
+    }
+  }
+`;
+
+export const ADMIN_PREVIEW_PLAN_PRICE_QUERY = gql`
+  query AdminPreviewPlanPrice(
+    $pricingMode: String!
+    $billingInterval: String!
+    $basePriceCents: Int
+    $bundleDiscountPct: Float
+    $yearlyPriceCents: Int
+    $yearlyDiscountPct: Float
+    $modules: [AdminPlanModuleInput!]
+  ) {
+    adminPreviewPlanPrice(
+      pricingMode: $pricingMode
+      billingInterval: $billingInterval
+      basePriceCents: $basePriceCents
+      bundleDiscountPct: $bundleDiscountPct
+      yearlyPriceCents: $yearlyPriceCents
+      yearlyDiscountPct: $yearlyDiscountPct
+      modules: $modules
+    ) {
+      pricingMode
+      currency
+      subtotalCents
+      discountCents
+      monthlyPriceCents
+      yearlyPriceCents
+      savingsPct
+      lines {
+        moduleId
+        name
+        unitCents
+      }
+    }
+  }
+`;
