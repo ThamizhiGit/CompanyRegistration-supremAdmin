@@ -221,7 +221,7 @@ export const PackageBuilder: React.FC<{
 
       <div>
         <span className="mb-2 block text-sm font-medium text-slate-700">
-          Included modules <span className="text-slate-400">({value.modules.length} selected)</span>
+          Included modules <span className="text-slate-400">({value.modules.length} of {options.length} selected)</span>
         </span>
         {modulesLoading && !options.length ? <p className="text-sm text-slate-500">Loading modules…</p> : null}
         {modulesError ? <p className="text-sm text-rose-600">Could not load modules: {modulesError.message}</p> : null}
@@ -250,7 +250,14 @@ export const PackageBuilder: React.FC<{
                         />
                         <span className="flex-1">
                           <span className="flex items-center justify-between gap-2">
-                            <span className="text-sm font-semibold text-slate-800">{option.name}</span>
+                            <span className="text-sm font-semibold text-slate-800">
+                              {option.name}
+                              {!option.active ? (
+                                <span className="ml-2 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold uppercase text-slate-500">
+                                  Not sold separately
+                                </span>
+                              ) : null}
+                            </span>
                             <span className="text-xs font-semibold text-slate-500">{formatPrice(unit, option.currency)}/mo</span>
                           </span>
                           {option.description ? (

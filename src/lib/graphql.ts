@@ -891,7 +891,7 @@ export const ADMIN_SET_EXPENSE_STATUS_MUTATION = gql`
 
 export const ADMIN_PACKAGE_MODULES_QUERY = gql`
   query AdminPackageModules {
-    adminModules(includeInactive: false) {
+    adminModules(includeInactive: true) {
       id
       name
       description
