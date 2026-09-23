@@ -901,6 +901,7 @@ export const ADMIN_PACKAGE_MODULES_QUERY = gql`
       isCore
       icon
       dependsOn
+      parentId
     }
   }
 `;
@@ -915,6 +916,7 @@ export const ADMIN_PLANS_PACKAGING_QUERY = gql`
       yearlyDiscountPct
       isPublic
       version
+      availableIntervals
       companiesCount
       modules {
         moduleId
