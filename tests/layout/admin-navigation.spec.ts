@@ -7,6 +7,7 @@ test('sidebar has all options and every page loads', async ({ adminPage: page })
     ['Plans', 'Plans & Pricing'],
     ['Companies', 'Companies'],
     ['Subscriptions', 'Subscriptions & Payments'],
+    ['Currencies', 'Currency Rates'],
     ['Users', 'Users'],
     ['Accounts', 'Accounts'],
   ] as const;

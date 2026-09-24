@@ -55,7 +55,7 @@ export function SharedToastStory({
   );
 }
 
-type PageName = 'dashboard' | 'packages' | 'companies' | 'subscriptions' | 'users' | 'accounts';
+type PageName = 'dashboard' | 'packages' | 'companies' | 'subscriptions' | 'currencies' | 'users' | 'accounts';
 
 export function SharedLayoutStory() {
   const [page, setPage] = useState<PageName>('dashboard');

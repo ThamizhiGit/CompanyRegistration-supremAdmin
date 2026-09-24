@@ -1012,3 +1012,57 @@ export const ADMIN_APPLY_PLAN_TO_SUBSCRIBERS_MUTATION = gql`
     }
   }
 `;
+
+// ---------------------------------------------------------------------------
+// Currency rates (packages are priced in USD; customers pay in local currency)
+// ---------------------------------------------------------------------------
+
+const CURRENCY_RATE_FIELDS = `
+  code
+  name
+  symbol
+  ratePerUsd
+  zeroDecimal
+  roundingUnitMinor
+  isManual
+  active
+  source
+  updatedAt
+  isBase
+  convert(usdCents: $previewUsdCents)
+`;
+
+export const ADMIN_CURRENCY_RATES_QUERY = gql`
+  query AdminCurrencyRates($previewUsdCents: Int!) {
+    adminCurrencyRates {
+      baseCurrency
+      lastRefreshedAt
+      sourceUrl
+      rates {
+        ${CURRENCY_RATE_FIELDS}
+      }
+    }
+  }
+`;
+
+export const ADMIN_SAVE_CURRENCY_RATE_MUTATION = gql`
+  mutation AdminSaveCurrencyRate($input: AdminCurrencyRateInput!, $previewUsdCents: Int!) {
+    adminSaveCurrencyRate(input: $input) {
+      success
+      message
+      rate {
+        ${CURRENCY_RATE_FIELDS}
+      }
+    }
+  }
+`;
+
+export const ADMIN_REFRESH_CURRENCY_RATES_MUTATION = gql`
+  mutation AdminRefreshCurrencyRates {
+    adminRefreshCurrencyRates {
+      success
+      message
+      updatedCount
+    }
+  }
+`;

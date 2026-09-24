@@ -4,6 +4,7 @@ import {
   ChevronLeft,
   ChevronRight,
   ChevronUp,
+  Coins,
   CreditCard,
   House,
   LogOut,
@@ -17,8 +18,8 @@ import {
 } from 'lucide-react';
 
 interface AdminLayoutProps {
-  currentPage: 'dashboard' | 'packages' | 'companies' | 'subscriptions' | 'users' | 'accounts';
-  onPageChange: (page: 'dashboard' | 'packages' | 'companies' | 'subscriptions' | 'users' | 'accounts') => void;
+  currentPage: 'dashboard' | 'packages' | 'companies' | 'subscriptions' | 'currencies' | 'users' | 'accounts';
+  onPageChange: (page: 'dashboard' | 'packages' | 'companies' | 'subscriptions' | 'currencies' | 'users' | 'accounts') => void;
   onLogout: () => void;
   username: string;
   children: React.ReactNode;
@@ -53,6 +54,7 @@ export const AdminLayout: React.FC<AdminLayoutProps> = ({
     { id: 'packages', label: 'Plans', icon: Package },
     { id: 'companies', label: 'Companies', icon: Building2 },
     { id: 'subscriptions', label: 'Subscriptions', icon: CreditCard },
+    { id: 'currencies', label: 'Currencies', icon: Coins },
     { id: 'users', label: 'Users', icon: UsersRound },
     { id: 'accounts', label: 'Accounts', icon: WalletCards },
   ] as const;
