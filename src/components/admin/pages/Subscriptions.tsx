@@ -8,7 +8,9 @@ import {
   ADMIN_SUSPEND_COMPANY_MUTATION,
   ADMIN_RESUME_COMPANY_MUTATION,
   ADMIN_MANUAL_SUBSCRIPTION_MUTATION,
+  ADMIN_COMPANY_PACKAGES_QUERY,
 } from '../../../lib/graphql';
+import { ChangePackageDialog, CompanyPackage, ModuleChips, PackageCell, useModuleCatalog } from './PackageAdminUi';
 import { formatPrice, formatDate, formatDateTime, toDateTimeLocalValue } from '../../../lib/admin-utils';
 import {
   Building2,
@@ -20,6 +22,7 @@ import {
   Eye,
   Filter,
   Landmark,
+  Package,
   Printer,
   RefreshCw,
   Search,
@@ -29,7 +32,7 @@ import { buildColumnFilterOptions, ColumnFilter, matchesColumnFilter } from '../
 
 type PaymentStatus = 'pending' | 'succeeded' | 'failed' | 'refunded' | null;
 type SortDirection = 'asc' | 'desc' | null;
-type PaymentSortKey = 'displayCompanyName' | 'email' | 'planName' | 'amount' | 'dueDate' | 'trialEndsAt' | 'status' | 'createdAt';
+type PaymentSortKey = 'displayCompanyName' | 'email' | 'planName' | 'packageName' | 'amount' | 'dueDate' | 'trialEndsAt' | 'status' | 'createdAt';
 
 interface PaymentType {
   invoiceNumber?: string | null;
@@ -85,6 +88,8 @@ const getCardSummary = (payload: PaymentType['gatewayPayload']) => {
 interface IndexedPaymentType extends PaymentType {
   searchableText: string;
   displayCompanyName: string;
+  /** The company's live package today (may differ from the plan this payment was for). */
+  packageName: string;
 }
 
 interface CompanyType {
@@ -154,6 +159,8 @@ export const Subscriptions: React.FC<{
   const [companySelections, setCompanySelections] = useState<string[]>([]);
   const [emailSelections, setEmailSelections] = useState<string[]>([]);
   const [planSelections, setPlanSelections] = useState<string[]>([]);
+  const [packageSelections, setPackageSelections] = useState<string[]>([]);
+  const [changingPackage, setChangingPackage] = useState<{ companyId: number; companyName: string } | null>(null);
   const [amountSelections, setAmountSelections] = useState<string[]>([]);
   const [dueDateSelections, setDueDateSelections] = useState<string[]>([]);
   const [trialEndSelections, setTrialEndSelections] = useState<string[]>([]);
@@ -228,6 +235,32 @@ export const Subscriptions: React.FC<{
   const [suspendCompany] = useMutation(ADMIN_SUSPEND_COMPANY_MUTATION);
   const [resumeCompany] = useMutation(ADMIN_RESUME_COMPANY_MUTATION);
   const [manualSubscriptionAction] = useMutation(ADMIN_MANUAL_SUBSCRIPTION_MUTATION);
+
+  // Live package + modules for the companies on screen (separate document: the payments
+  // query stays unchanged, and a missing backend field only blanks these two columns).
+  const paymentCompanyIds = useMemo(
+    () => Array.from(new Set((data?.adminPayments || []).map((p) => p.companyId).filter((id): id is number => typeof id === 'number'))).sort((a, b) => a - b),
+    [data],
+  );
+  const { data: packagesData, refetch: refetchPackages } = useQuery<
+    { adminCompanyPackages: CompanyPackage[] },
+    { companyIds: number[] },
+    any
+  >(ADMIN_COMPANY_PACKAGES_QUERY, {
+    variables: { companyIds: paymentCompanyIds },
+    skip: paymentCompanyIds.length === 0,
+    fetchPolicy: 'cache-and-network',
+  });
+  const packageByCompany = useMemo(
+    () => new Map((packagesData?.adminCompanyPackages || []).map((row) => [row.companyId, row])),
+    [packagesData],
+  );
+  const moduleCatalog = useModuleCatalog();
+  const packageNameOf = (companyId?: number | null) => {
+    if (companyId === undefined || companyId === null) return '-';
+    const row = packageByCompany.get(companyId);
+    return row?.liveSubscription?.planName || row?.liveSubscription?.planId || '-';
+  };
 
   const openEditPayment = (payment: IndexedPaymentType) => {
     setEditingPayment(payment);
@@ -518,19 +551,25 @@ export const Subscriptions: React.FC<{
       .join(' ')
       .toLowerCase();
 
+    const packageName = packageNameOf(payment.companyId);
     return {
       ...payment,
       status: effectiveStatus,
       displayCompanyName,
-      searchableText,
+      packageName,
+      searchableText: packageName !== '-' ? `${searchableText} ${packageName.toLowerCase()}` : searchableText,
     };
-  }), [payments, companyNameById, statusOverrides]);
+  }), [payments, companyNameById, statusOverrides, packageByCompany]);
   const companyOptions = useMemo(
     () => buildColumnFilterOptions(indexedPayments, (payment) => payment.displayCompanyName),
     [indexedPayments],
   );
   const emailOptions = useMemo(
     () => buildColumnFilterOptions(indexedPayments, (payment) => payment.email || '-'),
+    [indexedPayments],
+  );
+  const packageOptions = useMemo(
+    () => buildColumnFilterOptions(indexedPayments, (payment) => payment.packageName),
     [indexedPayments],
   );
   const planOptions = useMemo(
@@ -577,6 +616,7 @@ export const Subscriptions: React.FC<{
       matchesColumnFilter(companySelections, payment.displayCompanyName) &&
       matchesColumnFilter(emailSelections, payment.email || '-') &&
       matchesColumnFilter(planSelections, payment.planName || payment.planId || '-') &&
+      matchesColumnFilter(packageSelections, payment.packageName) &&
       matchesColumnFilter(amountSelections, getAmountFilterValue(payment)) &&
       matchesColumnFilter(dueDateSelections, formatDate(payment.dueDate)) &&
       matchesColumnFilter(trialEndSelections, formatDate(payment.trialEndsAt)) &&
@@ -598,7 +638,7 @@ export const Subscriptions: React.FC<{
       if (leftValue > rightValue) return sortDirection === 'asc' ? 1 : -1;
       return 0;
     });
-  }, [indexedPayments, normalizedCompanySearch, companySelections, emailSelections, planSelections, amountSelections, dueDateSelections, trialEndSelections, statusSelections, gatewaySelections, createdSelections, dueOnly, sortKey, sortDirection]);
+  }, [indexedPayments, normalizedCompanySearch, companySelections, emailSelections, planSelections, packageSelections, amountSelections, dueDateSelections, trialEndSelections, statusSelections, gatewaySelections, createdSelections, dueOnly, sortKey, sortDirection]);
 
   const cycleSort = (key: PaymentSortKey) => {
     if (sortKey !== key) {
@@ -707,6 +747,7 @@ export const Subscriptions: React.FC<{
                 setCompanySelections([]);
                 setEmailSelections([]);
                 setPlanSelections([]);
+                setPackageSelections([]);
                 setAmountSelections([]);
                 setDueDateSelections([]);
                 setTrialEndSelections([]);
@@ -738,12 +779,14 @@ export const Subscriptions: React.FC<{
 
       <div className="bg-white rounded-lg border border-slate-200">
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[1020px]">
+            <table className="w-full min-w-[1280px]">
               <thead className="bg-slate-50 border-b border-slate-200">
                 <tr>
                   <th className="py-3 px-3"><SortHeader label="Company" column="displayCompanyName" /></th>
                   <th className="py-3 px-3"><SortHeader label="Email" column="email" /></th>
                   <th className="py-3 px-3"><SortHeader label="Plan" column="planName" /></th>
+                  <th className="py-3 px-3"><SortHeader label="Package" column="packageName" /></th>
+                  <th className="text-left py-3 px-3 font-semibold text-slate-700">Modules</th>
                   <th className="py-3 px-3"><SortHeader label="Amount" column="amount" /></th>
                   <th className="py-3 px-3"><SortHeader label="Due Date" column="dueDate" /></th>
                   <th className="py-3 px-3"><SortHeader label="Trial End" column="trialEndsAt" /></th>
@@ -778,6 +821,15 @@ export const Subscriptions: React.FC<{
                       onChange={setPlanSelections}
                     />
                   </th>
+                  <th className="px-3 py-2">
+                    <ColumnFilter
+                      label="Package"
+                      options={packageOptions}
+                      selectedValues={packageSelections}
+                      onChange={setPackageSelections}
+                    />
+                  </th>
+                  <th className="px-3 py-2"></th>
                   <th className="px-3 py-2">
                     <ColumnFilter
                       label="Amount"
@@ -843,7 +895,7 @@ export const Subscriptions: React.FC<{
               <tbody>
                 {filteredPayments.length === 0 ? (
                   <tr>
-                    <td colSpan={10} className="px-4 py-12 text-center text-slate-500">
+                    <td colSpan={12} className="px-4 py-12 text-center text-slate-500">
                       {payments.length === 0 ? 'No payments found' : 'No payments match your filters'}
                     </td>
                   </tr>
@@ -861,6 +913,20 @@ export const Subscriptions: React.FC<{
                         {payment.employeeCountSnapshot !== null && payment.employeeCountSnapshot !== undefined ? (
                           <div className="text-xs text-slate-500">{payment.employeeCountSnapshot} employees</div>
                         ) : null}
+                      </td>
+                      <td className="py-3 px-3 text-slate-700 text-sm">
+                        <PackageCell pkg={payment.companyId != null ? packageByCompany.get(payment.companyId) : null} />
+                      </td>
+                      <td className="py-3 px-3">
+                        {payment.companyId != null && packageByCompany.get(payment.companyId) ? (
+                          <ModuleChips
+                            codes={packageByCompany.get(payment.companyId)!.activeModules || []}
+                            unrestricted={packageByCompany.get(payment.companyId)!.unrestricted}
+                            catalog={moduleCatalog}
+                          />
+                        ) : (
+                          <span className="text-xs text-slate-400">-</span>
+                        )}
                       </td>
                       <td className="py-3 px-3 font-semibold text-slate-800">
                         <div>{formatPrice(payment.finalAmountCents ?? payment.amount, payment.currency)}</div>
@@ -909,6 +975,16 @@ export const Subscriptions: React.FC<{
                             <Edit2 className="h-4 w-4" />
                             <span className="sr-only">Edit subscription</span>
                           </button>
+                          <button
+                            type="button"
+                            onClick={() => payment.companyId != null && setChangingPackage({ companyId: payment.companyId, companyName: payment.displayCompanyName })}
+                            disabled={payment.companyId == null}
+                            title={payment.companyId == null ? 'Payment is not linked to a company' : 'Change package'}
+                            className="rounded-lg p-2 text-indigo-600 hover:bg-indigo-50 disabled:opacity-40"
+                          >
+                            <Package className="h-4 w-4" />
+                            <span className="sr-only">Change package</span>
+                          </button>
                         </div>
                       </td>
                     </tr>
@@ -917,6 +993,20 @@ export const Subscriptions: React.FC<{
             </table>
           </div>
       </div>
+
+      {changingPackage ? (
+        <ChangePackageDialog
+          companyId={changingPackage.companyId}
+          companyName={changingPackage.companyName}
+          current={packageByCompany.get(changingPackage.companyId)}
+          onClose={() => setChangingPackage(null)}
+          onDone={() => {
+            refetchPackages();
+            refetch();
+          }}
+          onToast={onToast}
+        />
+      ) : null}
 
       {viewingPayment ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 backdrop-blur-sm p-3 sm:p-6">
