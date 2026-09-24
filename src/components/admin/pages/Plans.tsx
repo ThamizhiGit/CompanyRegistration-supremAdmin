@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { useMutation, useQuery } from '@apollo/client/react';
-import { Check, Download, Edit2, Filter, Plus, Printer, RotateCcw, Save, Search, Trash2, X } from 'lucide-react';
+import { Check, Download, Edit2, Filter, Plus, Printer, RefreshCw, RotateCcw, Save, Search, Trash2, X } from 'lucide-react';
+import { ApplyToSubscribersDialog } from './PackageAdminUi';
 import {
   ADMIN_DELETE_PLAN_MUTATION,
   ADMIN_DEACTIVATE_PROMO_CODE_MUTATION,
@@ -30,6 +31,8 @@ interface PlanPackaging {
   isPublic: boolean;
   version: number;
   companiesCount?: number | null;
+  subscribersCount?: number | null;
+  outdatedSubscribersCount?: number | null;
   modules: { moduleId: string; name: string; category?: string | null; priceOverrideCents: number | null; unitCents: number }[];
   pricing: { currency: string; monthlyPriceCents: number | null; yearlyPriceCents: number | null; savingsPct: number } | null;
 }
@@ -390,6 +393,7 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
   const [promoFiltersOpen, setPromoFiltersOpen] = useState(true);
   const [editingPromo, setEditingPromo] = useState<EditingPromo | null>(null);
   const [editingPromoMode, setEditingPromoMode] = useState<'create' | 'edit'>('create');
+  const [applyingPlan, setApplyingPlan] = useState<{ id: string; name: string } | null>(null);
 
   const { data, loading, error, refetch } = useQuery<
     { adminPlans: PlanType[] },
@@ -542,16 +546,8 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
       onToast('error', 'Select the modules this package unlocks');
       return;
     }
-    const subscribers = packagingById.get(editing.id)?.companiesCount || 0;
-    if (
-      editingMode === 'edit' &&
-      subscribers > 0 &&
-      !window.confirm(
-        `${subscribers} company(s) are on this package. Changes apply to new sign-ups and to these companies the next time their package is (re)applied. Continue?`,
-      )
-    ) {
-      return;
-    }
+    const packaging = packagingById.get(editing.id);
+    const subscribers = packaging?.subscribersCount ?? packaging?.companiesCount ?? 0;
 
     try {
       const result = await savePlan({ variables: { input: planToInput(editing) } });
@@ -561,9 +557,12 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
         return;
       }
       onToast('success', `Plan "${editing.name}" ${editingMode === 'create' ? 'created' : 'saved'}`);
+      const saved = { id: editing.id, name: editing.name };
       closePlanWindow();
       refetch();
-      refetchPackaging();
+      await refetchPackaging();
+      // Existing subscribers keep their module snapshot; offer to push the edit to them now.
+      if (editingMode === 'edit' && subscribers > 0) setApplyingPlan(saved);
     } catch (err: any) {
       onToast('error', err.message || 'Backend plan API is not ready yet');
     }
@@ -927,6 +926,17 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
                     </td>
                     <td className="px-3 py-3 align-top">
                       <div className="flex justify-end gap-1">
+                        {(packagingById.get(plan.id)?.outdatedSubscribersCount || 0) > 0 ? (
+                          <button
+                            type="button"
+                            onClick={() => setApplyingPlan({ id: plan.id, name: plan.name })}
+                            title={`Apply ${plan.name} to ${packagingById.get(plan.id)!.outdatedSubscribersCount} subscriber(s) on an older version`}
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border-none text-amber-500 transition hover:bg-amber-50 hover:text-amber-600"
+                          >
+                            <RefreshCw className="h-4 w-4" />
+                            <span className="sr-only">Apply to subscribers</span>
+                          </button>
+                        ) : null}
                         <button
                           type="button"
                           onClick={() => openEditPlan(plan)}
@@ -1071,7 +1081,22 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
                 </ul>
               </div>
 
-              <div className="mt-4 flex justify-end gap-2 border-t border-gray-100 pt-4">
+              <div className="mt-4 flex flex-wrap items-center justify-end gap-2 border-t border-gray-100 pt-4">
+                {packagingById.get(plan.id)?.subscribersCount ? (
+                  <span className="mr-auto text-xs text-slate-500">
+                    {packagingById.get(plan.id)!.subscribersCount} subscriber(s) · v{packagingById.get(plan.id)!.version}
+                  </span>
+                ) : null}
+                {(packagingById.get(plan.id)?.outdatedSubscribersCount || 0) > 0 ? (
+                  <button
+                    type="button"
+                    onClick={() => setApplyingPlan({ id: plan.id, name: plan.name })}
+                    className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 text-[13px] font-semibold text-amber-700 transition hover:bg-amber-100"
+                  >
+                    <RefreshCw className="h-4 w-4" />
+                    Apply to {packagingById.get(plan.id)!.outdatedSubscribersCount} subscriber(s)
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   onClick={() => openEditPlan(plan)}
@@ -1575,6 +1600,15 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
           </div>
         </div>
       )}
+      {applyingPlan ? (
+        <ApplyToSubscribersDialog
+          planId={applyingPlan.id}
+          planName={applyingPlan.name}
+          onClose={() => setApplyingPlan(null)}
+          onDone={() => refetchPackaging()}
+          onToast={onToast}
+        />
+      ) : null}
     </div>
   );
 };
