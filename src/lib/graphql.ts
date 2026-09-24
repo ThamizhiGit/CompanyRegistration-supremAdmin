@@ -883,3 +883,52 @@ export const ADMIN_SET_EXPENSE_STATUS_MUTATION = gql`
     }
   }
 `;
+
+// ---------------------------------------------------------------------------
+// Dynamic packages (modules + custom pricing)
+// Kept as separate documents so existing plan queries/mocks stay unchanged.
+// ---------------------------------------------------------------------------
+
+export const ADMIN_PACKAGE_MODULES_QUERY = gql`
+  query AdminPackageModules {
+    adminModules(includeInactive: true) {
+      id
+      name
+      description
+      active
+      sortOrder
+      category
+      isCore
+      icon
+      dependsOn
+    }
+  }
+`;
+
+export const ADMIN_PLANS_PACKAGING_QUERY = gql`
+  query AdminPlansPackaging {
+    adminPlans(includeInactive: true) {
+      id
+      pricingMode
+      bundleDiscountPct
+      yearlyPriceCents
+      yearlyDiscountPct
+      isPublic
+      version
+      companiesCount
+      modules {
+        moduleId
+        name
+        category
+        priceOverrideCents
+        unitCents
+      }
+      pricing {
+        currency
+        monthlyPriceCents
+        yearlyPriceCents
+        savingsPct
+      }
+    }
+  }
+`;

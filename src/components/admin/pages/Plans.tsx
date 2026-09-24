@@ -8,11 +8,31 @@ import {
   ADMIN_PROMO_CODES_QUERY,
   ADMIN_SAVE_PROMO_CODE_MUTATION,
   ADMIN_SAVE_PLAN_MUTATION,
+  ADMIN_PLANS_PACKAGING_QUERY,
 } from '../../../lib/graphql';
+import {
+  PackageBuilder,
+  PackageModuleSelection,
+  PricingMode,
+  draftToPlanInputFields,
+} from './PackageBuilder';
 import { centsFromDollars, formatPrice } from '../../../lib/admin-utils';
 import { buildColumnFilterOptions, ColumnFilter, matchesColumnFilter } from '../ColumnFilter';
 
-type BillingInterval = 'monthly' | 'yearly';
+type BillingInterval = 'monthly' | 'yearly' | 'both';
+
+interface PlanPackaging {
+  id: string;
+  pricingMode: PricingMode;
+  bundleDiscountPct: number;
+  yearlyPriceCents: number | null;
+  yearlyDiscountPct: number;
+  isPublic: boolean;
+  version: number;
+  companiesCount?: number | null;
+  modules: { moduleId: string; name: string; category?: string | null; priceOverrideCents: number | null; unitCents: number }[];
+  pricing: { currency: string; monthlyPriceCents: number | null; yearlyPriceCents: number | null; savingsPct: number } | null;
+}
 type SortDirection = 'asc' | 'desc' | null;
 type PlanSortKey = 'sortOrder' | 'name' | 'basePriceCents' | 'billingInterval' | 'trialMonths' | 'active';
 type PlanAdminTab = 'plans' | 'promos';
@@ -48,6 +68,13 @@ interface EditingPlan {
   recommended: boolean;
   active: boolean;
   sortOrder: number;
+  // Dynamic package fields
+  pricingMode: PricingMode;
+  bundleDiscountPct: number;
+  yearlyPriceOverride: string;
+  yearlyDiscountPct: number;
+  isPublic: boolean;
+  modules: PackageModuleSelection[];
 }
 
 interface PromoCodeType {
@@ -186,7 +213,17 @@ const parseFeatures = (features: PlanType['features']): string[] => {
   }
 };
 
-const toEditingPlan = (plan: PlanType): EditingPlan => ({
+const toEditingPlan = (plan: PlanType, packaging?: PlanPackaging): EditingPlan => ({
+  pricingMode: packaging?.pricingMode || 'fixed',
+  bundleDiscountPct: Number(packaging?.bundleDiscountPct) || 0,
+  yearlyPriceOverride:
+    packaging?.yearlyPriceCents === null || packaging?.yearlyPriceCents === undefined ? '' : String(packaging.yearlyPriceCents / 100),
+  yearlyDiscountPct: Number(packaging?.yearlyDiscountPct) || 0,
+  isPublic: packaging?.isPublic ?? true,
+  modules: (packaging?.modules || []).map((m) => ({
+    moduleId: m.moduleId,
+    priceOverride: m.priceOverrideCents === null || m.priceOverrideCents === undefined ? '' : String(m.priceOverrideCents / 100),
+  })),
   id: plan.id,
   name: plan.name,
   description: plan.description || '',
@@ -203,6 +240,12 @@ const toEditingPlan = (plan: PlanType): EditingPlan => ({
 });
 
 const newEditingPlan = (plans: PlanType[]): EditingPlan => ({
+  pricingMode: 'fixed',
+  bundleDiscountPct: 0,
+  yearlyPriceOverride: '',
+  yearlyDiscountPct: 0,
+  isPublic: true,
+  modules: [],
   id: '',
   name: '',
   description: '',
@@ -285,6 +328,7 @@ const planToInput = (plan: EditingPlan) => ({
   recommended: plan.recommended,
   active: plan.active,
   sortOrder: plan.sortOrder,
+  ...draftToPlanInputFields(plan),
 });
 
 const promoToInput = (promo: EditingPromo) => ({
@@ -308,6 +352,7 @@ const promoToInput = (promo: EditingPromo) => ({
 
 const billingCopy = (plan: PlanType) => {
   if (plan.basePriceCents === 0) return 'forever';
+  if (plan.billingInterval === 'both') return plan.perEmployee ? 'per employee / mo or yr' : 'monthly or yearly';
   return plan.perEmployee ? `per employee / ${plan.billingInterval === 'yearly' ? 'yr' : 'mo'}` : `per ${plan.billingInterval}`;
 };
 
@@ -372,7 +417,21 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
     fetchPolicy: 'cache-and-network',
   });
 
-  const [savePlan, { loading: saving }] = useMutation(ADMIN_SAVE_PLAN_MUTATION);
+  // Modules + computed prices live in a separate document so the base plan query stays stable.
+  const { data: packagingData, refetch: refetchPackaging } = useQuery<{ adminPlans: PlanPackaging[] }, Record<string, never>, any>(
+    ADMIN_PLANS_PACKAGING_QUERY,
+    { fetchPolicy: 'cache-and-network' },
+  );
+  const packagingById = useMemo(
+    () => new Map((packagingData?.adminPlans || []).map((item) => [item.id, item])),
+    [packagingData],
+  );
+  const [savePlan, { loading: saving }] = useMutation<
+    { adminSavePlan: { success: boolean; message?: string | null } },
+    { input: ReturnType<typeof planToInput> },
+    any,
+    any
+  >(ADMIN_SAVE_PLAN_MUTATION);
   const [deletePlan, { loading: deleting }] = useMutation<DeletePlanMutationData, { id: string; reason: string }, any, any>(ADMIN_DELETE_PLAN_MUTATION);
   const [savePromoCode, { loading: savingPromo }] = useMutation<SavePromoCodeMutationData, { input: ReturnType<typeof promoToInput> }, any, any>(ADMIN_SAVE_PROMO_CODE_MUTATION);
   const [deactivatePromoCode, { loading: deactivatingPromo }] = useMutation<DeactivatePromoCodeMutationData, { id: string; reason: string }, any, any>(ADMIN_DEACTIVATE_PROMO_CODE_MUTATION);
@@ -449,7 +508,7 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
 
   const openEditPlan = (plan: PlanType) => {
     setEditingMode('edit');
-    setEditing(toEditingPlan(plan));
+    setEditing(toEditingPlan(plan, packagingById.get(plan.id)));
   };
 
   const closePlanWindow = () => {
@@ -479,11 +538,32 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
       return;
     }
 
+    if (editing.modules.length === 0) {
+      onToast('error', 'Select the modules this package unlocks');
+      return;
+    }
+    const subscribers = packagingById.get(editing.id)?.companiesCount || 0;
+    if (
+      editingMode === 'edit' &&
+      subscribers > 0 &&
+      !window.confirm(
+        `${subscribers} company(s) are on this package. Changes apply to new sign-ups and to these companies the next time their package is (re)applied. Continue?`,
+      )
+    ) {
+      return;
+    }
+
     try {
-      await savePlan({ variables: { input: planToInput(editing) } });
+      const result = await savePlan({ variables: { input: planToInput(editing) } });
+      const payload = result.data?.adminSavePlan;
+      if (payload && payload.success === false) {
+        onToast('error', payload.message || 'Could not save package');
+        return;
+      }
       onToast('success', `Plan "${editing.name}" ${editingMode === 'create' ? 'created' : 'saved'}`);
       closePlanWindow();
       refetch();
+      refetchPackaging();
     } catch (err: any) {
       onToast('error', err.message || 'Backend plan API is not ready yet');
     }
@@ -918,9 +998,20 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
                   <div className="rounded-lg border border-sky-100 bg-sky-50/60 p-2.5">
                     <span className="mb-0.5 block text-[11px] font-black uppercase tracking-tight text-sky-600">Price</span>
                     <div className="text-lg font-black leading-tight text-gray-800">
-                      {formatPrice(plan.basePriceCents, plan.currency).replace('.00', '')}
+                      {formatPrice(
+                        packagingById.get(plan.id)?.pricing?.monthlyPriceCents ??
+                          packagingById.get(plan.id)?.pricing?.yearlyPriceCents ??
+                          plan.basePriceCents,
+                        plan.currency,
+                      ).replace('.00', '')}
                     </div>
                     <p className="mt-0.5 text-xs text-gray-500">{billingCopy(plan)}</p>
+                    {packagingById.get(plan.id)?.pricing?.yearlyPriceCents != null &&
+                    packagingById.get(plan.id)?.pricing?.monthlyPriceCents != null ? (
+                      <p className="mt-0.5 text-xs text-gray-500">
+                        {formatPrice(packagingById.get(plan.id)!.pricing!.yearlyPriceCents, plan.currency)} / yr
+                      </p>
+                    ) : null}
                   </div>
                   <div className="rounded-lg border border-amber-100 bg-amber-50/60 p-2.5">
                     <span className="mb-0.5 block text-[11px] font-black uppercase tracking-tight text-amber-600">Trial</span>
@@ -939,6 +1030,28 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
                     <p className="mt-0.5 text-xs text-gray-500">{plan.currency}</p>
                   </div>
                 </div>
+
+                {packagingById.get(plan.id) ? (
+                  <div className="mt-4">
+                    <div className="mb-1.5 flex items-center justify-between text-[11px] font-black uppercase tracking-tight text-slate-500">
+                      <span>Modules</span>
+                      <span className="font-semibold normal-case text-slate-400">
+                        {packagingById.get(plan.id)!.isPublic ? '' : 'Private'}
+                      </span>
+                    </div>
+                    {packagingById.get(plan.id)!.modules.length ? (
+                      <div className="flex flex-wrap gap-1.5" data-testid={`plan-modules-${plan.id}`}>
+                        {packagingById.get(plan.id)!.modules.map((m) => (
+                          <span key={m.moduleId} className="rounded-md border border-sky-200 bg-white px-2 py-0.5 text-[11px] font-semibold text-sky-700">
+                            {m.name}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-xs text-amber-700">No modules configured — existing access is unchanged.</p>
+                    )}
+                  </div>
+                ) : null}
 
                 <ul className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
                   {features.slice(0, 6).map((feature) => (
@@ -1088,7 +1201,7 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
 
       {editing && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/30 p-4">
-          <div className="flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white">
+          <div className="flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white">
             <div className="shrink-0 flex items-center justify-between border-b border-slate-100 p-5">
               <h3 className="text-lg font-bold text-slate-800">{editingMode === 'create' ? 'Create Plan' : 'Edit Plan'}</h3>
               <button
@@ -1124,7 +1237,9 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
                   />
                 </label>
                 <label className="block">
-                  <span className="mb-1 block text-sm font-medium text-slate-700">Base price ($)</span>
+                  <span className="mb-1 block text-sm font-medium text-slate-700">
+                    Package price ($ / {editing.billingInterval === 'yearly' ? 'year' : 'month'})
+                  </span>
                   <input
                     type="number"
                     step="0.01"
@@ -1152,6 +1267,7 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
                   >
                     <option value="monthly">Monthly</option>
                     <option value="yearly">Yearly</option>
+                    <option value="both">Monthly or yearly (customer chooses)</option>
                   </select>
                 </label>
                 <label className="block">
@@ -1198,6 +1314,8 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
                   Active
                 </label>
               </div>
+
+              <PackageBuilder value={editing} onChange={(next) => setEditing({ ...editing, ...next })} />
 
               <label className="block">
                 <span className="mb-1 block text-sm font-medium text-slate-700">Description</span>
