@@ -194,7 +194,7 @@ export default function App() {
 
           {/* Upper: logo + headline + bento grid */}
           <div className="relative z-10 flex flex-col gap-6 lg:gap-8 max-w-lg">
-            <img src="/assets/penquee_logo.png" className="h-16 md:h-[72px] w-auto object-contain" alt="Penquee" />
+            <img src="/assets/penquee_logo.webp" className="h-16 md:h-[72px] w-auto object-contain" alt="Penquee" />
             <div className="space-y-3">
               <h2 className="text-3xl lg:text-4xl xl:text-[42px] font-black leading-[1.1] tracking-tight text-slate-900">
                 Seamless registration for modern enterprises.
@@ -245,7 +245,7 @@ export default function App() {
           <div className="w-full max-w-lg py-6 relative lg:mt-20">
             <div className="space-y-8">
               <div className="space-y-2 lg:hidden mb-6">
-                <img src="/assets/penquee_logo.png" className="h-12 w-auto object-contain" alt="Penquee" />
+                <img src="/assets/penquee_logo.webp" className="h-12 w-auto object-contain" alt="Penquee" />
               </div>
               <div className="space-y-2">
                 <h3 className="text-3xl font-black text-slate-900">Welcome back</h3>
