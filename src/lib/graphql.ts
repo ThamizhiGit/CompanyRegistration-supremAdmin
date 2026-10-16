@@ -600,8 +600,8 @@ export const ADMIN_RESUME_COMPANY_MUTATION = gql`
 `;
 
 export const ADMIN_ASSIGN_COMPANY_PLAN_MUTATION = gql`
-  mutation AdminAssignCompanyPlan($companyId: Int!, $planId: String!, $reason: String) {
-    adminAssignCompanyPlan(companyId: $companyId, planId: $planId, reason: $reason) {
+  mutation AdminAssignCompanyPlan($companyId: Int!, $planId: String!, $reason: String, $billingInterval: String) {
+    adminAssignCompanyPlan(companyId: $companyId, planId: $planId, reason: $reason, billingInterval: $billingInterval) {
       success
       message
       company {
@@ -901,6 +901,7 @@ export const ADMIN_PACKAGE_MODULES_QUERY = gql`
       isCore
       icon
       dependsOn
+      parentId
     }
   }
 `;
@@ -915,7 +916,10 @@ export const ADMIN_PLANS_PACKAGING_QUERY = gql`
       yearlyDiscountPct
       isPublic
       version
+      availableIntervals
       companiesCount
+      subscribersCount
+      outdatedSubscribersCount
       modules {
         moduleId
         name
@@ -929,6 +933,136 @@ export const ADMIN_PLANS_PACKAGING_QUERY = gql`
         yearlyPriceCents
         savingsPct
       }
+    }
+  }
+`;
+
+/** Each company's live package subscription (package, version, modules) for the Subscriptions page. */
+export const ADMIN_COMPANY_PACKAGES_QUERY = gql`
+  query AdminCompanyPackages($companyIds: [Int!]!) {
+    adminCompanyPackages(companyIds: $companyIds) {
+      companyId
+      companyName
+      planId
+      activeModules
+      unrestricted
+      liveSubscription {
+        id
+        planId
+        planName
+        planVersion
+        currentPlanVersion
+        isOutdated
+        status
+        billingInterval
+        moduleCodes
+        priceCents
+        currency
+        currentPeriodEnd
+        createdBy
+        createdAt
+      }
+    }
+  }
+`;
+
+/** Packages an admin can move a company to (Change package dialog). */
+export const ADMIN_PACKAGE_OPTIONS_QUERY = gql`
+  query AdminPackageOptions {
+    adminPlans(includeInactive: false) {
+      id
+      name
+      active
+      version
+      availableIntervals
+      modules {
+        moduleId
+        name
+      }
+      pricing {
+        currency
+        monthlyPriceCents
+        yearlyPriceCents
+      }
+    }
+  }
+`;
+
+export const ADMIN_APPLY_PLAN_TO_SUBSCRIBERS_MUTATION = gql`
+  mutation AdminApplyPlanToSubscribers($planId: String!, $reason: String, $onlyOutdated: Boolean, $dryRun: Boolean) {
+    adminApplyPlanToSubscribers(planId: $planId, reason: $reason, onlyOutdated: $onlyOutdated, dryRun: $dryRun) {
+      success
+      message
+      dryRun
+      updatedCount
+      changes {
+        companyId
+        companyName
+        fromVersion
+        toVersion
+        added
+        removed
+      }
+      plan {
+        id
+        version
+        subscribersCount
+        outdatedSubscribersCount
+      }
+    }
+  }
+`;
+
+// ---------------------------------------------------------------------------
+// Currency rates (packages are priced in USD; customers pay in local currency)
+// ---------------------------------------------------------------------------
+
+const CURRENCY_RATE_FIELDS = `
+  code
+  name
+  symbol
+  ratePerUsd
+  zeroDecimal
+  roundingUnitMinor
+  isManual
+  active
+  source
+  updatedAt
+  isBase
+  convert(usdCents: $previewUsdCents)
+`;
+
+export const ADMIN_CURRENCY_RATES_QUERY = gql`
+  query AdminCurrencyRates($previewUsdCents: Int!) {
+    adminCurrencyRates {
+      baseCurrency
+      lastRefreshedAt
+      sourceUrl
+      rates {
+        ${CURRENCY_RATE_FIELDS}
+      }
+    }
+  }
+`;
+
+export const ADMIN_SAVE_CURRENCY_RATE_MUTATION = gql`
+  mutation AdminSaveCurrencyRate($input: AdminCurrencyRateInput!, $previewUsdCents: Int!) {
+    adminSaveCurrencyRate(input: $input) {
+      success
+      message
+      rate {
+        ${CURRENCY_RATE_FIELDS}
+      }
+    }
+  }
+`;
+
+export const ADMIN_REFRESH_CURRENCY_RATES_MUTATION = gql`
+  mutation AdminRefreshCurrencyRates {
+    adminRefreshCurrencyRates {
+      success
+      message
+      updatedCount
     }
   }
 `;

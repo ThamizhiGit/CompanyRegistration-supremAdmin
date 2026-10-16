@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { useQuery, useMutation } from '@apollo/client/react';
 import {
   ADMIN_COMPANIES_QUERY,
+  ADMIN_COMPANY_PACKAGES_QUERY,
   ADMIN_ASSIGN_COMPANY_PLAN_MUTATION,
   ADMIN_UPDATE_COMPANY_DETAIL_MUTATION,
   ADMIN_COMPANY_PAYMENT_HISTORY_QUERY,
@@ -10,6 +11,7 @@ import {
   ADMIN_MANUAL_SUBSCRIPTION_MUTATION,
 } from '../../../lib/graphql';
 import { buildPayload, formatDate, formatDateTime, formatPrice, toDateTimeLocalValue } from '../../../lib/admin-utils';
+import { ChangePackageDialog, CompanyPackage, PackageCell } from './PackageAdminUi';
 import {
   ArrowLeft,
   Building2,
@@ -30,6 +32,7 @@ import {
   Search,
   Users,
   X,
+  Package as PackageIcon,
 } from 'lucide-react';
 import { buildColumnFilterOptions, ColumnFilter, matchesColumnFilter } from '../ColumnFilter';
 import { DateRangePicker, DateRangeValue } from '../DateRangePicker';
@@ -249,6 +252,26 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
   const [manualProcess] = useMutation(ADMIN_MANUAL_SUBSCRIPTION_MUTATION);
 
   const rawCompanies = companiesData?.adminCompanies || [];
+  // Package per company (also for companies without any payment, e.g. on the free
+  // package, which the payments-based Subscriptions page does not list).
+  const companyIds = useMemo(
+    () => rawCompanies.map((c) => Number(c.id)).filter((id) => Number.isFinite(id)).sort((a, b) => a - b),
+    [rawCompanies],
+  );
+  const { data: packagesData, refetch: refetchPackages } = useQuery<
+    { adminCompanyPackages: CompanyPackage[] },
+    { companyIds: number[] },
+    any
+  >(ADMIN_COMPANY_PACKAGES_QUERY, {
+    variables: { companyIds },
+    skip: companyIds.length === 0,
+    fetchPolicy: 'cache-and-network',
+  });
+  const packageByCompany = useMemo(
+    () => new Map((packagesData?.adminCompanyPackages || []).map((row) => [row.companyId, row])),
+    [packagesData],
+  );
+  const [changingPackage, setChangingPackage] = useState<{ companyId: number; companyName: string } | null>(null);
   const historyItems = historyData?.adminCompanyPaymentHistory || [];
   const paymentStatuses = ['pending', 'succeeded', 'failed', 'refunded'] as const;
   const normalizeStatus = (status?: string | null) => (status || '').trim().toLowerCase();
@@ -805,6 +828,7 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                   <th className="text-left py-3 px-4"><SortHeader label="Company" sort="company" /></th>
                   <th className="text-left py-3 px-4"><SortHeader label="Subscription Status" sort="subscriptionStatus" /></th>
                   <th className="text-left py-3 px-4"><SortHeader label="Plan" sort="planName" /></th>
+                  <th className="text-left py-3 px-4 font-semibold text-slate-700">Package</th>
                   <th className="text-left py-3 px-4"><SortHeader label="Email" sort="latestPaymentEmail" /></th>
                   <th className="text-left py-3 px-4"><SortHeader label="Due Date" sort="subscriptionDueDate" /></th>
                   <th className="text-left py-3 px-4"><SortHeader label="Recurring Date" sort="subscriptionRecurringDate" /></th>
@@ -830,6 +854,7 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                       onChange={setPlanSelections}
                     />
                   </th>
+                  <th className="px-4 py-2"></th>
                   <th className="px-4 py-2">
                     <ColumnFilter
                       label="Email"
@@ -894,6 +919,9 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                           </div>
                         ) : null}
                       </td>
+                      <td className="py-3 px-4 text-slate-700 text-sm">
+                        <PackageCell pkg={packageByCompany.get(Number(company.id))} />
+                      </td>
                       <td className="py-3 px-4 text-slate-700 max-w-[200px] truncate" title={company.latestPaymentEmail || '-'}>{company.latestPaymentEmail || '-'}</td>
                       <td className="py-3 px-4 text-slate-700 whitespace-nowrap">{formatDate(company.subscriptionDueDate)}</td>
                       <td className="py-3 px-4 text-slate-700 whitespace-nowrap">{formatDate(company.subscriptionRecurringDate)}</td>
@@ -933,6 +961,14 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                           >
                             <Edit2 className="w-4 h-4" />
                           </button>
+                          <button
+                            title="Change package"
+                            aria-label="Change package"
+                            onClick={() => setChangingPackage({ companyId: Number(company.id), companyName: company.company })}
+                            className="p-2 hover:bg-cyan-50 text-cyan-700 rounded-lg"
+                          >
+                            <PackageIcon className="w-4 h-4" />
+                          </button>
                         </div>
                       </td>
                     </tr>
@@ -943,6 +979,20 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
           </div>
         )}
       </div>
+
+      {changingPackage ? (
+        <ChangePackageDialog
+          companyId={changingPackage.companyId}
+          companyName={changingPackage.companyName}
+          current={packageByCompany.get(changingPackage.companyId)}
+          onClose={() => setChangingPackage(null)}
+          onDone={() => {
+            refetchPackages();
+            refetchCompanies();
+          }}
+          onToast={onToast}
+        />
+      ) : null}
 
       {editingDetail && (
         <div className="fixed inset-0 z-40 bg-black/30 flex items-center justify-center p-4">

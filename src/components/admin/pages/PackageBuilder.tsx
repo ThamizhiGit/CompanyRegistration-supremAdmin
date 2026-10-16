@@ -1,28 +1,33 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useQuery } from '@apollo/client/react';
-import { AlertTriangle, Layers } from 'lucide-react';
+import { AlertTriangle, ChevronDown, ChevronRight, Layers } from 'lucide-react';
 import { ADMIN_PACKAGE_MODULES_QUERY } from '../../../lib/graphql';
 import { centsFromDollars, formatPrice } from '../../../lib/admin-utils';
 
 /**
- * Package pricing is set by the admin on the package itself (fixed price).
- * Modules carry no price here — they only decide what the package unlocks.
+ * Packages are priced by the admin in USD: a monthly price and an optional yearly
+ * (offer) price. The CUSTOMER picks the interval at checkout, and onboarding converts
+ * the price into the customer's own currency.
+ *
+ * Modules are a two-level tree: ticking a feature area includes every part of it.
  */
 export type PricingMode = 'fixed' | 'sum_modules' | 'sum_modules_disc' | 'base_plus_modules';
 export type PackageBillingInterval = 'monthly' | 'yearly' | 'both';
 
 export interface PackageModuleSelection {
   moduleId: string;
-  /** Kept for API compatibility; always blank (no per-module pricing). */
+  /** Kept for API compatibility; always blank (modules carry no price). */
   priceOverride: string;
 }
 
 export interface PackageDraft {
   pricingMode: PricingMode;
+  /** Monthly price in cents (USD) — the "Package price" field on the form. */
   basePriceCents: number;
   currency: string;
   billingInterval: PackageBillingInterval;
   bundleDiscountPct: number;
+  /** Yearly price in dollars as typed; blank = package is monthly only. */
   yearlyPriceOverride: string;
   yearlyDiscountPct: number;
   isPublic: boolean;
@@ -39,6 +44,7 @@ export interface PackageModuleOption {
   isCore?: boolean | null;
   icon?: string | null;
   dependsOn?: string[] | null;
+  parentId?: string | null;
 }
 
 export const PRICING_MODE_LABELS: Record<PricingMode, string> = {
@@ -48,31 +54,28 @@ export const PRICING_MODE_LABELS: Record<PricingMode, string> = {
   base_plus_modules: 'Package price',
 };
 
-/** Fields sent with adminSavePlan. Pricing is always the admin-entered package price. */
-export const draftToPlanInputFields = (draft: PackageDraft) => ({
-  pricingMode: 'fixed' as PricingMode,
-  bundleDiscountPct: 0,
-  yearlyPriceCents:
-    draft.billingInterval === 'both' && draft.yearlyPriceOverride.trim()
-      ? centsFromDollars(Number(draft.yearlyPriceOverride) || 0)
-      : null,
-  yearlyDiscountPct: draft.billingInterval === 'both' ? Number(draft.yearlyDiscountPct) || 0 : 0,
-  isPublic: draft.isPublic,
-  modules: draft.modules.map((m) => ({ moduleId: m.moduleId, priceOverrideCents: null })),
-});
+export const yearlyPriceCentsOf = (draft: PackageDraft): number | null =>
+  draft.yearlyPriceOverride.trim() ? centsFromDollars(Number(draft.yearlyPriceOverride) || 0) : null;
 
-/** The yearly amount the customer will see for a "monthly or yearly" package. */
-export const derivedYearlyCents = (draft: PackageDraft): number | null => {
-  if (draft.billingInterval !== 'both') return null;
-  if (draft.yearlyPriceOverride.trim()) return centsFromDollars(Number(draft.yearlyPriceOverride) || 0);
-  const pct = Math.min(Math.max(Number(draft.yearlyDiscountPct) || 0, 0), 100);
-  return Math.round(draft.basePriceCents * 12 * (100 - pct) / 100);
+/** Fields sent with adminSavePlan. billingInterval is derived from the prices that are set. */
+export const draftToPlanInputFields = (draft: PackageDraft) => {
+  const yearly = yearlyPriceCentsOf(draft);
+  return {
+    pricingMode: 'fixed' as PricingMode,
+    bundleDiscountPct: 0,
+    yearlyPriceCents: yearly,
+    yearlyDiscountPct: 0,
+    billingInterval: yearly !== null ? 'both' : 'monthly',
+    isPublic: draft.isPublic,
+    modules: draft.modules.map((m) => ({ moduleId: m.moduleId, priceOverrideCents: null })),
+  };
 };
 
 export const validatePackageDraft = (draft: PackageDraft, options: PackageModuleOption[]): string | null => {
   if (draft.modules.length === 0) return 'Select the modules this package unlocks.';
   if (draft.basePriceCents < 0) return 'Package price cannot be negative.';
-  if (draft.yearlyDiscountPct < 0 || draft.yearlyDiscountPct > 100) return 'Yearly discount must be between 0 and 100%.';
+  const yearly = yearlyPriceCentsOf(draft);
+  if (yearly !== null && yearly < 0) return 'Yearly price cannot be negative.';
   const selected = new Set(draft.modules.map((m) => m.moduleId));
   for (const option of options) {
     if (!selected.has(option.id)) continue;
@@ -96,34 +99,46 @@ export const PackageBuilder: React.FC<{
     () => [...(moduleData?.adminModules || [])].sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0)),
     [moduleData],
   );
-  const grouped = useMemo(() => {
-    const groups = new Map<string, PackageModuleOption[]>();
-    options.forEach((option) => {
-      const key = (option.category || 'other').toLowerCase();
-      groups.set(key, [...(groups.get(key) || []), option]);
-    });
-    return Array.from(groups.entries());
-  }, [options]);
+  /** Top-level feature areas with their child modules, in catalog order. */
+  const tree = useMemo(
+    () =>
+      options
+        .filter((option) => !option.parentId)
+        .map((parent) => ({ parent, children: options.filter((child) => child.parentId === parent.id) })),
+    [options],
+  );
   const selected = useMemo(() => new Set(value.modules.map((m) => m.moduleId)), [value.modules]);
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
 
-  const toggleModule = (option: PackageModuleOption) => {
+  const setSelection = (ids: string[]) =>
+    onChange({ ...value, modules: ids.map((moduleId) => ({ moduleId, priceOverride: '' })) });
+
+  const toggle = (option: PackageModuleOption, children: PackageModuleOption[] = []) => {
+    const family = [option.id, ...children.map((c) => c.id)];
+    const next = new Set(selected);
     if (selected.has(option.id)) {
-      const dependants = options.filter((o) => selected.has(o.id) && (o.dependsOn || []).includes(option.id));
-      const removeIds = new Set([option.id, ...dependants.map((d) => d.id)]);
-      onChange({ ...value, modules: value.modules.filter((m) => !removeIds.has(m.moduleId)) });
-      return;
+      family.forEach((id) => next.delete(id));
+      // unticking a child leaves the parent partially selected, so drop the parent flag
+      if (option.parentId) next.delete(option.parentId);
+    } else {
+      family.forEach((id) => next.add(id));
+      (option.dependsOn || []).forEach((dep) => next.add(dep));
+      // all children ticked -> tick the parent too
+      if (option.parentId) {
+        const siblings = options.filter((o) => o.parentId === option.parentId);
+        if (siblings.every((s) => s.id === option.id || next.has(s.id))) next.add(option.parentId);
+      }
     }
-    const additions = [option.id, ...(option.dependsOn || [])].filter((id) => !selected.has(id));
-    onChange({ ...value, modules: [...value.modules, ...additions.map((moduleId) => ({ moduleId, priceOverride: '' }))] });
+    setSelection(options.filter((o) => next.has(o.id)).map((o) => o.id));
   };
 
-  const setAll = (on: boolean) =>
-    onChange({ ...value, modules: on ? options.map((o) => ({ moduleId: o.id, priceOverride: '' })) : [] });
+  const setAll = (on: boolean) => setSelection(on ? options.map((o) => o.id) : []);
 
   const validation = validatePackageDraft(value, options);
   const currency = value.currency || 'USD';
-  const yearly = derivedYearlyCents(value);
-  const monthlyEquivalent = value.basePriceCents * 12;
+  const yearly = yearlyPriceCentsOf(value);
+  const monthlyTimes12 = value.basePriceCents * 12;
+  const selectedCount = value.modules.length;
 
   return (
     <section className="space-y-4 rounded-xl border border-sky-100 bg-sky-50/40 p-4" data-testid="package-builder">
@@ -142,36 +157,49 @@ export const PackageBuilder: React.FC<{
         </label>
       </div>
 
-      {value.billingInterval === 'both' ? (
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+      <div className="rounded-lg border border-slate-200 bg-white p-3">
+        <p className="mb-2 text-[11px] font-black uppercase tracking-wide text-slate-500">
+          Yearly offer price <span className="font-semibold normal-case text-slate-400">— leave blank for monthly only</span>
+        </p>
+        <div className="flex flex-wrap items-end gap-4">
           <label className="block">
-            <span className="mb-1 block text-sm font-medium text-slate-700">Yearly price ($)</span>
+            <span className="mb-1 block text-xs font-medium text-slate-600">Yearly price ($)</span>
             <input
               type="number" min="0" step="0.01"
               value={value.yearlyPriceOverride}
-              placeholder="Leave blank to use monthly × 12 − discount"
+              placeholder={(monthlyTimes12 / 100).toFixed(2)}
               onChange={(event) => onChange({ ...value, yearlyPriceOverride: event.target.value })}
-              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2"
+              className="w-44 rounded-lg border border-slate-300 px-3 py-2"
               data-testid="yearly-price"
             />
           </label>
-          <label className="block">
-            <span className="mb-1 block text-sm font-medium text-slate-700">Yearly discount (%)</span>
-            <input
-              type="number" min="0" max="100" step="0.5"
-              value={value.yearlyDiscountPct}
-              disabled={Boolean(value.yearlyPriceOverride.trim())}
-              onChange={(event) => onChange({ ...value, yearlyDiscountPct: Number(event.target.value) || 0 })}
-              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 disabled:bg-slate-100"
-            />
-          </label>
+          <div className="text-sm text-slate-600" data-testid="price-preview">
+            <div className="font-bold text-slate-900" data-testid="preview-monthly">
+              {formatPrice(value.basePriceCents, currency)} / month
+            </div>
+            {yearly !== null ? (
+              <div className="font-bold text-slate-900" data-testid="preview-yearly">
+                {formatPrice(yearly, currency)} / year
+                {monthlyTimes12 > yearly && monthlyTimes12 > 0 ? (
+                  <span className="ml-2 rounded bg-emerald-50 px-1.5 py-0.5 text-xs font-semibold text-emerald-700">
+                    save {Math.round(((monthlyTimes12 - yearly) / monthlyTimes12) * 100)}%
+                  </span>
+                ) : null}
+              </div>
+            ) : (
+              <div className="text-xs text-slate-500">Monthly only — the customer sees no yearly option.</div>
+            )}
+            <p className="mt-1 text-[11px] text-slate-400">
+              Prices are in USD; customers are shown and charged their own currency.
+            </p>
+          </div>
         </div>
-      ) : null}
+      </div>
 
       <div>
         <div className="mb-2 flex items-center justify-between">
           <span className="text-sm font-medium text-slate-700">
-            Included modules <span className="text-slate-400">({value.modules.length} of {options.length} selected)</span>
+            Included modules <span className="text-slate-400">({selectedCount} of {options.length} selected)</span>
           </span>
           {options.length ? (
             <span className="flex gap-2 text-xs">
@@ -186,63 +214,79 @@ export const PackageBuilder: React.FC<{
         </div>
         {modulesLoading && !options.length ? <p className="text-sm text-slate-500">Loading modules…</p> : null}
         {modulesError ? <p className="text-sm text-rose-600">Could not load modules: {modulesError.message}</p> : null}
-        <div className="space-y-3">
-          {grouped.map(([category, items]) => (
-            <div key={category}>
-              <p className="mb-1.5 text-[11px] font-black uppercase tracking-wide text-slate-500">{category}</p>
-              <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
-                {items.map((option) => {
-                  const isSelected = selected.has(option.id);
-                  return (
-                    <label
-                      key={option.id}
-                      className={`flex cursor-pointer items-start gap-2 rounded-lg border p-3 transition-colors ${
-                        isSelected ? 'border-sky-300 bg-white' : 'border-slate-200 bg-white/60'
-                      }`}
-                    >
-                      <input
-                        type="checkbox"
-                        className="mt-1"
-                        checked={isSelected}
-                        onChange={() => toggleModule(option)}
-                        data-testid={`module-checkbox-${option.id}`}
-                      />
-                      <span className="flex-1">
-                        <span className="block text-sm font-semibold text-slate-800">{option.name}</span>
-                        {option.description ? (
-                          <span className="mt-0.5 block text-xs text-slate-500">{option.description}</span>
+
+        <div className="space-y-2">
+          {tree.map(({ parent, children }) => {
+            const childSelected = children.filter((child) => selected.has(child.id)).length;
+            const isOpen = !collapsed[parent.id];
+            return (
+              <div key={parent.id} className="rounded-lg border border-slate-200 bg-white">
+                <div className="flex items-start gap-2 p-3">
+                  <button
+                    type="button"
+                    onClick={() => setCollapsed((prev) => ({ ...prev, [parent.id]: isOpen }))}
+                    className="mt-0.5 text-slate-400 hover:text-slate-700"
+                    aria-label={isOpen ? 'Collapse' : 'Expand'}
+                    disabled={!children.length}
+                  >
+                    {children.length ? (isOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />) : <span className="inline-block h-4 w-4" />}
+                  </button>
+                  <label className="flex flex-1 cursor-pointer items-start gap-2">
+                    <input
+                      type="checkbox"
+                      className="mt-1"
+                      checked={selected.has(parent.id)}
+                      ref={(el) => {
+                        if (el) el.indeterminate = !selected.has(parent.id) && childSelected > 0;
+                      }}
+                      onChange={() => toggle(parent, children)}
+                      data-testid={`module-checkbox-${parent.id}`}
+                    />
+                    <span className="flex-1">
+                      <span className="flex items-center gap-2">
+                        <span className="text-sm font-bold text-slate-800">{parent.name}</span>
+                        {children.length ? (
+                          <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-500">
+                            {childSelected}/{children.length}
+                          </span>
                         ) : null}
-                        {option.dependsOn?.length ? (
-                          <span className="mt-0.5 block text-[11px] text-amber-700">Requires: {option.dependsOn.join(', ')}</span>
+                        {!parent.active ? (
+                          <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold uppercase text-slate-500">
+                            Not sold separately
+                          </span>
                         ) : null}
                       </span>
-                    </label>
-                  );
-                })}
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
+                      {parent.description ? (
+                        <span className="mt-0.5 block text-xs text-slate-500">{parent.description}</span>
+                      ) : null}
+                    </span>
+                  </label>
+                </div>
 
-      <div className="rounded-lg border border-slate-200 bg-white p-3" data-testid="price-preview">
-        <span className="mb-2 block text-[11px] font-black uppercase tracking-wide text-slate-500">Customers will pay</span>
-        <div className="flex flex-wrap gap-4 text-sm font-bold text-slate-900">
-          {value.billingInterval !== 'yearly' ? (
-            <span data-testid="preview-monthly">{formatPrice(value.basePriceCents, currency)} / month</span>
-          ) : (
-            <span data-testid="preview-yearly">{formatPrice(value.basePriceCents, currency)} / year</span>
-          )}
-          {yearly !== null ? (
-            <span data-testid="preview-yearly">
-              {formatPrice(yearly, currency)} / year
-              {monthlyEquivalent > yearly && monthlyEquivalent > 0 ? (
-                <span className="ml-2 rounded bg-emerald-50 px-1.5 py-0.5 text-xs text-emerald-700">
-                  save {Math.round(((monthlyEquivalent - yearly) / monthlyEquivalent) * 100)}%
-                </span>
-              ) : null}
-            </span>
-          ) : null}
+                {children.length && isOpen ? (
+                  <div className="grid grid-cols-1 gap-1 border-t border-slate-100 bg-slate-50/60 p-3 pl-10 md:grid-cols-2">
+                    {children.map((child) => (
+                      <label key={child.id} className="flex cursor-pointer items-start gap-2 rounded-md p-1.5 hover:bg-white">
+                        <input
+                          type="checkbox"
+                          className="mt-1"
+                          checked={selected.has(child.id)}
+                          onChange={() => toggle(child)}
+                          data-testid={`module-checkbox-${child.id}`}
+                        />
+                        <span className="flex-1">
+                          <span className="block text-sm font-semibold text-slate-700">{child.name}</span>
+                          {child.description ? (
+                            <span className="mt-0.5 block text-xs text-slate-500">{child.description}</span>
+                          ) : null}
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
         </div>
       </div>
 
