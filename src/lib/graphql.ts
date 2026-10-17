@@ -1002,6 +1002,7 @@ export const ADMIN_APPLY_PLAN_TO_SUBSCRIBERS_MUTATION = gql`
         toVersion
         added
         removed
+        wasUnrestricted
       }
       plan {
         id

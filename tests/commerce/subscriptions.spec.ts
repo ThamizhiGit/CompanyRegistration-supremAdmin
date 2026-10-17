@@ -21,7 +21,7 @@ const moduleCatalog = [
   __typename: 'AdminModule',
 }));
 
-function mockPackages(api: MockGraphQLApi) {
+function mockPackages(api: MockGraphQLApi, { unrestricted = false } = {}) {
   api.setOverride('AdminPackageModules', { data: { adminModules: moduleCatalog } });
   api.setOverride('AdminCompanyPackages', {
     data: {
@@ -30,8 +30,10 @@ function mockPackages(api: MockGraphQLApi) {
           companyId: 12,
           companyName: 'Acme Labs',
           planId: 'growth-ai',
-          activeModules: ['employee_management', 'hr_shifts', 'project_management', 'pj_projects', 'workforce_ai', 'time_attendance'],
-          unrestricted: false,
+          activeModules: unrestricted
+            ? []
+            : ['employee_management', 'hr_shifts', 'project_management', 'pj_projects', 'workforce_ai', 'time_attendance'],
+          unrestricted,
           liveSubscription: {
             id: '1',
             planId: 'growth-ai',
@@ -133,4 +135,17 @@ test('change package sends the package, interval and reason', async ({ adminPage
     .poll(() => mockApi.lastVariables('AdminAssignCompanyPlan'))
     .toEqual({ companyId: 12, planId: 'finance', reason: 'Customer asked for finance', billingInterval: 'monthly' });
   await expect(dialog).toHaveCount(0);
+});
+
+test('change package on a legacy unrestricted company lists what it loses and warns', async ({ adminPage: page, mockApi }) => {
+  mockPackages(mockApi, { unrestricted: true });
+  await page.getByRole('button', { name: 'Subscriptions' }).click();
+  await page.getByRole('button', { name: 'Change package' }).first().click();
+
+  const dialog = page.getByRole('dialog', { name: 'Change package' });
+  await dialog.getByLabel('New package').selectOption('finance');
+  const diff = dialog.getByTestId('package-module-diff');
+  await expect(diff.getByTestId('package-unrestricted-warning')).toContainText('unrestricted access to every module');
+  await expect(diff).toContainText('Loses access to: Project Management, AI Workforce, Time & Attendance');
+  await expect(diff).not.toContainText('Gains:');
 });

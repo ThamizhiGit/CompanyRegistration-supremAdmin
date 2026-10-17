@@ -70,3 +70,49 @@ test('an edited package can be pushed to its existing subscribers after a previe
   await expect(dialog).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Apply to 2 subscriber(s)' })).toHaveCount(0);
 });
+
+test('the subscriber preview flags legacy unrestricted companies and what they lose', async ({
+  adminPage: page,
+  mockApi,
+}) => {
+  mockApi.setOverride('AdminPlansPackaging', () => packaging(1));
+  mockApi.setOverride('AdminPackageModules', {
+    data: {
+      adminModules: [
+        { id: 'employee_management', name: 'Core HR', parentId: null },
+        { id: 'hr_shifts', name: 'Shifts', parentId: 'employee_management' },
+        { id: 'accounting_reconciliation', name: 'Accounting', parentId: null },
+        { id: 'workforce_ai', name: 'AI Workforce', parentId: null },
+      ].map((m, i) => ({
+        ...m, description: '', active: true, sortOrder: i, category: 'core', isCore: false, icon: '', dependsOn: [], __typename: 'AdminModule',
+      })),
+    },
+  });
+  mockApi.setOverride('AdminApplyPlanToSubscribers', {
+    data: {
+      adminApplyPlanToSubscribers: {
+        success: true,
+        message: '1 subscriber(s) would be updated.',
+        dryRun: true,
+        updatedCount: 0,
+        changes: [
+          {
+            companyId: 14, companyName: 'Legacy Ltd', fromVersion: 1, toVersion: 3,
+            added: ['employee_management', 'hr_shifts'], removed: [], wasUnrestricted: true,
+            __typename: 'AdminPlanSubscriberChange',
+          },
+        ],
+        plan: { id: 'premium', version: 3, subscribersCount: 2, outdatedSubscribersCount: 1, __typename: 'AdminPlan' },
+        __typename: 'AdminApplyPlanToSubscribers',
+      },
+    },
+  });
+
+  await page.getByRole('button', { name: 'Plans' }).click();
+  await page.getByRole('button', { name: 'Apply to 1 subscriber(s)' }).click();
+  const changes = page.getByRole('dialog', { name: 'Apply package to existing subscribers' }).getByTestId('apply-subscriber-changes');
+  await expect(changes).toContainText('Legacy Ltd');
+  await expect(changes).toContainText('Had every module (legacy)');
+  await expect(changes).toContainText('− Accounting, AI Workforce');
+  await expect(changes).not.toContainText('+ Core HR');
+});

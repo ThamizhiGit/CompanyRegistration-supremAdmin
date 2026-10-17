@@ -189,7 +189,9 @@ export const ChangePackageDialog: React.FC<{
   }, [selected, intervals, interval]);
 
   // Children of a selected feature area are granted too; compare at feature-area level.
-  const currentCodes = current?.activeModules || [];
+  // A legacy unrestricted company has every module, so it loses whatever the package lacks.
+  const wasUnrestricted = Boolean(current?.unrestricted);
+  const currentCodes = wasUnrestricted ? Array.from(catalog.keys()) : current?.activeModules || [];
   const nextCodes = (selected?.modules || []).map((m) => m.moduleId);
   const { added, removed } = diffModules(
     summarizeModules(currentCodes, catalog).map((m) => m.code),
@@ -259,6 +261,15 @@ export const ChangePackageDialog: React.FC<{
 
         {selected ? (
           <div className="rounded-xl border border-slate-200 p-3 text-sm" data-testid="package-module-diff">
+            {wasUnrestricted ? (
+              <p className="mb-2 flex items-start gap-1.5 rounded-lg bg-amber-50 px-2.5 py-2 text-amber-800" data-testid="package-unrestricted-warning">
+                <AlertTriangle className="mt-0.5 h-4 w-4 flex-none" />
+                <span>
+                  This company has <strong>unrestricted access to every module</strong> (legacy, no package recorded).
+                  Assigning a package ends that: it keeps only the package's modules.
+                </span>
+              </p>
+            ) : null}
             {added.length === 0 && removed.length === 0 ? (
               <p className="text-slate-500">Modules stay the same.</p>
             ) : (
@@ -311,6 +322,8 @@ interface SubscriberChange {
   toVersion: number;
   added: string[];
   removed: string[];
+  /** Legacy company that had every module (no modules recorded); it moves onto this package. */
+  wasUnrestricted?: boolean | null;
 }
 
 interface ApplyPayload {
@@ -348,6 +361,8 @@ export const ApplyToSubscribersDialog: React.FC<{
 
   const nameOf = (code: string) => catalog.get(code)?.name || prettifyModuleCode(code);
   const summarize = (codes: string[]) => summarizeModules(codes, catalog).map((m) => m.name).join(', ');
+  /** What a legacy unrestricted company loses: every catalog module outside its new modules. */
+  const lostByUnrestricted = (c: SubscriberChange) => Array.from(catalog.keys()).filter((code) => !c.added.includes(code));
 
   const apply = async () => {
     try {
@@ -386,9 +401,23 @@ export const ApplyToSubscribersDialog: React.FC<{
                     v{c.fromVersion} <ArrowRight className="h-3 w-3" /> v{c.toVersion}
                   </span>
                 </div>
-                {c.added.length ? <div className="text-xs text-emerald-700">+ {summarize(c.added) || c.added.map(nameOf).join(', ')}</div> : null}
-                {c.removed.length ? <div className="text-xs text-red-700">− {summarize(c.removed) || c.removed.map(nameOf).join(', ')}</div> : null}
-                {!c.added.length && !c.removed.length ? <div className="text-xs text-slate-500">Version bump only (modules unchanged)</div> : null}
+                {c.wasUnrestricted ? (
+                  <>
+                    <div className="flex items-start gap-1 text-xs font-semibold text-amber-700">
+                      <AlertTriangle className="mt-0.5 h-3 w-3 flex-none" />
+                      Had every module (legacy) — will be limited to this package
+                    </div>
+                    {lostByUnrestricted(c).length ? (
+                      <div className="text-xs text-red-700">− {summarize(lostByUnrestricted(c))}</div>
+                    ) : null}
+                  </>
+                ) : (
+                  <>
+                    {c.added.length ? <div className="text-xs text-emerald-700">+ {summarize(c.added) || c.added.map(nameOf).join(', ')}</div> : null}
+                    {c.removed.length ? <div className="text-xs text-red-700">− {summarize(c.removed) || c.removed.map(nameOf).join(', ')}</div> : null}
+                    {!c.added.length && !c.removed.length ? <div className="text-xs text-slate-500">Version bump only (modules unchanged)</div> : null}
+                  </>
+                )}
               </li>
             ))}
           </ul>
