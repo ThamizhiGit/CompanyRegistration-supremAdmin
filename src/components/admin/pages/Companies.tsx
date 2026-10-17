@@ -2,7 +2,6 @@ import React, { useMemo, useState } from 'react';
 import { useQuery, useMutation } from '@apollo/client/react';
 import {
   ADMIN_COMPANIES_QUERY,
-  ADMIN_COMPANY_PACKAGES_QUERY,
   ADMIN_ASSIGN_COMPANY_PLAN_MUTATION,
   ADMIN_UPDATE_COMPANY_DETAIL_MUTATION,
   ADMIN_COMPANY_PAYMENT_HISTORY_QUERY,
@@ -11,7 +10,7 @@ import {
   ADMIN_MANUAL_SUBSCRIPTION_MUTATION,
 } from '../../../lib/graphql';
 import { buildPayload, formatDate, formatDateTime, formatPrice, toDateTimeLocalValue } from '../../../lib/admin-utils';
-import { ChangePackageDialog, CompanyPackage, PackageCell } from './PackageAdminUi';
+import { ChangePackageDialog, PackageCell, useCompanyPackages } from './PackageAdminUi';
 import {
   ArrowLeft,
   Building2,
@@ -258,19 +257,7 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
     () => rawCompanies.map((c) => Number(c.id)).filter((id) => Number.isFinite(id)).sort((a, b) => a - b),
     [rawCompanies],
   );
-  const { data: packagesData, refetch: refetchPackages } = useQuery<
-    { adminCompanyPackages: CompanyPackage[] },
-    { companyIds: number[] },
-    any
-  >(ADMIN_COMPANY_PACKAGES_QUERY, {
-    variables: { companyIds },
-    skip: companyIds.length === 0,
-    fetchPolicy: 'cache-and-network',
-  });
-  const packageByCompany = useMemo(
-    () => new Map((packagesData?.adminCompanyPackages || []).map((row) => [row.companyId, row])),
-    [packagesData],
-  );
+  const { packageByCompany, refetch: refetchPackages } = useCompanyPackages(companyIds);
   const [changingPackage, setChangingPackage] = useState<{ companyId: number; companyName: string } | null>(null);
   const historyItems = historyData?.adminCompanyPaymentHistory || [];
   const paymentStatuses = ['pending', 'succeeded', 'failed', 'refunded'] as const;

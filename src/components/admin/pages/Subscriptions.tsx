@@ -8,9 +8,8 @@ import {
   ADMIN_SUSPEND_COMPANY_MUTATION,
   ADMIN_RESUME_COMPANY_MUTATION,
   ADMIN_MANUAL_SUBSCRIPTION_MUTATION,
-  ADMIN_COMPANY_PACKAGES_QUERY,
 } from '../../../lib/graphql';
-import { ChangePackageDialog, CompanyPackage, ModuleChips, PackageCell, useModuleCatalog } from './PackageAdminUi';
+import { ChangePackageDialog, ModuleChips, PackageCell, useCompanyPackages, useModuleCatalog } from './PackageAdminUi';
 import { formatPrice, formatDate, formatDateTime, toDateTimeLocalValue } from '../../../lib/admin-utils';
 import {
   Building2,
@@ -242,19 +241,7 @@ export const Subscriptions: React.FC<{
     () => Array.from(new Set((data?.adminPayments || []).map((p) => p.companyId).filter((id): id is number => typeof id === 'number'))).sort((a, b) => a - b),
     [data],
   );
-  const { data: packagesData, refetch: refetchPackages } = useQuery<
-    { adminCompanyPackages: CompanyPackage[] },
-    { companyIds: number[] },
-    any
-  >(ADMIN_COMPANY_PACKAGES_QUERY, {
-    variables: { companyIds: paymentCompanyIds },
-    skip: paymentCompanyIds.length === 0,
-    fetchPolicy: 'cache-and-network',
-  });
-  const packageByCompany = useMemo(
-    () => new Map((packagesData?.adminCompanyPackages || []).map((row) => [row.companyId, row])),
-    [packagesData],
-  );
+  const { packageByCompany, refetch: refetchPackages } = useCompanyPackages(paymentCompanyIds);
   const moduleCatalog = useModuleCatalog();
   const packageNameOf = (companyId?: number | null) => {
     if (companyId === undefined || companyId === null) return '-';

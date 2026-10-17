@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { useMutation, useQuery } from '@apollo/client/react';
+import { useApolloClient, useMutation, useQuery } from '@apollo/client/react';
 import { AlertTriangle, ArrowRight, Package, RefreshCw, X } from 'lucide-react';
 import {
   ADMIN_APPLY_PLAN_TO_SUBSCRIBERS_MUTATION,
   ADMIN_ASSIGN_COMPANY_PLAN_MUTATION,
+  ADMIN_COMPANY_PACKAGES_QUERY,
   ADMIN_PACKAGE_MODULES_QUERY,
   ADMIN_PACKAGE_OPTIONS_QUERY,
 } from '../../../lib/graphql';
@@ -62,6 +63,53 @@ export const useModuleCatalog = () => {
     fetchPolicy: 'cache-first',
   });
   return useMemo(() => new Map((data?.adminModules || []).map((m) => [m.id, m])), [data]);
+};
+
+/** adminCompanyPackages answers for at most this many company ids per request. */
+const COMPANY_PACKAGES_BATCH_SIZE = 500;
+
+/**
+ * Package per company for `companyIds`, fetched in batches the backend accepts (it keeps
+ * only the first 500 ids of a request). A failing request only blanks the package columns.
+ */
+export const useCompanyPackages = (companyIds: number[]) => {
+  const client = useApolloClient();
+  const [rows, setRows] = useState<CompanyPackage[]>([]);
+  const [reloadCount, setReloadCount] = useState(0);
+  const idsKey = companyIds.join(',');
+
+  useEffect(() => {
+    if (companyIds.length === 0) {
+      setRows([]);
+      return;
+    }
+    let cancelled = false;
+    const batches: number[][] = [];
+    for (let start = 0; start < companyIds.length; start += COMPANY_PACKAGES_BATCH_SIZE) {
+      batches.push(companyIds.slice(start, start + COMPANY_PACKAGES_BATCH_SIZE));
+    }
+    Promise.all(
+      batches.map((ids) =>
+        client
+          .query({
+            query: ADMIN_COMPANY_PACKAGES_QUERY,
+            variables: { companyIds: ids },
+            fetchPolicy: 'network-only',
+          })
+          .then((res) => (res.data as { adminCompanyPackages?: CompanyPackage[] } | undefined)?.adminCompanyPackages || [])
+          .catch(() => [] as CompanyPackage[]),
+      ),
+    ).then((results) => {
+      if (!cancelled) setRows(results.flat());
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [client, idsKey, reloadCount]);
+
+  const packageByCompany = useMemo(() => new Map(rows.map((row) => [row.companyId, row])), [rows]);
+  return { packageByCompany, refetch: () => setReloadCount((count) => count + 1) };
 };
 
 /**

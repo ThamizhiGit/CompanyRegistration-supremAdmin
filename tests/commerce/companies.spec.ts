@@ -64,3 +64,37 @@ test('companies page shows plan billing context and assigns plan', async ({
     .toBe('free');
   expect(mockApi.lastVariables('AdminAssignCompanyPlan')?.companyId).toBe(12);
 });
+
+test('companies page loads packages in batches of 500 so every row gets its package', async ({
+  adminPage: page,
+  mockApi,
+}) => {
+  const template = mockApi.companies[0];
+  for (let id = 1000; id < 1600; id += 1) {
+    mockApi.companies.push({ ...template, id, company: `Bulk Co ${id}` });
+  }
+  mockApi.setOverride('AdminCompanyPackages', (payload) => ({
+    data: {
+      adminCompanyPackages: (payload.variables?.companyIds as number[]).map((companyId) => ({
+        companyId,
+        companyName: `Company ${companyId}`,
+        planId: 'premium',
+        activeModules: [],
+        unrestricted: false,
+        liveSubscription: {
+          id: String(companyId), planId: 'premium', planName: `Package ${companyId}`, planVersion: 1,
+          currentPlanVersion: 1, isOutdated: false, status: 'active', billingInterval: 'monthly',
+          moduleCodes: [], priceCents: 1200, currency: 'USD', currentPeriodEnd: null, createdBy: null,
+          createdAt: null, __typename: 'AdminCompanySubscription',
+        },
+        __typename: 'AdminCompanyPackage',
+      })),
+    },
+  }));
+
+  await page.getByRole('button', { name: 'Companies' }).click();
+  // 600 rows take a while to render
+  await expect(page.getByText('Package 1599', { exact: true })).toBeVisible({ timeout: 20_000 });
+  const batches = (mockApi.requests.get('AdminCompanyPackages') || []).map((v) => (v.companyIds as number[]).length);
+  expect(Math.max(...batches)).toBeLessThanOrEqual(500);
+});
