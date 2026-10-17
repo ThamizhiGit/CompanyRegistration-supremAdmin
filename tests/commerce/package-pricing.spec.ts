@@ -126,3 +126,11 @@ test('choosing Monthly only clears the yearly offer and discount', async ({ admi
     yearlyDiscountPct: 0,
   });
 });
+
+test('a package the backend cannot price shows "Pricing unavailable", not a yearly price', async ({ adminPage: page, mockApi }) => {
+  mockApi.setOverride('AdminPlansPackaging', packaging({ availableIntervals: [], pricing: null }));
+
+  await page.getByRole('button', { name: 'Plans' }).click();
+  await expect(page.getByText('Pricing unavailable')).toBeVisible();
+  await expect(page.getByText('/ yr')).toHaveCount(0);
+});

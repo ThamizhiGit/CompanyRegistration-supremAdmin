@@ -1037,17 +1037,28 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
                 <div className="mt-4 grid grid-cols-2 gap-3">
                   <div className="rounded-lg border border-sky-100 bg-sky-50/60 p-2.5">
                     <span className="mb-0.5 block text-[11px] font-black uppercase tracking-tight text-sky-600">Price</span>
-                    <div className="text-lg font-black leading-tight text-gray-800">
-                      {formatPrice(
-                        packagingById.get(plan.id)?.pricing?.monthlyPriceCents ??
-                          packagingById.get(plan.id)?.pricing?.yearlyPriceCents ??
-                          plan.basePriceCents,
-                        plan.currency,
-                      ).replace('.00', '')}
-                      <span className="text-xs font-bold text-gray-500">
-                        {packagingById.get(plan.id)?.pricing?.monthlyPriceCents != null ? ' / mo' : ' / yr'}
-                      </span>
-                    </div>
+                    {packagingById.get(plan.id) && !packagingById.get(plan.id)!.pricing ? (
+                      // the backend could not price this package (PricingError)
+                      <div className="text-sm font-bold leading-tight text-gray-500">Pricing unavailable</div>
+                    ) : (
+                      <div className="text-lg font-black leading-tight text-gray-800">
+                        <span>
+                          {formatPrice(
+                            packagingById.get(plan.id)?.pricing?.monthlyPriceCents ??
+                              packagingById.get(plan.id)?.pricing?.yearlyPriceCents ??
+                              plan.basePriceCents,
+                            plan.currency,
+                          ).replace('.00', '')}
+                        </span>
+                        <span className="text-xs font-bold text-gray-500">
+                          {(packagingById.get(plan.id)?.pricing
+                            ? packagingById.get(plan.id)!.pricing!.monthlyPriceCents == null
+                            : plan.billingInterval === 'yearly')
+                            ? ' / yr'
+                            : ' / mo'}
+                        </span>
+                      </div>
+                    )}
                     <p className="mt-0.5 text-xs text-gray-500">{billingCopy(plan)}</p>
                     {packagingById.get(plan.id)?.pricing?.yearlyPriceCents != null &&
                     packagingById.get(plan.id)?.pricing?.monthlyPriceCents != null ? (
