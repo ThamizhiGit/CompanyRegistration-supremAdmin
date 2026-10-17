@@ -16,6 +16,9 @@ import {
   PackageModuleSelection,
   PricingMode,
   draftToPlanInputFields,
+  effectiveBillingInterval,
+  planIntervalPrices,
+  yearlyPriceCentsOf,
 } from './PackageBuilder';
 import { centsFromDollars, formatPrice } from '../../../lib/admin-utils';
 import { buildColumnFilterOptions, ColumnFilter, matchesColumnFilter } from '../ColumnFilter';
@@ -30,6 +33,7 @@ interface PlanPackaging {
   yearlyDiscountPct: number;
   isPublic: boolean;
   version: number;
+  availableIntervals?: string[] | null;
   companiesCount?: number | null;
   subscribersCount?: number | null;
   outdatedSubscribersCount?: number | null;
@@ -216,6 +220,28 @@ const parseFeatures = (features: PlanType['features']): string[] => {
   }
 };
 
+/**
+ * The interval the package is actually sold on: the API's availableIntervals, else the
+ * same derivation as the backend. A legacy yearly-only package keeps its yearly price in
+ * basePriceCents; a "both" package may derive its yearly price from yearlyDiscountPct.
+ */
+const editingBillingInterval = (plan: PlanType, packaging?: PlanPackaging): BillingInterval => {
+  if (!packaging) return plan.billingInterval || 'monthly';
+  const intervals = packaging.availableIntervals || [];
+  if (intervals.length) {
+    if (intervals.includes('yearly')) return intervals.includes('monthly') ? 'both' : 'yearly';
+    return 'monthly';
+  }
+  return effectiveBillingInterval(
+    ...planIntervalPrices({
+      basePriceCents: plan.basePriceCents,
+      billingInterval: plan.billingInterval,
+      yearlyPriceCents: packaging.yearlyPriceCents,
+      yearlyDiscountPct: packaging.yearlyDiscountPct,
+    }),
+  );
+};
+
 const toEditingPlan = (plan: PlanType, packaging?: PlanPackaging): EditingPlan => ({
   pricingMode: packaging?.pricingMode || 'fixed',
   bundleDiscountPct: Number(packaging?.bundleDiscountPct) || 0,
@@ -232,7 +258,7 @@ const toEditingPlan = (plan: PlanType, packaging?: PlanPackaging): EditingPlan =
   description: plan.description || '',
   basePriceCents: plan.basePriceCents,
   currency: normalizeCurrency(plan.currency || 'USD'),
-  billingInterval: plan.billingInterval || 'monthly',
+  billingInterval: editingBillingInterval(plan, packaging),
   perEmployee: Boolean(plan.perEmployee),
   trialMonths: plan.trialMonths || 0,
   employeeLimit: plan.employeeLimit === null || plan.employeeLimit === undefined ? '' : String(plan.employeeLimit),
@@ -544,6 +570,10 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
 
     if (editing.modules.length === 0) {
       onToast('error', 'Select the modules this package unlocks');
+      return;
+    }
+    if (editing.billingInterval === 'both' && yearlyPriceCentsOf(editing) === null) {
+      onToast('error', 'Set a yearly price, or choose Monthly only');
       return;
     }
     const packaging = packagingById.get(editing.id);
@@ -1266,7 +1296,7 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
                 </label>
                 <label className="block">
                   <span className="mb-1 block text-sm font-medium text-slate-700">
-                    Package price ($ / month)
+                    Package price ($ / {editing.billingInterval === 'yearly' ? 'year' : 'month'})
                   </span>
                   <input
                     type="number"
@@ -1286,14 +1316,18 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
                     className="w-full rounded-lg border border-slate-300 px-3 py-2"
                   />
                 </label>
-                <div className="block">
-                  <span className="mb-1 block text-sm font-medium text-slate-700">Billing</span>
-                  <p className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
-                    {editing.yearlyPriceOverride.trim()
-                      ? 'Monthly or yearly — the customer chooses at checkout.'
-                      : 'Monthly only. Add a yearly price below to offer yearly too.'}
-                  </p>
-                </div>
+                <label className="block">
+                  <span className="mb-1 block text-sm font-medium text-slate-700">Billing interval</span>
+                  <select
+                    value={editing.billingInterval}
+                    onChange={(event) => setEditing({ ...editing, billingInterval: event.target.value as BillingInterval })}
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2"
+                  >
+                    <option value="monthly">Monthly only</option>
+                    <option value="yearly">Yearly only</option>
+                    <option value="both">Monthly or yearly (customer chooses)</option>
+                  </select>
+                </label>
                 <label className="block">
                   <span className="mb-1 block text-sm font-medium text-slate-700">Trial months</span>
                   <input

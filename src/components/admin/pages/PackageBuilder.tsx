@@ -5,9 +5,14 @@ import { ADMIN_PACKAGE_MODULES_QUERY } from '../../../lib/graphql';
 import { centsFromDollars, formatPrice } from '../../../lib/admin-utils';
 
 /**
- * Packages are priced by the admin in USD: a monthly price and an optional yearly
- * (offer) price. The CUSTOMER picks the interval at checkout, and onboarding converts
- * the price into the customer's own currency.
+ * Packages are priced by the admin in USD and sold monthly, yearly, or both (the
+ * CUSTOMER picks the interval at checkout); onboarding converts the price into the
+ * customer's own currency.
+ *
+ * Backend convention (registration/pricing.py): `basePriceCents` is the price for the
+ * package's own interval -- a yearly-only package stores its YEARLY price there;
+ * monthly and "both" packages store the monthly price. A "both" package's yearly price
+ * is the explicit `yearlyPriceCents`, or is derived from `yearlyDiscountPct`.
  *
  * Modules are a two-level tree: ticking a feature area includes every part of it.
  */
@@ -22,13 +27,14 @@ export interface PackageModuleSelection {
 
 export interface PackageDraft {
   pricingMode: PricingMode;
-  /** Monthly price in cents (USD) — the "Package price" field on the form. */
+  /** Price in cents (USD) for the package's own interval: yearly for a yearly-only package, else monthly. */
   basePriceCents: number;
   currency: string;
   billingInterval: PackageBillingInterval;
   bundleDiscountPct: number;
-  /** Yearly price in dollars as typed; blank = package is monthly only. */
+  /** Explicit yearly price in dollars for a "both" package; blank = derived from yearlyDiscountPct. */
   yearlyPriceOverride: string;
+  /** Legacy: derives the yearly price of a "both" package when no explicit one is set. */
   yearlyDiscountPct: number;
   isPublic: boolean;
   modules: PackageModuleSelection[];
@@ -54,18 +60,62 @@ export const PRICING_MODE_LABELS: Record<PricingMode, string> = {
   base_plus_modules: 'Package price',
 };
 
-export const yearlyPriceCentsOf = (draft: PackageDraft): number | null =>
+const roundHalfUp = (value: number) => Math.floor(value + 0.5);
+
+/**
+ * (monthly, yearly) cents a package is sold at -- mirrors registration/pricing.py
+ * plan_interval_prices; either is null when the package is not sold on that interval.
+ */
+export const planIntervalPrices = (plan: {
+  basePriceCents: number;
+  billingInterval?: string | null;
+  yearlyPriceCents?: number | null;
+  yearlyDiscountPct?: number | null;
+}): [number | null, number | null] => {
+  const base = Number(plan.basePriceCents) || 0;
+  const explicitYearly = plan.yearlyPriceCents ?? null;
+  if (plan.billingInterval === 'yearly' && explicitYearly === null) return [null, base];
+  if (explicitYearly !== null) return [base, explicitYearly];
+  const pct = Number(plan.yearlyDiscountPct) || 0;
+  if (pct > 0) return [base, roundHalfUp((base * 12 * (100 - pct)) / 100)];
+  return [base, null];
+};
+
+/** The interval to show in the editor: what the package is actually sold on today. */
+export const effectiveBillingInterval = (
+  monthly: number | null,
+  yearly: number | null,
+): PackageBillingInterval => (monthly === null && yearly !== null ? 'yearly' : yearly !== null ? 'both' : 'monthly');
+
+const explicitYearlyCentsOf = (draft: PackageDraft): number | null =>
   draft.yearlyPriceOverride.trim() ? centsFromDollars(Number(draft.yearlyPriceOverride) || 0) : null;
 
-/** Fields sent with adminSavePlan. billingInterval is derived from the prices that are set. */
+/** Yearly price the customer would pay, or null when the package is not sold yearly. */
+export const yearlyPriceCentsOf = (draft: PackageDraft): number | null => {
+  if (draft.billingInterval === 'monthly') return null;
+  if (draft.billingInterval === 'yearly') return draft.basePriceCents;
+  return planIntervalPrices({ ...draft, billingInterval: 'both', yearlyPriceCents: explicitYearlyCentsOf(draft) })[1];
+};
+
+/** Monthly price the customer would pay, or null when the package is yearly only. */
+export const monthlyPriceCentsOf = (draft: PackageDraft): number | null =>
+  draft.billingInterval === 'yearly' ? null : draft.basePriceCents;
+
+/**
+ * Fields sent with adminSavePlan. The package's billing interval and legacy yearly
+ * discount are kept as they are, so an unedited package saves back unchanged.
+ */
 export const draftToPlanInputFields = (draft: PackageDraft) => {
-  const yearly = yearlyPriceCentsOf(draft);
+  const both = draft.billingInterval === 'both';
   return {
     pricingMode: 'fixed' as PricingMode,
     bundleDiscountPct: 0,
-    yearlyPriceCents: yearly,
-    yearlyDiscountPct: 0,
-    billingInterval: yearly !== null ? 'both' : 'monthly',
+    basePriceCents: draft.basePriceCents,
+    // a yearly-only package keeps its yearly price in basePriceCents (see above)
+    yearlyPriceCents: both ? explicitYearlyCentsOf(draft) : null,
+    // the backend derives a yearly price from this even on a monthly package, so clear it there
+    yearlyDiscountPct: draft.billingInterval === 'monthly' ? 0 : Number(draft.yearlyDiscountPct) || 0,
+    billingInterval: draft.billingInterval,
     isPublic: draft.isPublic,
     modules: draft.modules.map((m) => ({ moduleId: m.moduleId, priceOverrideCents: null })),
   };
@@ -74,8 +124,11 @@ export const draftToPlanInputFields = (draft: PackageDraft) => {
 export const validatePackageDraft = (draft: PackageDraft, options: PackageModuleOption[]): string | null => {
   if (draft.modules.length === 0) return 'Select the modules this package unlocks.';
   if (draft.basePriceCents < 0) return 'Package price cannot be negative.';
-  const yearly = yearlyPriceCentsOf(draft);
-  if (yearly !== null && yearly < 0) return 'Yearly price cannot be negative.';
+  const explicitYearly = draft.billingInterval === 'both' ? explicitYearlyCentsOf(draft) : null;
+  if (explicitYearly !== null && explicitYearly < 0) return 'Yearly price cannot be negative.';
+  if (draft.billingInterval === 'both' && yearlyPriceCentsOf(draft) === null) {
+    return 'Set a yearly price, or choose Monthly only.';
+  }
   const selected = new Set(draft.modules.map((m) => m.moduleId));
   for (const option of options) {
     if (!selected.has(option.id)) continue;
@@ -137,7 +190,17 @@ export const PackageBuilder: React.FC<{
   const validation = validatePackageDraft(value, options);
   const currency = value.currency || 'USD';
   const yearly = yearlyPriceCentsOf(value);
-  const monthlyTimes12 = value.basePriceCents * 12;
+  const monthly = monthlyPriceCentsOf(value);
+  const monthlyTimes12 = (monthly ?? 0) * 12;
+  const discountPct = Number(value.yearlyDiscountPct) || 0;
+  const yearlyOnly = value.billingInterval === 'yearly';
+  /** Typing a yearly price offers yearly too; clearing it (no discount) goes back to monthly only. */
+  const setYearlyPrice = (text: string) => {
+    let billingInterval = value.billingInterval;
+    if (text.trim() && billingInterval === 'monthly') billingInterval = 'both';
+    if (!text.trim() && billingInterval === 'both' && discountPct <= 0) billingInterval = 'monthly';
+    onChange({ ...value, yearlyPriceOverride: text, billingInterval });
+  };
   const selectedCount = value.modules.length;
 
   return (
@@ -159,24 +222,41 @@ export const PackageBuilder: React.FC<{
 
       <div className="rounded-lg border border-slate-200 bg-white p-3">
         <p className="mb-2 text-[11px] font-black uppercase tracking-wide text-slate-500">
-          Yearly offer price <span className="font-semibold normal-case text-slate-400">— leave blank for monthly only</span>
+          {yearlyOnly ? (
+            <>
+              Yearly price <span className="font-semibold normal-case text-slate-400">— yearly only; set it in Package price</span>
+            </>
+          ) : (
+            <>
+              Yearly offer price{' '}
+              <span className="font-semibold normal-case text-slate-400">
+                {discountPct > 0 && value.billingInterval === 'both'
+                  ? `— leave blank to use the ${discountPct}% yearly discount`
+                  : '— leave blank for monthly only'}
+              </span>
+            </>
+          )}
         </p>
         <div className="flex flex-wrap items-end gap-4">
-          <label className="block">
-            <span className="mb-1 block text-xs font-medium text-slate-600">Yearly price ($)</span>
-            <input
-              type="number" min="0" step="0.01"
-              value={value.yearlyPriceOverride}
-              placeholder={(monthlyTimes12 / 100).toFixed(2)}
-              onChange={(event) => onChange({ ...value, yearlyPriceOverride: event.target.value })}
-              className="w-44 rounded-lg border border-slate-300 px-3 py-2"
-              data-testid="yearly-price"
-            />
-          </label>
+          {!yearlyOnly ? (
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium text-slate-600">Yearly price ($)</span>
+              <input
+                type="number" min="0" step="0.01"
+                value={value.yearlyPriceOverride}
+                placeholder={yearly !== null ? (yearly / 100).toFixed(2) : (monthlyTimes12 / 100).toFixed(2)}
+                onChange={(event) => setYearlyPrice(event.target.value)}
+                className="w-44 rounded-lg border border-slate-300 px-3 py-2"
+                data-testid="yearly-price"
+              />
+            </label>
+          ) : null}
           <div className="text-sm text-slate-600" data-testid="price-preview">
-            <div className="font-bold text-slate-900" data-testid="preview-monthly">
-              {formatPrice(value.basePriceCents, currency)} / month
-            </div>
+            {monthly !== null ? (
+              <div className="font-bold text-slate-900" data-testid="preview-monthly">
+                {formatPrice(monthly, currency)} / month
+              </div>
+            ) : null}
             {yearly !== null ? (
               <div className="font-bold text-slate-900" data-testid="preview-yearly">
                 {formatPrice(yearly, currency)} / year
@@ -186,9 +266,12 @@ export const PackageBuilder: React.FC<{
                   </span>
                 ) : null}
               </div>
-            ) : (
+            ) : null}
+            {yearlyOnly ? (
+              <div className="text-xs text-slate-500">Yearly only — the customer sees no monthly option.</div>
+            ) : yearly === null ? (
               <div className="text-xs text-slate-500">Monthly only — the customer sees no yearly option.</div>
-            )}
+            ) : null}
             <p className="mt-1 text-[11px] text-slate-400">
               Prices are in USD; customers are shown and charged their own currency.
             </p>
