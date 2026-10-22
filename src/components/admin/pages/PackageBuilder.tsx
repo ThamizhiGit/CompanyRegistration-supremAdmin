@@ -8,7 +8,7 @@ import {
   ADMIN_PACKAGE_MODULES_QUERY,
   ADMIN_PLANS_PACKAGING_QUERY,
 } from '../../../lib/graphql';
-import { centsFromAmount, currencyDecimals, formatPrice } from '../../../lib/admin-utils';
+import { amountFromCents, centsFromAmount, currencyDecimals, formatPrice } from '../../../lib/admin-utils';
 
 /**
  * Packages (dynamic packages): the admin sets the package price; modules carry
@@ -244,6 +244,124 @@ const TreeCheckbox: React.FC<{
   return <input ref={ref} type="checkbox" className="mt-1" checked={checked} onChange={onChange} data-testid={testId} />;
 };
 
+type YearlyPriceMode = 'fixed' | 'percent';
+
+/**
+ * Yearly offer for a package: a fixed yearly price (e.g. $100 instead of
+ * 12 x $12) or a % off twelve monthly payments. A yearly discount needs a
+ * monthly price to compare with, so it applies to "Monthly or yearly"
+ * packages; a Monthly package can be switched to that from here.
+ */
+export const YearlyPricingFields: React.FC<{
+  value: PackageDraft;
+  onChange: (next: PackageDraft) => void;
+}> = ({ value, onChange }) => {
+  const currency = value.currency || 'USD';
+  const step = currencyDecimals(currency) === 0 ? '1' : '0.01';
+  const [mode, setMode] = useState<YearlyPriceMode>(value.yearlyPriceOverride.trim() ? 'fixed' : 'percent');
+  const fullYear = value.basePriceCents * 12;
+  const yearly = derivedYearlyCents(value);
+  const savingPct = yearly !== null && fullYear > 0 ? Math.round(((fullYear - yearly) / fullYear) * 100) : 0;
+
+  if (value.billingInterval === 'monthly') {
+    return (
+      <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-dashed border-slate-300 px-3 py-2 text-sm text-slate-600 md:col-span-2">
+        <span>Sold monthly only. Want a cheaper yearly price as well?</span>
+        <button
+          type="button"
+          className="font-semibold text-sky-700 hover:underline"
+          onClick={() => onChange({ ...value, billingInterval: 'both' })}
+          data-testid="add-yearly-price"
+        >
+          + Add a yearly price
+        </button>
+      </div>
+    );
+  }
+
+  if (value.billingInterval === 'yearly') {
+    return (
+      <p className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500 md:col-span-2">
+        Sold yearly only: the package price above is the yearly price. To show customers a saving against a
+        monthly price, choose “Monthly or yearly”.
+      </p>
+    );
+  }
+
+  const switchMode = (next: YearlyPriceMode) => {
+    if (next === mode) return;
+    setMode(next);
+    if (next === 'fixed') {
+      // Start from what the current discount gives, so nothing jumps.
+      onChange({ ...value, yearlyPriceOverride: String(amountFromCents(yearly ?? fullYear, currency)), yearlyDiscountPct: 0 });
+    } else {
+      onChange({ ...value, yearlyPriceOverride: '' });
+    }
+  };
+
+  return (
+    <div className="space-y-3 rounded-lg border border-emerald-200 bg-emerald-50/40 p-3 md:col-span-2" data-testid="yearly-pricing">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="text-sm font-semibold text-slate-800">Yearly price (discount for paying yearly)</span>
+        <div className="flex rounded-lg border border-slate-300 bg-white p-0.5 text-xs font-semibold" role="radiogroup">
+          {(['fixed', 'percent'] as const).map((option) => (
+            <button
+              key={option}
+              type="button"
+              role="radio"
+              aria-checked={mode === option}
+              onClick={() => switchMode(option)}
+              className={`rounded-md px-2.5 py-1 ${mode === option ? 'bg-sky-600 text-white' : 'text-slate-600'}`}
+              data-testid={`yearly-mode-${option}`}
+            >
+              {option === 'fixed' ? 'Fixed yearly price' : '% off 12 months'}
+            </button>
+          ))}
+        </div>
+      </div>
+      {mode === 'fixed' ? (
+        <label className="block">
+          <span className="mb-1 block text-sm font-medium text-slate-700">Yearly price ({currency} / year)</span>
+          <input
+            type="number"
+            min="0"
+            step={step}
+            value={value.yearlyPriceOverride}
+            placeholder={`e.g. ${amountFromCents(Math.round(fullYear * 0.8), currency)}`}
+            onChange={(event) => onChange({ ...value, yearlyPriceOverride: event.target.value })}
+            className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2"
+            data-testid="yearly-price"
+          />
+        </label>
+      ) : (
+        <label className="block">
+          <span className="mb-1 block text-sm font-medium text-slate-700">Discount off 12 monthly payments (%)</span>
+          <input
+            type="number"
+            min="0"
+            max="100"
+            step="1"
+            value={value.yearlyDiscountPct}
+            onChange={(event) => onChange({ ...value, yearlyDiscountPct: Number(event.target.value) || 0 })}
+            className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2"
+            data-testid="yearly-discount"
+          />
+        </label>
+      )}
+      <p className="text-xs text-slate-600" data-testid="yearly-calculation">
+        12 × {formatPrice(value.basePriceCents, currency)} = {formatPrice(fullYear, currency)} → customers pay{' '}
+        <span className="font-semibold text-slate-900">{formatPrice(yearly ?? fullYear, currency)} / year</span>
+        {savingPct > 0 ? <span className="ml-1 font-semibold text-emerald-700">(save {savingPct}%)</span> : null}
+      </p>
+      {yearly !== null && yearly > fullYear && fullYear > 0 ? (
+        <p className="flex items-center gap-1.5 text-xs text-amber-700">
+          <AlertTriangle className="h-3.5 w-3.5" /> The yearly price is more than 12 monthly payments.
+        </p>
+      ) : null}
+    </div>
+  );
+};
+
 export const PackageBuilder: React.FC<{
   value: PackageDraft;
   onChange: (next: PackageDraft) => void;
@@ -278,7 +396,6 @@ export const PackageBuilder: React.FC<{
   const currency = value.currency || 'USD';
   const yearly = derivedYearlyCents(value);
   const monthlyEquivalent = value.basePriceCents * 12;
-  const step = currencyDecimals(currency) === 0 ? '1' : '0.01';
   const selectedAreas = summarizeFeatureAreas(value.modules.map((m) => m.moduleId), options);
 
   return (
@@ -298,38 +415,6 @@ export const PackageBuilder: React.FC<{
           Show in onboarding (public)
         </label>
       </div>
-
-      {value.billingInterval === 'both' ? (
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          <label className="block">
-            <span className="mb-1 block text-sm font-medium text-slate-700">Yearly price ({currency})</span>
-            <input
-              type="number"
-              min="0"
-              step={step}
-              value={value.yearlyPriceOverride}
-              placeholder="Leave blank to use monthly × 12 − discount"
-              onChange={(event) => onChange({ ...value, yearlyPriceOverride: event.target.value })}
-              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2"
-              data-testid="yearly-price"
-            />
-          </label>
-          <label className="block">
-            <span className="mb-1 block text-sm font-medium text-slate-700">Yearly discount (%)</span>
-            <input
-              type="number"
-              min="0"
-              max="100"
-              step="1"
-              value={value.yearlyDiscountPct}
-              disabled={Boolean(value.yearlyPriceOverride.trim())}
-              onChange={(event) => onChange({ ...value, yearlyDiscountPct: Number(event.target.value) || 0 })}
-              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 disabled:bg-slate-100"
-              data-testid="yearly-discount"
-            />
-          </label>
-        </div>
-      ) : null}
 
       <div>
         <div className="mb-2 flex items-center justify-between">
