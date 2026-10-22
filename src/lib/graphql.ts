@@ -248,6 +248,8 @@ export const ADMIN_SAVE_PLAN_MUTATION = gql`
         trialMonths
         employeeLimit
         active
+        version
+        outdatedSubscribersCount
       }
     }
   }
@@ -600,8 +602,8 @@ export const ADMIN_RESUME_COMPANY_MUTATION = gql`
 `;
 
 export const ADMIN_ASSIGN_COMPANY_PLAN_MUTATION = gql`
-  mutation AdminAssignCompanyPlan($companyId: Int!, $planId: String!, $reason: String) {
-    adminAssignCompanyPlan(companyId: $companyId, planId: $planId, reason: $reason) {
+  mutation AdminAssignCompanyPlan($companyId: Int!, $planId: String!, $reason: String, $billingInterval: String) {
+    adminAssignCompanyPlan(companyId: $companyId, planId: $planId, reason: $reason, billingInterval: $billingInterval) {
       success
       message
       company {
@@ -891,7 +893,7 @@ export const ADMIN_SET_EXPENSE_STATUS_MUTATION = gql`
 
 export const ADMIN_PACKAGE_MODULES_QUERY = gql`
   query AdminPackageModules {
-    adminModules(includeInactive: true) {
+    adminModules(includeInactive: true, limit: 200) {
       id
       name
       description
@@ -901,14 +903,18 @@ export const ADMIN_PACKAGE_MODULES_QUERY = gql`
       isCore
       icon
       dependsOn
+      parentId
     }
   }
 `;
 
 export const ADMIN_PLANS_PACKAGING_QUERY = gql`
   query AdminPlansPackaging {
-    adminPlans(includeInactive: true) {
+    adminPlans(includeInactive: true, limit: 200) {
       id
+      name
+      active
+      billingInterval
       pricingMode
       bundleDiscountPct
       yearlyPriceCents
@@ -916,10 +922,13 @@ export const ADMIN_PLANS_PACKAGING_QUERY = gql`
       isPublic
       version
       companiesCount
+      subscribersCount
+      outdatedSubscribersCount
       modules {
         moduleId
         name
         category
+        parentId
         priceOverrideCents
         unitCents
       }
@@ -928,7 +937,124 @@ export const ADMIN_PLANS_PACKAGING_QUERY = gql`
         monthlyPriceCents
         yearlyPriceCents
         savingsPct
+        availableIntervals
       }
+    }
+  }
+`;
+
+export const ADMIN_COMPANY_PACKAGES_QUERY = gql`
+  query AdminCompanyPackages($companyIds: [Int]!) {
+    adminCompanyPackages(companyIds: $companyIds) {
+      companyId
+      planId
+      planName
+      billingInterval
+      planVersion
+      latestVersion
+      updateAvailable
+      activeModules
+      unrestricted
+      access
+    }
+  }
+`;
+
+export const ADMIN_APPLY_PLAN_TO_SUBSCRIBERS_MUTATION = gql`
+  mutation AdminApplyPlanToSubscribers(
+    $planId: String!
+    $dryRun: Boolean
+    $onlyOutdated: Boolean
+    $includeUnrestricted: Boolean
+    $reason: String
+  ) {
+    adminApplyPlanToSubscribers(
+      planId: $planId
+      dryRun: $dryRun
+      onlyOutdated: $onlyOutdated
+      includeUnrestricted: $includeUnrestricted
+      reason: $reason
+    ) {
+      success
+      message
+      dryRun
+      appliedCount
+      companies {
+        companyId
+        companyName
+        currentVersion
+        wasUnrestricted
+        gains
+        losses
+      }
+    }
+  }
+`;
+
+export const ADMIN_CURRENCY_RATES_QUERY = gql`
+  query AdminCurrencyRates($previewUsdCents: Int) {
+    adminCurrencyRates(previewUsdCents: $previewUsdCents) {
+      baseCurrency
+      lastRefreshedAt
+      sourceUrl
+      rates {
+        code
+        name
+        symbol
+        ratePerUsd
+        roundTo
+        active
+        isManual
+        source
+        decimals
+        updatedAt
+        updatedBy
+        previewCents
+      }
+    }
+  }
+`;
+
+export const ADMIN_SAVE_CURRENCY_RATE_MUTATION = gql`
+  mutation AdminSaveCurrencyRate(
+    $code: String!
+    $name: String
+    $symbol: String
+    $ratePerUsd: String
+    $roundTo: Int
+    $active: Boolean
+    $isManual: Boolean
+  ) {
+    adminSaveCurrencyRate(
+      code: $code
+      name: $name
+      symbol: $symbol
+      ratePerUsd: $ratePerUsd
+      roundTo: $roundTo
+      active: $active
+      isManual: $isManual
+    ) {
+      success
+      message
+      rate {
+        code
+        ratePerUsd
+        active
+        isManual
+      }
+    }
+  }
+`;
+
+export const ADMIN_REFRESH_CURRENCY_RATES_MUTATION = gql`
+  mutation AdminRefreshCurrencyRates {
+    adminRefreshCurrencyRates {
+      success
+      message
+      updated
+      skipped
+      pinned
+      missing
     }
   }
 `;
