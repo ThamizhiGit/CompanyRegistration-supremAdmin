@@ -1,11 +1,41 @@
+// Stripe zero-decimal currencies: amounts are already whole units (no cents).
+// Same list as con-backend registration/currency.py.
+export const ZERO_DECIMAL_CURRENCIES = new Set([
+  'BIF', 'CLP', 'DJF', 'GNF', 'JPY', 'KMF', 'KRW', 'MGA', 'PYG', 'RWF',
+  'UGX', 'VND', 'VUV', 'XAF', 'XOF', 'XPF',
+]);
+
+/** Minor-unit digits of a currency: 0 for zero-decimal currencies, else 2. */
+export const currencyDecimals = (currency: string = 'USD'): number =>
+  ZERO_DECIMAL_CURRENCIES.has((currency || 'USD').toUpperCase()) ? 0 : 2;
+
+/** Minor units (cents, or whole units for JPY/KRW/...) -> major amount. */
+export const amountFromCents = (cents: number, currency: string = 'USD'): number =>
+  cents / 10 ** currencyDecimals(currency);
+
+/** Major amount typed by an admin -> minor units for the API. */
+export const centsFromAmount = (amount: number, currency: string = 'USD'): number =>
+  Math.round(amount * 10 ** currencyDecimals(currency));
+
 export const formatPrice = (cents: number | null, currency: string = 'USD'): string => {
-  if (cents === null || cents === undefined) return '$0.00';
-  const dollars = cents / 100;
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: currency.toUpperCase(),
-  }).format(dollars);
+  const code = (currency || 'USD').toUpperCase();
+  const decimals = currencyDecimals(code);
+  const amount = cents === null || cents === undefined ? 0 : cents / 10 ** decimals;
+  try {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: code,
+      minimumFractionDigits: decimals,
+      maximumFractionDigits: decimals,
+    }).format(amount);
+  } catch {
+    return `${code} ${amount.toFixed(decimals)}`;
+  }
 };
+
+/** Like formatPrice, but says so when there is no price instead of showing 0. */
+export const formatPriceOrUnavailable = (cents: number | null | undefined, currency: string = 'USD'): string =>
+  cents === null || cents === undefined ? 'Pricing unavailable' : formatPrice(cents, currency);
 
 export const centsFromDollars = (dollars: number): number => {
   return Math.round(dollars * 100);

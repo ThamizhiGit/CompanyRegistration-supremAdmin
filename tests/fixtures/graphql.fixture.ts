@@ -75,9 +75,106 @@ const planFixtures = () => [
   },
 ];
 
+const moduleFixtures = () => [
+  ['employee_management', 'Core HR & Employee Management', null, 1],
+  ['hr_org_structure', 'Departments, Designations & Job Roles', 'employee_management', 2],
+  ['hr_shifts', 'Shifts', 'employee_management', 3],
+  ['project_management', 'Project Management', null, 4],
+  ['pj_enquiry', 'Enquiries', 'project_management', 5],
+  ['pj_projects', 'Projects & Tasks', 'project_management', 6],
+  ['invoicing', 'Invoicing & Statement of Accounts', null, 7],
+  ['inv_invoices', 'Invoices', 'invoicing', 8],
+  ['inv_soa', 'Statement of Accounts', 'invoicing', 9],
+  ['workforce_ai', 'AI Workforce Intelligence', null, 10],
+].map(([id, name, parentId, sortOrder]) => ({
+  id,
+  name,
+  description: '',
+  active: true,
+  sortOrder,
+  category: 'hr',
+  isCore: false,
+  icon: '',
+  dependsOn: [],
+  parentId,
+  __typename: 'AdminModuleType',
+}));
+
+const packagingFixtures = () => [
+  {
+    id: 'free',
+    name: 'Free',
+    active: true,
+    billingInterval: 'monthly',
+    pricingMode: 'fixed',
+    bundleDiscountPct: 0,
+    yearlyPriceCents: null,
+    yearlyDiscountPct: 0,
+    isPublic: true,
+    version: 1,
+    companiesCount: 1,
+    subscribersCount: 1,
+    outdatedSubscribersCount: 0,
+    modules: [{ moduleId: 'employee_management', name: 'Core HR & Employee Management', category: 'hr', parentId: null, priceOverrideCents: null, unitCents: 0, __typename: 'AdminPlanModule' }],
+    pricing: { currency: 'USD', monthlyPriceCents: 0, yearlyPriceCents: null, savingsPct: 0, availableIntervals: ['monthly'], __typename: 'AdminPlanPricing' },
+    __typename: 'AdminPlan',
+  },
+  {
+    id: 'premium',
+    name: 'Premium',
+    active: true,
+    billingInterval: 'monthly',
+    pricingMode: 'fixed',
+    bundleDiscountPct: 0,
+    yearlyPriceCents: null,
+    yearlyDiscountPct: 0,
+    isPublic: true,
+    version: 2,
+    companiesCount: 2,
+    subscribersCount: 2,
+    outdatedSubscribersCount: 1,
+    modules: [
+      { moduleId: 'employee_management', name: 'Core HR & Employee Management', category: 'hr', parentId: null, priceOverrideCents: null, unitCents: 0, __typename: 'AdminPlanModule' },
+      { moduleId: 'pj_projects', name: 'Projects & Tasks', category: 'operations', parentId: 'project_management', priceOverrideCents: null, unitCents: 0, __typename: 'AdminPlanModule' },
+    ],
+    pricing: { currency: 'USD', monthlyPriceCents: 1200, yearlyPriceCents: null, savingsPct: 0, availableIntervals: ['monthly'], __typename: 'AdminPlanPricing' },
+    __typename: 'AdminPlan',
+  },
+  {
+    id: 'premium_yearly',
+    name: 'Premium Yearly',
+    active: true,
+    billingInterval: 'yearly',
+    pricingMode: 'fixed',
+    bundleDiscountPct: 0,
+    yearlyPriceCents: null,
+    yearlyDiscountPct: 0,
+    isPublic: false,
+    version: 1,
+    companiesCount: 0,
+    subscribersCount: 0,
+    outdatedSubscribersCount: 0,
+    modules: [{ moduleId: 'invoicing', name: 'Invoicing & Statement of Accounts', category: 'finance', parentId: null, priceOverrideCents: null, unitCents: 0, __typename: 'AdminPlanModule' }],
+    pricing: { currency: 'USD', monthlyPriceCents: null, yearlyPriceCents: 12000, savingsPct: 0, availableIntervals: ['yearly'], __typename: 'AdminPlanPricing' },
+    __typename: 'AdminPlan',
+  },
+];
+
+const currencyFixtures = () => [
+  { code: 'USD', name: 'US Dollar', symbol: '$', ratePerUsd: '1', roundTo: 0, active: true, isManual: true, source: 'base', decimals: 2 },
+  { code: 'LKR', name: 'Sri Lankan Rupee', symbol: 'Rs', ratePerUsd: '300', roundTo: 0, active: true, isManual: false, source: 'auto', decimals: 2 },
+  { code: 'JPY', name: 'Japanese Yen', symbol: '¥', ratePerUsd: '150', roundTo: 0, active: false, isManual: false, source: 'seed', decimals: 0 },
+].map((row) => ({ ...row, updatedAt: pastIso(60), updatedBy: 'system', previewCents: null as number | null, __typename: 'AdminCurrencyRate' }));
+
 function createMockGraphQLApi() {
   const api = {
     legacyRevenue: false,
+    modules: moduleFixtures(),
+    packaging: packagingFixtures(),
+    currencies: currencyFixtures(),
+    companyPackages: new Map<number, Record<string, unknown>>([
+      [12, { companyId: 12, planId: 'premium', planName: 'Premium', billingInterval: 'monthly', planVersion: 1, latestVersion: 2, updateAvailable: true, activeModules: ['employee_management'], unrestricted: false, access: 'package', __typename: 'AdminCompanyPackage' }],
+    ]),
     requests: new Map<string, Array<Record<string, any>>>(),
     overrides: new Map<string, MockOverride>(),
     plans: planFixtures(),
@@ -354,6 +451,83 @@ async function defaultResponse(payload: GraphQLPayload, api: MockGraphQLApi) {
     }
     case 'AdminPlans':
       return { data: { adminPlans: api.plans } };
+    case 'AdminPackageModules':
+      return { data: { adminModules: api.modules } };
+    case 'AdminPlansPackaging':
+      return { data: { adminPlans: api.packaging } };
+    case 'AdminCompanyPackages': {
+      const ids: number[] = variables.companyIds ?? [];
+      const rows = ids.map((id) => api.companyPackages.get(id) ?? {
+        companyId: id, planId: null, planName: null, billingInterval: null, planVersion: 0, latestVersion: null,
+        updateAvailable: false, activeModules: [], unrestricted: true, access: 'legacy', __typename: 'AdminCompanyPackage',
+      });
+      return { data: { adminCompanyPackages: rows } };
+    }
+    case 'AdminApplyPlanToSubscribers': {
+      const companies = [
+        { companyId: 12, companyName: 'Acme Labs', currentVersion: 1, wasUnrestricted: false, gains: ['pj_projects'], losses: [], __typename: 'AdminSubscriberChange' },
+        // Pre-package companies only when the admin opts in (includeUnrestricted).
+        ...(variables.includeUnrestricted
+          ? [{ companyId: 13, companyName: 'Legacy Co', currentVersion: 0, wasUnrestricted: true, gains: [], losses: ['invoicing', 'inv_invoices', 'inv_soa'], __typename: 'AdminSubscriberChange' }]
+          : []),
+      ];
+      return {
+        data: {
+          adminApplyPlanToSubscribers: {
+            success: true,
+            message: 'ok',
+            dryRun: variables.dryRun !== false,
+            appliedCount: variables.dryRun === false ? companies.length : 0,
+            companies,
+            __typename: 'AdminApplyPlanToSubscribersPayload',
+          },
+        },
+      };
+    }
+    case 'AdminCurrencyRates': {
+      const preview = variables.previewUsdCents ?? 0;
+      return {
+        data: {
+          adminCurrencyRates: {
+            baseCurrency: 'USD',
+            lastRefreshedAt: pastIso(120),
+            sourceUrl: 'https://open.er-api.com/v6/latest/USD',
+            rates: api.currencies.map((row) => ({
+              ...row,
+              previewCents: row.decimals === 0
+                ? Math.ceil((preview / 100) * Number(row.ratePerUsd))
+                : Math.ceil(preview * Number(row.ratePerUsd)),
+            })),
+            __typename: 'AdminCurrencyRates',
+          },
+        },
+      };
+    }
+    case 'AdminSaveCurrencyRate': {
+      const code = String(variables.code).toUpperCase();
+      let row = api.currencies.find((item) => item.code === code);
+      if (!row) {
+        row = { ...currencyFixtures()[1], code, name: '', symbol: '', source: 'manual' };
+        api.currencies.push(row);
+      }
+      if (variables.active !== undefined && variables.active !== null) row.active = variables.active;
+      if (variables.ratePerUsd) row.ratePerUsd = variables.ratePerUsd;
+      if (variables.isManual !== undefined && variables.isManual !== null) row.isManual = variables.isManual;
+      return {
+        data: {
+          adminSaveCurrencyRate: { success: true, message: 'saved', rate: row, __typename: 'AdminSaveCurrencyRatePayload' },
+        },
+      };
+    }
+    case 'AdminRefreshCurrencyRates':
+      return {
+        data: {
+          adminRefreshCurrencyRates: {
+            success: true, message: 'Updated 1 currency(s).', updated: ['LKR'], skipped: [], pinned: [], missing: [],
+            __typename: 'AdminRefreshCurrencyRatesPayload',
+          },
+        },
+      };
     case 'AdminPromoCodes':
       return { data: { adminPromoCodes: [] } };
     case 'AdminSavePlan': {
@@ -365,6 +539,8 @@ async function defaultResponse(payload: GraphQLPayload, api: MockGraphQLApi) {
         updatedAt: new Date().toISOString(),
         updatedBy: { id: '1', username: 'admin', __typename: 'SuperAdmin' },
         __typename: 'Plan',
+        version: 2,
+        outdatedSubscribersCount: input.id === 'premium' ? 1 : 0,
       };
       if (existing >= 0) api.plans[existing] = plan;
       else api.plans.push(plan);
