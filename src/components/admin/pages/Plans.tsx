@@ -11,27 +11,28 @@ import {
   ADMIN_PLANS_PACKAGING_QUERY,
 } from '../../../lib/graphql';
 import {
+  ApplyToSubscribersDialog,
+  FeatureAreaChips,
   PackageBuilder,
   PackageModuleSelection,
+  PlanPackagingInfo,
   PricingMode,
   draftToPlanInputFields,
+  packagePriceLines,
+  usePackageModuleOptions,
+  validatePackageDraft,
 } from './PackageBuilder';
-import { centsFromDollars, formatPrice } from '../../../lib/admin-utils';
+import { amountFromCents, centsFromAmount, currencyDecimals, formatPrice } from '../../../lib/admin-utils';
 import { buildColumnFilterOptions, ColumnFilter, matchesColumnFilter } from '../ColumnFilter';
 
 type BillingInterval = 'monthly' | 'yearly' | 'both';
 
-interface PlanPackaging {
-  id: string;
+interface PlanPackaging extends PlanPackagingInfo {
   pricingMode: PricingMode;
   bundleDiscountPct: number;
   yearlyPriceCents: number | null;
   yearlyDiscountPct: number;
-  isPublic: boolean;
-  version: number;
   companiesCount?: number | null;
-  modules: { moduleId: string; name: string; category?: string | null; priceOverrideCents: number | null; unitCents: number }[];
-  pricing: { currency: string; monthlyPriceCents: number | null; yearlyPriceCents: number | null; savingsPct: number } | null;
 }
 type SortDirection = 'asc' | 'desc' | null;
 type PlanSortKey = 'sortOrder' | 'name' | 'basePriceCents' | 'billingInterval' | 'trialMonths' | 'active';
@@ -217,19 +218,19 @@ const toEditingPlan = (plan: PlanType, packaging?: PlanPackaging): EditingPlan =
   pricingMode: packaging?.pricingMode || 'fixed',
   bundleDiscountPct: Number(packaging?.bundleDiscountPct) || 0,
   yearlyPriceOverride:
-    packaging?.yearlyPriceCents === null || packaging?.yearlyPriceCents === undefined ? '' : String(packaging.yearlyPriceCents / 100),
+    packaging?.yearlyPriceCents === null || packaging?.yearlyPriceCents === undefined
+      ? ''
+      : String(amountFromCents(packaging.yearlyPriceCents, plan.currency || 'USD')),
   yearlyDiscountPct: Number(packaging?.yearlyDiscountPct) || 0,
   isPublic: packaging?.isPublic ?? true,
-  modules: (packaging?.modules || []).map((m) => ({
-    moduleId: m.moduleId,
-    priceOverride: m.priceOverrideCents === null || m.priceOverrideCents === undefined ? '' : String(m.priceOverrideCents / 100),
-  })),
+  modules: (packaging?.modules || []).map((m) => ({ moduleId: m.moduleId, priceOverride: '' })),
   id: plan.id,
   name: plan.name,
   description: plan.description || '',
   basePriceCents: plan.basePriceCents,
   currency: normalizeCurrency(plan.currency || 'USD'),
-  billingInterval: plan.billingInterval || 'monthly',
+  // The interval the package is actually sold on (a yearly-only package stays yearly).
+  billingInterval: (packaging?.billingInterval as BillingInterval) || plan.billingInterval || 'monthly',
   perEmployee: Boolean(plan.perEmployee),
   trialMonths: plan.trialMonths || 0,
   employeeLimit: plan.employeeLimit === null || plan.employeeLimit === undefined ? '' : String(plan.employeeLimit),
@@ -345,7 +346,9 @@ const promoToInput = (promo: EditingPromo) => ({
   perEmailLimit: promo.perEmailLimit.trim() ? Number(promo.perEmailLimit) : null,
   perCompanyLimit: promo.perCompanyLimit.trim() ? Number(promo.perCompanyLimit) : null,
   firstTimeCustomerOnly: promo.firstTimeCustomerOnly,
-  minimumAmountCents: promo.minimumAmountDollars.trim() ? centsFromDollars(Number(promo.minimumAmountDollars)) : null,
+  minimumAmountCents: promo.minimumAmountDollars.trim()
+    ? centsFromAmount(Number(promo.minimumAmountDollars), promo.currency || 'USD')
+    : null,
   appliesToPlanIds: promo.appliesToPlanIds,
   applicableBillingIntervals: promo.applicableBillingIntervals,
 });
@@ -390,6 +393,8 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
   const [promoFiltersOpen, setPromoFiltersOpen] = useState(true);
   const [editingPromo, setEditingPromo] = useState<EditingPromo | null>(null);
   const [editingPromoMode, setEditingPromoMode] = useState<'create' | 'edit'>('create');
+  const [applyFor, setApplyFor] = useState<{ planId: string; planName: string } | null>(null);
+  const { options: moduleOptions } = usePackageModuleOptions();
 
   const { data, loading, error, refetch } = useQuery<
     { adminPlans: PlanType[] },
@@ -427,7 +432,13 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
     [packagingData],
   );
   const [savePlan, { loading: saving }] = useMutation<
-    { adminSavePlan: { success: boolean; message?: string | null } },
+    {
+      adminSavePlan: {
+        success: boolean;
+        message?: string | null;
+        plan?: { id: string; version?: number | null; outdatedSubscribersCount?: number | null } | null;
+      };
+    },
     { input: ReturnType<typeof planToInput> },
     any,
     any
@@ -538,18 +549,9 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
       return;
     }
 
-    if (editing.modules.length === 0) {
-      onToast('error', 'Select the modules this package unlocks');
-      return;
-    }
-    const subscribers = packagingById.get(editing.id)?.companiesCount || 0;
-    if (
-      editingMode === 'edit' &&
-      subscribers > 0 &&
-      !window.confirm(
-        `${subscribers} company(s) are on this package. Changes apply to new sign-ups and to these companies the next time their package is (re)applied. Continue?`,
-      )
-    ) {
+    const problem = validatePackageDraft(editing, moduleOptions);
+    if (problem) {
+      onToast('error', problem);
       return;
     }
 
@@ -561,9 +563,15 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
         return;
       }
       onToast('success', `Plan "${editing.name}" ${editingMode === 'create' ? 'created' : 'saved'}`);
+      const saved = { planId: editing.id, planName: editing.name };
       closePlanWindow();
       refetch();
       refetchPackaging();
+      // The modules changed and companies are on the older version: offer to
+      // give them the new modules now (dry-run preview first).
+      if (editingMode === 'edit' && (payload?.plan?.outdatedSubscribersCount || 0) > 0) {
+        setApplyFor(saved);
+      }
     } catch (err: any) {
       onToast('error', err.message || 'Backend plan API is not ready yet');
     }
@@ -911,7 +919,9 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
                       <div className="mt-1 max-w-md truncate text-xs text-slate-500">{plan.description}</div>
                     </td>
                     <td className="px-3 py-3 align-top text-[14px] font-semibold text-slate-950">
-                      {formatPrice(plan.basePriceCents, plan.currency)}
+                      {packagePriceLines(packagingById.get(plan.id)?.pricing || null, plan.basePriceCents, plan.currency, plan.billingInterval).map((line) => (
+                        <div key={line}>{line}</div>
+                      ))}
                     </td>
                     <td className="px-3 py-3 align-top text-[14px] text-slate-950">
                       <div>{plan.billingInterval}</div>
@@ -977,9 +987,9 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
                     </div>
                     <div className="mt-1 flex flex-wrap items-center gap-2">
                       <h3 className="text-base font-black leading-tight text-gray-800 transition-colors group-hover:text-sky-600">{plan.name}</h3>
-                      {isPremium ? (
+                      {plan.trialMonths > 0 ? (
                         <span className="rounded-md border border-sky-200 bg-sky-50 px-2 py-0.5 text-[10px] font-black uppercase tracking-tight text-sky-700">
-                          Free for 6 months
+                          Free for {plan.trialMonths} months
                         </span>
                       ) : null}
                     </div>
@@ -997,21 +1007,16 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
                 <div className="mt-4 grid grid-cols-2 gap-3">
                   <div className="rounded-lg border border-sky-100 bg-sky-50/60 p-2.5">
                     <span className="mb-0.5 block text-[11px] font-black uppercase tracking-tight text-sky-600">Price</span>
-                    <div className="text-lg font-black leading-tight text-gray-800">
-                      {formatPrice(
-                        packagingById.get(plan.id)?.pricing?.monthlyPriceCents ??
-                          packagingById.get(plan.id)?.pricing?.yearlyPriceCents ??
-                          plan.basePriceCents,
-                        plan.currency,
-                      ).replace('.00', '')}
-                    </div>
+                    {packagePriceLines(packagingById.get(plan.id)?.pricing || null, plan.basePriceCents, plan.currency, plan.billingInterval).map((line, index) => (
+                      <div
+                        key={line}
+                        className={index === 0 ? 'text-lg font-black leading-tight text-gray-800' : 'mt-0.5 text-xs text-gray-500'}
+                        data-testid={index === 0 ? `plan-price-${plan.id}` : undefined}
+                      >
+                        {line}
+                      </div>
+                    ))}
                     <p className="mt-0.5 text-xs text-gray-500">{billingCopy(plan)}</p>
-                    {packagingById.get(plan.id)?.pricing?.yearlyPriceCents != null &&
-                    packagingById.get(plan.id)?.pricing?.monthlyPriceCents != null ? (
-                      <p className="mt-0.5 text-xs text-gray-500">
-                        {formatPrice(packagingById.get(plan.id)!.pricing!.yearlyPriceCents, plan.currency)} / yr
-                      </p>
-                    ) : null}
                   </div>
                   <div className="rounded-lg border border-amber-100 bg-amber-50/60 p-2.5">
                     <span className="mb-0.5 block text-[11px] font-black uppercase tracking-tight text-amber-600">Trial</span>
@@ -1040,16 +1045,22 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
                       </span>
                     </div>
                     {packagingById.get(plan.id)!.modules.length ? (
-                      <div className="flex flex-wrap gap-1.5" data-testid={`plan-modules-${plan.id}`}>
-                        {packagingById.get(plan.id)!.modules.map((m) => (
-                          <span key={m.moduleId} className="rounded-md border border-sky-200 bg-white px-2 py-0.5 text-[11px] font-semibold text-sky-700">
-                            {m.name}
-                          </span>
-                        ))}
-                      </div>
+                      <FeatureAreaChips
+                        moduleIds={packagingById.get(plan.id)!.modules.map((m) => m.moduleId)}
+                        options={moduleOptions}
+                        testId={`plan-modules-${plan.id}`}
+                      />
                     ) : (
-                      <p className="text-xs text-amber-700">No modules configured — existing access is unchanged.</p>
+                      <p className="text-xs text-amber-700">
+                        No modules configured — companies registered before packages keep every module; new sign-ups get core features only.
+                      </p>
                     )}
+                    <p className="mt-2 text-[11px] text-slate-500" data-testid={`plan-subscribers-${plan.id}`}>
+                      v{packagingById.get(plan.id)!.version} · {packagingById.get(plan.id)!.subscribersCount || 0} subscriber(s)
+                      {packagingById.get(plan.id)!.outdatedSubscribersCount
+                        ? ` · ${packagingById.get(plan.id)!.outdatedSubscribersCount} on an older version`
+                        : ''}
+                    </p>
                   </div>
                 ) : null}
 
@@ -1068,7 +1079,17 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
                 </ul>
               </div>
 
-              <div className="mt-4 flex justify-end gap-2 border-t border-gray-100 pt-4">
+              <div className="mt-4 flex flex-wrap justify-end gap-2 border-t border-gray-100 pt-4">
+                {packagingById.get(plan.id)?.outdatedSubscribersCount ? (
+                  <button
+                    type="button"
+                    onClick={() => setApplyFor({ planId: plan.id, planName: plan.name })}
+                    className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-sky-200 bg-sky-50 px-3 text-[13px] font-semibold text-sky-700 transition hover:bg-sky-100"
+                    data-testid={`apply-subscribers-${plan.id}`}
+                  >
+                    Apply to {packagingById.get(plan.id)!.outdatedSubscribersCount} subscriber(s)
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   onClick={() => openEditPlan(plan)}
@@ -1199,6 +1220,20 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
         </div>
       ) : null}
 
+      {applyFor ? (
+        <ApplyToSubscribersDialog
+          planId={applyFor.planId}
+          planName={applyFor.planName}
+          onClose={() => setApplyFor(null)}
+          onDone={(message) => {
+            setApplyFor(null);
+            onToast('success', message);
+            refetchPackaging();
+          }}
+          onError={(message) => onToast('error', message)}
+        />
+      ) : null}
+
       {editing && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/30 p-4">
           <div className="flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white">
@@ -1238,16 +1273,18 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
                 </label>
                 <label className="block">
                   <span className="mb-1 block text-sm font-medium text-slate-700">
-                    Package price ($ / {editing.billingInterval === 'yearly' ? 'year' : 'month'})
+                    Package price ({editing.currency || 'USD'} / {editing.billingInterval === 'yearly' ? 'year' : 'month'})
                   </span>
                   <input
                     type="number"
-                    step="0.01"
-                    value={editing.basePriceCents / 100}
+                    min="0"
+                    step={currencyDecimals(editing.currency) === 0 ? '1' : '0.01'}
+                    value={amountFromCents(editing.basePriceCents, editing.currency)}
                     onChange={(event) =>
-                      setEditing({ ...editing, basePriceCents: centsFromDollars(Number(event.target.value) || 0) })
+                      setEditing({ ...editing, basePriceCents: centsFromAmount(Number(event.target.value) || 0, editing.currency) })
                     }
                     className="w-full rounded-lg border border-slate-300 px-3 py-2"
+                    data-testid="plan-price"
                   />
                 </label>
                 <label className="block">
@@ -1261,6 +1298,7 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
                 <label className="block">
                   <span className="mb-1 block text-sm font-medium text-slate-700">Billing interval</span>
                   <select
+                    data-testid="plan-billing-interval"
                     value={editing.billingInterval}
                     onChange={(event) => setEditing({ ...editing, billingInterval: event.target.value as BillingInterval })}
                     className="w-full rounded-lg border border-slate-300 px-3 py-2"

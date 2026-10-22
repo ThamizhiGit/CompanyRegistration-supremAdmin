@@ -20,12 +20,14 @@ import {
   Eye,
   Filter,
   Landmark,
+  Layers,
   Printer,
   RefreshCw,
   Search,
   X,
 } from 'lucide-react';
 import { buildColumnFilterOptions, ColumnFilter, matchesColumnFilter } from '../ColumnFilter';
+import { ChangePackageDialog, PackageCell, useCompanyPackages } from './PackageBuilder';
 
 type PaymentStatus = 'pending' | 'succeeded' | 'failed' | 'refunded' | null;
 type SortDirection = 'asc' | 'desc' | null;
@@ -479,6 +481,13 @@ export const Subscriptions: React.FC<{
   };
 
   const payments = data?.adminPayments || [];
+  // Current package per company on screen (the payment row shows what was paid for).
+  const paymentCompanyIds = useMemo(
+    () => payments.map((payment) => Number(payment.companyId)).filter((id) => Number.isFinite(id) && id > 0),
+    [payments],
+  );
+  const { packages, refetch: refetchPackages } = useCompanyPackages(paymentCompanyIds);
+  const [changingPackageFor, setChangingPackageFor] = useState<{ id: number; name: string } | null>(null);
   const companyNameById = useMemo(() => new Map(
     (companiesData?.adminCompanies || [])
       .filter((company) => company.company?.trim())
@@ -744,6 +753,7 @@ export const Subscriptions: React.FC<{
                   <th className="py-3 px-3"><SortHeader label="Company" column="displayCompanyName" /></th>
                   <th className="py-3 px-3"><SortHeader label="Email" column="email" /></th>
                   <th className="py-3 px-3"><SortHeader label="Plan" column="planName" /></th>
+                  <th className="py-3 px-3 text-left font-semibold text-slate-700">Package</th>
                   <th className="py-3 px-3"><SortHeader label="Amount" column="amount" /></th>
                   <th className="py-3 px-3"><SortHeader label="Due Date" column="dueDate" /></th>
                   <th className="py-3 px-3"><SortHeader label="Trial End" column="trialEndsAt" /></th>
@@ -778,6 +788,7 @@ export const Subscriptions: React.FC<{
                       onChange={setPlanSelections}
                     />
                   </th>
+                  <th className="px-3 py-2"></th>
                   <th className="px-3 py-2">
                     <ColumnFilter
                       label="Amount"
@@ -843,7 +854,7 @@ export const Subscriptions: React.FC<{
               <tbody>
                 {filteredPayments.length === 0 ? (
                   <tr>
-                    <td colSpan={10} className="px-4 py-12 text-center text-slate-500">
+                    <td colSpan={11} className="px-4 py-12 text-center text-slate-500">
                       {payments.length === 0 ? 'No payments found' : 'No payments match your filters'}
                     </td>
                   </tr>
@@ -861,6 +872,13 @@ export const Subscriptions: React.FC<{
                         {payment.employeeCountSnapshot !== null && payment.employeeCountSnapshot !== undefined ? (
                           <div className="text-xs text-slate-500">{payment.employeeCountSnapshot} employees</div>
                         ) : null}
+                      </td>
+                      <td className="py-3 px-3 text-slate-700">
+                        {payment.companyId ? (
+                          <PackageCell info={packages.get(Number(payment.companyId))} companyId={Number(payment.companyId)} />
+                        ) : (
+                          <span className="text-xs text-slate-400">-</span>
+                        )}
                       </td>
                       <td className="py-3 px-3 font-semibold text-slate-800">
                         <div>{formatPrice(payment.finalAmountCents ?? payment.amount, payment.currency)}</div>
@@ -909,6 +927,18 @@ export const Subscriptions: React.FC<{
                             <Edit2 className="h-4 w-4" />
                             <span className="sr-only">Edit subscription</span>
                           </button>
+                          {payment.companyId ? (
+                            <button
+                              type="button"
+                              onClick={() => setChangingPackageFor({ id: Number(payment.companyId), name: payment.displayCompanyName })}
+                              title="Change package"
+                              className="rounded-lg p-2 text-sky-700 hover:bg-sky-50"
+                              data-testid={`change-package-${payment.paymentIntentId}`}
+                            >
+                              <Layers className="h-4 w-4" />
+                              <span className="sr-only">Change package</span>
+                            </button>
+                          ) : null}
                         </div>
                       </td>
                     </tr>
@@ -917,6 +947,21 @@ export const Subscriptions: React.FC<{
             </table>
           </div>
       </div>
+
+      {changingPackageFor ? (
+        <ChangePackageDialog
+          companyId={changingPackageFor.id}
+          companyName={changingPackageFor.name}
+          current={packages.get(changingPackageFor.id)}
+          onClose={() => setChangingPackageFor(null)}
+          onDone={(message) => {
+            setChangingPackageFor(null);
+            onToast('success', message);
+            refetchPackages();
+          }}
+          onError={(message) => onToast('error', message)}
+        />
+      ) : null}
 
       {viewingPayment ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 backdrop-blur-sm p-3 sm:p-6">
