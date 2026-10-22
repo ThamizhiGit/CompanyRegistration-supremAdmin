@@ -14,6 +14,7 @@ import {
   ApplyToSubscribersDialog,
   FeatureAreaChips,
   PackageBuilder,
+  YearlyPricingFields,
   PackageModuleSelection,
   PlanPackagingInfo,
   PricingMode,
@@ -1318,6 +1319,7 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
                     className="w-full rounded-lg border border-slate-300 px-3 py-2"
                   />
                 </label>
+                <YearlyPricingFields value={editing} onChange={(next) => setEditing({ ...editing, ...next })} />
                 <label className="block">
                   <span className="mb-1 block text-sm font-medium text-slate-700">Employee limit</span>
                   <input
