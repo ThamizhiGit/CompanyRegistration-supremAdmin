@@ -23,6 +23,7 @@ import {
   Filter,
   HandCoins,
   Landmark,
+  Layers,
   MapPin,
   Printer,
   ReceiptText,
@@ -32,6 +33,7 @@ import {
   X,
 } from 'lucide-react';
 import { buildColumnFilterOptions, ColumnFilter, matchesColumnFilter } from '../ColumnFilter';
+import { ChangePackageDialog, PackageCell, useCompanyPackages } from './PackageBuilder';
 import { DateRangePicker, DateRangeValue } from '../DateRangePicker';
 
 interface EditingCompanyDetail {
@@ -249,6 +251,10 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
   const [manualProcess] = useMutation(ADMIN_MANUAL_SUBSCRIPTION_MUTATION);
 
   const rawCompanies = companiesData?.adminCompanies || [];
+  // Package / modules per company (batched: the list is not paginated).
+  const companyIds = useMemo(() => rawCompanies.map((company) => Number(company.id)), [rawCompanies]);
+  const { packages, refetch: refetchPackages } = useCompanyPackages(companyIds);
+  const [changingPackageFor, setChangingPackageFor] = useState<{ id: number; name: string } | null>(null);
   const historyItems = historyData?.adminCompanyPaymentHistory || [];
   const paymentStatuses = ['pending', 'succeeded', 'failed', 'refunded'] as const;
   const normalizeStatus = (status?: string | null) => (status || '').trim().toLowerCase();
@@ -805,6 +811,7 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                   <th className="text-left py-3 px-4"><SortHeader label="Company" sort="company" /></th>
                   <th className="text-left py-3 px-4"><SortHeader label="Subscription Status" sort="subscriptionStatus" /></th>
                   <th className="text-left py-3 px-4"><SortHeader label="Plan" sort="planName" /></th>
+                  <th className="text-left py-3 px-4 font-semibold text-slate-700">Package</th>
                   <th className="text-left py-3 px-4"><SortHeader label="Email" sort="latestPaymentEmail" /></th>
                   <th className="text-left py-3 px-4"><SortHeader label="Due Date" sort="subscriptionDueDate" /></th>
                   <th className="text-left py-3 px-4"><SortHeader label="Recurring Date" sort="subscriptionRecurringDate" /></th>
@@ -830,6 +837,7 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                       onChange={setPlanSelections}
                     />
                   </th>
+                  <th className="px-4 py-2"></th>
                   <th className="px-4 py-2">
                     <ColumnFilter
                       label="Email"
@@ -894,6 +902,9 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                           </div>
                         ) : null}
                       </td>
+                      <td className="py-3 px-4 text-slate-700">
+                        <PackageCell info={packages.get(Number(company.id))} companyId={Number(company.id)} />
+                      </td>
                       <td className="py-3 px-4 text-slate-700 max-w-[200px] truncate" title={company.latestPaymentEmail || '-'}>{company.latestPaymentEmail || '-'}</td>
                       <td className="py-3 px-4 text-slate-700 whitespace-nowrap">{formatDate(company.subscriptionDueDate)}</td>
                       <td className="py-3 px-4 text-slate-700 whitespace-nowrap">{formatDate(company.subscriptionRecurringDate)}</td>
@@ -933,6 +944,14 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                           >
                             <Edit2 className="w-4 h-4" />
                           </button>
+                          <button
+                            title="Change package"
+                            onClick={() => setChangingPackageFor({ id: Number(company.id), name: company.company })}
+                            className="p-2 hover:bg-sky-50 text-sky-600 rounded-lg"
+                            data-testid={`change-package-${company.id}`}
+                          >
+                            <Layers className="w-4 h-4" />
+                          </button>
                         </div>
                       </td>
                     </tr>
@@ -943,6 +962,22 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
           </div>
         )}
       </div>
+
+      {changingPackageFor ? (
+        <ChangePackageDialog
+          companyId={changingPackageFor.id}
+          companyName={changingPackageFor.name}
+          current={packages.get(changingPackageFor.id)}
+          onClose={() => setChangingPackageFor(null)}
+          onDone={(message) => {
+            setChangingPackageFor(null);
+            onToast('success', message);
+            refetchPackages();
+            refetchCompanies();
+          }}
+          onError={(message) => onToast('error', message)}
+        />
+      ) : null}
 
       {editingDetail && (
         <div className="fixed inset-0 z-40 bg-black/30 flex items-center justify-center p-4">
