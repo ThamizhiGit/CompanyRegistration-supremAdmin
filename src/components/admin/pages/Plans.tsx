@@ -313,8 +313,14 @@ const toEditingPromo = (promo: PromoCodeType): EditingPromo => ({
   applicableBillingIntervals: (promo.applicableBillingIntervals || []).filter((item): item is BillingInterval => item === 'monthly' || item === 'yearly'),
 });
 
-const planToInput = (plan: EditingPlan) => ({
-  id: plan.id,
+// Same rule as the backend (new plan ids only; older ids stay editable).
+const PLAN_ID_PATTERN = /^[a-z0-9][a-z0-9_-]*$/;
+const PLAN_ID_MAX_LENGTH = 50;
+
+/** `createOnly`: the backend refuses instead of overwriting an existing plan with this id. */
+const planToInput = (plan: EditingPlan, createOnly = false) => ({
+  id: plan.id.trim(),
+  createOnly,
   name: plan.name.trim(),
   description: plan.description.trim(),
   basePriceCents: plan.basePriceCents,
@@ -333,8 +339,10 @@ const planToInput = (plan: EditingPlan) => ({
   ...draftToPlanInputFields(plan),
 });
 
-const promoToInput = (promo: EditingPromo) => ({
+/** `createOnly`: the backend refuses instead of overwriting an existing promo with this code. */
+const promoToInput = (promo: EditingPromo, createOnly = false) => ({
   id: promo.id,
+  createOnly,
   code: promo.code.trim().toUpperCase(),
   name: promo.name.trim(),
   discountType: promo.discountType,
@@ -452,7 +460,19 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
   const sourcePlans = backendPlans.length > 0 ? backendPlans : canonicalPlans;
   const backendReady = !error && backendPlans.length > 0;
   const promoCodes = promoData?.adminPromoCodes || [];
-  const premiumPlans = sourcePlans.filter((plan) => plan.active && plan.basePriceCents > 0);
+  // Every active paid plan for the promo form. adminPlans is searched server-side
+  // with the Plans search box, so the unfiltered packaging list is used instead.
+  const premiumPlans = useMemo(() => {
+    const all = packagingData?.adminPlans;
+    if (!all?.length) {
+      return sourcePlans
+        .filter((plan) => plan.active && plan.basePriceCents > 0)
+        .map((plan) => ({ id: plan.id, name: plan.name, billingInterval: plan.billingInterval }));
+    }
+    return all
+      .filter((plan) => plan.active && ((plan.pricing?.monthlyPriceCents || 0) > 0 || (plan.pricing?.yearlyPriceCents || 0) > 0))
+      .map((plan) => ({ id: plan.id, name: plan.name || plan.id, billingInterval: plan.billingInterval || '' }));
+  }, [packagingData, sourcePlans]);
   const planStatusOptions = useMemo(
     () => buildColumnFilterOptions(sourcePlans, (plan) => (plan.active ? 'Active' : 'Inactive')),
     [sourcePlans],
@@ -550,6 +570,23 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
       return;
     }
 
+    const creating = editingMode === 'create';
+    if (creating) {
+      const id = editing.id.trim();
+      if (id.length > PLAN_ID_MAX_LENGTH) {
+        onToast('error', `Plan ID must be at most ${PLAN_ID_MAX_LENGTH} characters`);
+        return;
+      }
+      if (!PLAN_ID_PATTERN.test(id)) {
+        onToast('error', "Plan ID may only use lowercase letters, numbers, '-' and '_', and must start with a letter or number");
+        return;
+      }
+      if (packagingById.has(id)) {
+        onToast('error', `A plan with ID "${id}" already exists. Choose another ID or edit that plan.`);
+        return;
+      }
+    }
+
     const problem = validatePackageDraft(editing, moduleOptions);
     if (problem) {
       onToast('error', problem);
@@ -557,7 +594,7 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
     }
 
     try {
-      const result = await savePlan({ variables: { input: planToInput(editing) } });
+      const result = await savePlan({ variables: { input: planToInput(editing, creating) } });
       const payload = result.data?.adminSavePlan;
       if (payload && payload.success === false) {
         onToast('error', payload.message || 'Could not save package');
@@ -598,7 +635,9 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
     }
 
     try {
-      const { data } = await savePromoCode({ variables: { input: promoToInput(editingPromo) } });
+      const { data } = await savePromoCode({
+        variables: { input: promoToInput(editingPromo, editingPromoMode === 'create') },
+      });
       const payload = data?.adminSavePromoCode;
       if (!payload?.success) {
         onToast('error', payload?.message || 'Promo code could not be saved');
@@ -1263,6 +1302,11 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
                       editingMode === 'edit' ? 'bg-slate-100' : ''
                     }`}
                   />
+                  {editingMode === 'create' ? (
+                    <span className="mt-1 block text-xs text-slate-500">
+                      Lowercase letters, numbers, “-” and “_”. Can't be changed later.
+                    </span>
+                  ) : null}
                 </label>
                 <label className="block">
                   <span className="mb-1 block text-sm font-medium text-slate-700">Name</span>
@@ -1558,6 +1602,7 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
                           }}
                         />
                         {plan.name} ({plan.billingInterval})
+                        <span className="text-xs text-slate-400">{plan.id}</span>
                       </label>
                     ))}
                   </div>
