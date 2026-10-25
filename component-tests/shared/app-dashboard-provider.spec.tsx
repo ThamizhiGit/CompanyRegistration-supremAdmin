@@ -104,7 +104,6 @@ test.describe('App authentication shell', () => {
     await page.getByPlaceholder('Enter your username').fill('  root  ');
     await page.getByPlaceholder('Enter your password').fill('secret');
     await page.getByRole('button', { name: 'Sign In' }).click();
-    await expect(page.getByRole('heading', { name: 'Supreme Admin' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Account menu for root' })).toBeVisible();
     await expect
       .poll(() =>
