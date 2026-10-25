@@ -205,8 +205,16 @@ export const validatePackageDraft = (draft: PackageDraft, options: PackageModule
   if (draft.modules.length === 0) return 'Select the modules this package unlocks.';
   if (draft.basePriceCents < 0) return 'Package price cannot be negative.';
   if (draft.yearlyDiscountPct < 0 || draft.yearlyDiscountPct > 100) return 'Yearly discount must be between 0 and 100%.';
-  if (draft.billingInterval === 'both' && draft.yearlyPriceOverride.trim() && Number(draft.yearlyPriceOverride) < 0) {
-    return 'Yearly price cannot be negative.';
+  if (draft.billingInterval === 'both' && draft.yearlyPriceOverride.trim()) {
+    const yearly = Number(draft.yearlyPriceOverride);
+    if (!Number.isFinite(yearly)) return 'Yearly price must be a number.';
+    if (yearly < 0) return 'Yearly price cannot be negative.';
+  }
+  // A paid package must not become free on the yearly option (a 0 price or a
+  // 100% discount).
+  const yearlyCents = derivedYearlyCents(draft);
+  if (draft.basePriceCents > 0 && yearlyCents !== null && yearlyCents <= 0) {
+    return 'Yearly price must be above 0 for a paid package.';
   }
   const covered = expandModuleIds(draft.modules.map((m) => m.moduleId), options);
   const byId = new Map(options.map((o) => [o.id, o]));
@@ -219,12 +227,58 @@ export const validatePackageDraft = (draft: PackageDraft, options: PackageModule
   return null;
 };
 
+const ADMIN_PAGE_LIMIT = 200; // the backend's largest page
+
+/**
+ * Every row of a 200-per-page admin list (adminModules, adminPlans): pages are
+ * read with `offset` until a short page, so nothing past 200 is cut off.
+ */
+export const useAllAdminPages = <T,>(query: any, field: string) => {
+  const client = useApolloClient();
+  const [rows, setRows] = useState<T[] | undefined>(undefined);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<Error | null>(null);
+  const [version, setVersion] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    (async () => {
+      const all: T[] = [];
+      for (let offset = 0; ; offset += ADMIN_PAGE_LIMIT) {
+        const result = await client.query<any, { offset: number }, any>({
+          query,
+          variables: { offset },
+          fetchPolicy: 'network-only',
+        });
+        const page: T[] = result.data?.[field] || [];
+        all.push(...page);
+        if (page.length < ADMIN_PAGE_LIMIT) break;
+      }
+      return all;
+    })()
+      .then((all) => {
+        if (cancelled) return;
+        setRows(all);
+        setError(null);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err instanceof Error ? err : new Error(String(err)));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [client, query, field, version]);
+
+  return { rows, loading, error, refetch: () => setVersion((v) => v + 1) };
+};
+
 export const usePackageModuleOptions = () => {
-  const { data, loading, error } = useQuery<{ adminModules: PackageModuleOption[] }, Record<string, never>, any>(
-    ADMIN_PACKAGE_MODULES_QUERY,
-    { fetchPolicy: 'cache-and-network' },
-  );
-  const options = useMemo(() => [...(data?.adminModules || [])].sort(bySortOrder), [data]);
+  const { rows, loading, error } = useAllAdminPages<PackageModuleOption>(ADMIN_PACKAGE_MODULES_QUERY, 'adminModules');
+  const options = useMemo(() => [...(rows || [])].sort(bySortOrder), [rows]);
   return { options, loading, error };
 };
 
@@ -634,16 +688,29 @@ export const ChangePackageDialog: React.FC<{
   onClose: () => void;
   onDone: (message: string) => void;
   onError: (message: string) => void;
-}> = ({ companyId, companyName, current, onClose, onDone, onError }) => {
+}> = ({ companyId, companyName, current: listedCurrent, onClose, onDone, onError }) => {
   const { options } = usePackageModuleOptions();
-  const { data } = useQuery<{ adminPlans: PlanPackagingInfo[] }, Record<string, never>, any>(ADMIN_PLANS_PACKAGING_QUERY, {
-    fetchPolicy: 'cache-and-network',
+  const { rows: allPlans, error: plansError } = useAllAdminPages<PlanPackagingInfo>(ADMIN_PLANS_PACKAGING_QUERY, 'adminPlans');
+  // The company's package, read fresh: the list's copy can be missing (its
+  // fetch failed) or stale, and the change preview must never guess.
+  const {
+    data: currentData,
+    loading: currentLoading,
+    error: currentError,
+  } = useQuery<{ adminCompanyPackages: CompanyPackageInfo[] }, { companyIds: number[] }, any>(ADMIN_COMPANY_PACKAGES_QUERY, {
+    variables: { companyIds: [companyId] },
+    fetchPolicy: 'network-only',
   });
-  const plans = useMemo(() => (data?.adminPlans || []).filter((p) => p.active !== false || p.id === current?.planId), [data, current]);
-  const [planId, setPlanId] = useState(current?.planId || '');
+  const liveCurrent = currentData?.adminCompanyPackages?.find((row) => row.companyId === companyId);
+  const current = liveCurrent ?? (currentError ? undefined : listedCurrent);
+  const currentReady = !!liveCurrent && !currentLoading && !currentError;
+  const plansLoaded = !!allPlans;
+  const plans = useMemo(() => (allPlans || []).filter((p) => p.active !== false || p.id === current?.planId), [allPlans, current]);
+  const [planId, setPlanId] = useState(listedCurrent?.planId || '');
   const plan = plans.find((p) => p.id === planId);
   const intervals = plan?.pricing?.availableIntervals?.length ? plan.pricing.availableIntervals : ['monthly'];
-  const [interval, setInterval] = useState(current?.billingInterval || '');
+  const [interval, setInterval] = useState(listedCurrent?.billingInterval || '');
+  const touched = React.useRef(false);
   const [reason, setReason] = useState('');
   const [assign, { loading }] = useMutation<
     { adminAssignCompanyPlan: { success: boolean; message?: string | null } },
@@ -652,12 +719,21 @@ export const ChangePackageDialog: React.FC<{
     any
   >(ADMIN_ASSIGN_COMPANY_PLAN_MUTATION);
 
+  // Start from the company's real package and interval once they are known.
   useEffect(() => {
-    if (!planId && plans.length) setPlanId(plans[0].id);
-  }, [planId, plans]);
+    if (!liveCurrent || touched.current) return;
+    setPlanId(liveCurrent.planId || '');
+    setInterval(liveCurrent.billingInterval || '');
+  }, [liveCurrent]);
   useEffect(() => {
+    if (!planId && plans.length && currentReady) setPlanId(plans[0].id);
+  }, [planId, plans, currentReady]);
+  useEffect(() => {
+    // Only once the package's intervals are known: before the plans load the
+    // fallback ['monthly'] would silently move a yearly company to monthly.
+    if (!plansLoaded || !plan) return;
     if (!intervals.includes(interval)) setInterval(intervals[0]);
-  }, [intervals, interval]);
+  }, [plansLoaded, plan, intervals, interval]);
 
   const allIds = useMemo(() => new Set(options.map((o) => o.id)), [options]);
   const before = current?.unrestricted ? allIds : expandModuleIds(current?.activeModules || [], options);
@@ -667,7 +743,7 @@ export const ChangePackageDialog: React.FC<{
   const diff = moduleDiff(before, after, options);
 
   const submit = async () => {
-    if (!plan) return;
+    if (!plan || !currentReady) return;
     if (!reason.trim()) {
       onError('A reason is required to change a package');
       return;
@@ -697,8 +773,23 @@ export const ChangePackageDialog: React.FC<{
           </button>
         </div>
         <div className="flex-1 space-y-4 overflow-y-auto p-5">
+          {plansError ? (
+            <p className="flex items-start gap-2 rounded-lg bg-rose-50 p-3 text-sm text-rose-700" data-testid="change-package-plans-error">
+              <AlertTriangle className="mt-0.5 h-4 w-4 flex-none" />
+              Packages could not be loaded. Close and try again.
+            </p>
+          ) : null}
+          {currentError ? (
+            <p className="flex items-start gap-2 rounded-lg bg-rose-50 p-3 text-sm text-rose-700" data-testid="change-package-current-error">
+              <AlertTriangle className="mt-0.5 h-4 w-4 flex-none" />
+              This company's current package could not be loaded, so the change can't be previewed. Close and try again.
+            </p>
+          ) : null}
           <p className="text-sm text-slate-600">
-            Current: <span className="font-semibold">{current?.planName || current?.planId || 'No package'}</span>
+            Current:{' '}
+            <span className="font-semibold">
+              {currentReady ? current?.planName || current?.planId || 'No package' : currentError ? 'Unknown' : 'Loading…'}
+            </span>
             {current?.unrestricted ? ' (every module — legacy access)' : ''}
           </p>
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -706,7 +797,10 @@ export const ChangePackageDialog: React.FC<{
               <span className="mb-1 block text-sm font-medium text-slate-700">Package</span>
               <select
                 value={planId}
-                onChange={(event) => setPlanId(event.target.value)}
+                onChange={(event) => {
+                  touched.current = true;
+                  setPlanId(event.target.value);
+                }}
                 className="w-full rounded-lg border border-slate-300 px-3 py-2"
                 data-testid="change-package-plan"
               >
@@ -722,7 +816,10 @@ export const ChangePackageDialog: React.FC<{
               <span className="mb-1 block text-sm font-medium text-slate-700">Billing interval</span>
               <select
                 value={interval}
-                onChange={(event) => setInterval(event.target.value)}
+                onChange={(event) => {
+                  touched.current = true;
+                  setInterval(event.target.value);
+                }}
                 className="w-full rounded-lg border border-slate-300 px-3 py-2"
                 data-testid="change-package-interval"
               >
@@ -779,7 +876,7 @@ export const ChangePackageDialog: React.FC<{
           <button
             type="button"
             onClick={submit}
-            disabled={loading || !plan}
+            disabled={loading || !plan || !currentReady}
             className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
             data-testid="change-package-submit"
           >
@@ -834,9 +931,13 @@ export const ApplyToSubscribersDialog: React.FC<{
   const describe = (ids: string[]) => summarizeFeatureAreas(ids, options).map((a) => (a.partial ? `${a.name} (${a.partial})` : a.name)).join(', ') || ids.map((id) => nameOf.get(id) || id).join(', ');
 
   useEffect(() => {
+    // Toggling the checkbox quickly can leave an older preview arriving last;
+    // only the answer for the current setting may be shown (and applied).
+    let current = true;
     setPreview(null);
     run({ variables: { planId, dryRun: true, onlyOutdated: true, includeUnrestricted } })
       .then((result) => {
+        if (!current) return;
         const payload = result.data?.adminApplyPlanToSubscribers;
         if (!payload?.success) {
           onError(payload?.message || 'Could not preview the change');
@@ -846,9 +947,13 @@ export const ApplyToSubscribersDialog: React.FC<{
         setPreview(payload.companies || []);
       })
       .catch((err) => {
+        if (!current) return;
         onError(err?.message || 'Could not preview the change');
         onClose();
       });
+    return () => {
+      current = false;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [planId, includeUnrestricted]);
 
