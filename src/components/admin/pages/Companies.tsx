@@ -9,7 +9,7 @@ import {
   ADMIN_REQUEST_REFUND_MUTATION,
   ADMIN_MANUAL_SUBSCRIPTION_MUTATION,
 } from '../../../lib/graphql';
-import { buildPayload, formatDate, formatDateTime, formatPrice, toDateTimeLocalValue } from '../../../lib/admin-utils';
+import { buildPayload, centsFromAmount, formatDate, formatDateTime, formatPrice, toDateTimeLocalValue } from '../../../lib/admin-utils';
 import {
   ArrowLeft,
   Building2,
@@ -253,7 +253,7 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
   const rawCompanies = companiesData?.adminCompanies || [];
   // Package / modules per company (batched: the list is not paginated).
   const companyIds = useMemo(() => rawCompanies.map((company) => Number(company.id)), [rawCompanies]);
-  const { packages, refetch: refetchPackages } = useCompanyPackages(companyIds);
+  const { packages, failedIds: packageFailedIds, refetch: refetchPackages } = useCompanyPackages(companyIds);
   const [changingPackageFor, setChangingPackageFor] = useState<{ id: number; name: string } | null>(null);
   const historyItems = historyData?.adminCompanyPaymentHistory || [];
   const paymentStatuses = ['pending', 'succeeded', 'failed', 'refunded'] as const;
@@ -666,7 +666,8 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
         variables: {
           paymentIntentId: selectedPayment.paymentIntentId,
           reason: refundReason || 'Admin requested refund',
-          amount: refundAmount ? Math.round(parseFloat(refundAmount) * 100) : null,
+          // Minor units in the payment's own currency (¥500 is 500, $5 is 500).
+          amount: refundAmount ? centsFromAmount(parseFloat(refundAmount), selectedPayment.currency || 'USD') : null,
         },
       });
       onToast('success', 'Refund requested');
@@ -903,7 +904,7 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                         ) : null}
                       </td>
                       <td className="py-3 px-4 text-slate-700">
-                        <PackageCell info={packages.get(Number(company.id))} companyId={Number(company.id)} />
+                        <PackageCell info={packages.get(Number(company.id))} companyId={Number(company.id)} failed={packageFailedIds.has(Number(company.id))} />
                       </td>
                       <td className="py-3 px-4 text-slate-700 max-w-[200px] truncate" title={company.latestPaymentEmail || '-'}>{company.latestPaymentEmail || '-'}</td>
                       <td className="py-3 px-4 text-slate-700 whitespace-nowrap">{formatDate(company.subscriptionDueDate)}</td>

@@ -40,7 +40,7 @@ test('company filters, detail edit, and payment history popups', async ({
   await expect(page.getByText('Payment Detail')).toBeVisible();
   await expect(page.getByPlaceholder('Refund reason')).toBeVisible();
   await expect(page.getByRole('button', { name: /Apply refund/i })).toBeVisible();
-  await expect(page.getByText('Manual subscription trigger')).toBeVisible();
+  await expect(page.getByText('Manual subscription action')).toBeVisible();
   await expect(page.getByPlaceholder('Payment method')).toBeVisible();
   await expect(page.getByRole('button', { name: /Trigger Manual/i })).toBeVisible();
 });

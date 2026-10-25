@@ -83,7 +83,7 @@ test.describe('Login Flow', () => {
     await page.getByPlaceholder('Enter your password').fill('correct_password');
     await page.locator('button[type="submit"]').click();
 
-    await expect(page.getByRole('button', { name: 'Logout' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Account menu for admin' })).toBeVisible();
     await expect
       .poll(() =>
         page.evaluate(() => ({
@@ -108,7 +108,9 @@ test.describe('Session lifecycle', () => {
   test('should clear session on logout', async ({ page }) => {
     await seedAdminSession(page, { username: 'testadmin' });
     await page.goto('/');
-    await page.getByRole('button', { name: 'Logout' }).click();
+    // Sign out lives in the account menu (the header Logout button was removed).
+    await page.getByRole('button', { name: 'Account menu for testadmin' }).click();
+    await page.locator('#admin-profile-menu').getByRole('menuitem', { name: 'Sign Out' }).click();
     await expect(page.getByRole('heading', { name: 'Welcome back', exact: true })).toBeVisible();
 
     await expect

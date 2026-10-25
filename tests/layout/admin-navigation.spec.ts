@@ -82,7 +82,7 @@ test('header account menu exposes working profile and session controls', async (
   const accountButton = page.getByRole('button', { name: 'Account menu for admin' });
   const accountMenu = page.locator('#admin-profile-menu');
 
-  await expect(page.getByRole('button', { name: 'Logout' })).toContainText(/\d{2}:\d{2}:\d{2}/);
+  await expect(accountButton).toBeVisible();
   await accountButton.click();
   await expect(accountMenu).toHaveAttribute('aria-hidden', 'false');
   await accountMenu.getByRole('menuitem', { name: 'View Profile' }).click();

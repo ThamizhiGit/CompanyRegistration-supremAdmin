@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useMutation, useQuery } from '@apollo/client/react';
 import { Edit2, Plus, RefreshCw, X } from 'lucide-react';
 import {
@@ -58,7 +58,13 @@ const SOURCE_LABELS: Record<string, string> = {
  */
 export const Currencies: React.FC<{ onToast: (type: 'success' | 'error', msg: string) => void }> = ({ onToast }) => {
   const [previewUsd, setPreviewUsd] = useState('12');
-  const previewUsdCents = centsFromAmount(Number(previewUsd) || 0, 'USD');
+  // Ask the server for a new preview only once typing pauses, not per keystroke.
+  const [debouncedPreviewUsd, setDebouncedPreviewUsd] = useState(previewUsd);
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedPreviewUsd(previewUsd), 400);
+    return () => clearTimeout(timer);
+  }, [previewUsd]);
+  const previewUsdCents = centsFromAmount(Number(debouncedPreviewUsd) || 0, 'USD');
   const { data, loading, error, refetch } = useQuery<CurrencyRatesData, { previewUsdCents: number }, any>(ADMIN_CURRENCY_RATES_QUERY, {
     variables: { previewUsdCents },
     fetchPolicy: 'cache-and-network',

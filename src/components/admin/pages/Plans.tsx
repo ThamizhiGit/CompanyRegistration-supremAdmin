@@ -710,7 +710,7 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
       return;
     }
     const rows = plans.map((plan) => (
-      `<tr><td>${escapeHtml(plan.id)}</td><td>${escapeHtml(plan.name)}</td><td>${plan.basePriceCents / 100}</td><td>${escapeHtml(plan.currency)}</td><td>${escapeHtml(plan.billingInterval)}</td><td>${escapeHtml(plan.active ? 'Active' : 'Inactive')}</td></tr>`
+      `<tr><td>${escapeHtml(plan.id)}</td><td>${escapeHtml(plan.name)}</td><td>${amountFromCents(plan.basePriceCents, plan.currency || 'USD')}</td><td>${escapeHtml(plan.currency)}</td><td>${escapeHtml(plan.billingInterval)}</td><td>${escapeHtml(plan.active ? 'Active' : 'Inactive')}</td></tr>`
     )).join('');
     downloadTextFile(
       'superadmin-plans.xls',
@@ -1489,7 +1489,15 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
                   <span className="mb-1 block text-sm font-medium text-slate-700">Discount type</span>
                   <select
                     value={editingPromo.discountType}
-                    onChange={(event) => setEditingPromo({ ...editingPromo, discountType: event.target.value as DiscountType })}
+                    onChange={(event) => {
+                      const discountType = event.target.value as DiscountType;
+                      // A percent and an amount mean different things: start the new one empty.
+                      setEditingPromo({
+                        ...editingPromo,
+                        discountType,
+                        discountValue: discountType === editingPromo.discountType ? editingPromo.discountValue : 0,
+                      });
+                    }}
                     className="w-full rounded-lg border border-slate-300 px-3 py-2"
                   >
                     <option value="percent">Percent</option>
@@ -1498,13 +1506,30 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
                 </label>
                 <label className="block">
                   <span className="mb-1 block text-sm font-medium text-slate-700">
-                    {editingPromo.discountType === 'percent' ? 'Discount %' : 'Discount cents'}
+                    {editingPromo.discountType === 'percent'
+                      ? 'Discount %'
+                      : `Discount amount (${(editingPromo.currency || 'USD').toUpperCase()})`}
                   </span>
+                  {/* A fixed discount is typed as an amount ($10, ¥1000) and kept in minor units. */}
                   <input
                     type="number"
                     min="0"
-                    value={editingPromo.discountValue}
-                    onChange={(event) => setEditingPromo({ ...editingPromo, discountValue: Number(event.target.value) || 0 })}
+                    step={editingPromo.discountType === 'percent' || !currencyDecimals(editingPromo.currency || 'USD') ? '1' : '0.01'}
+                    value={
+                      editingPromo.discountType === 'percent'
+                        ? editingPromo.discountValue
+                        : amountFromCents(editingPromo.discountValue, editingPromo.currency || 'USD')
+                    }
+                    onChange={(event) => {
+                      const typed = Number(event.target.value) || 0;
+                      setEditingPromo({
+                        ...editingPromo,
+                        discountValue:
+                          editingPromo.discountType === 'percent'
+                            ? typed
+                            : centsFromAmount(typed, editingPromo.currency || 'USD'),
+                      });
+                    }}
                     className="w-full rounded-lg border border-slate-300 px-3 py-2"
                   />
                 </label>
@@ -1512,7 +1537,15 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
                   <span className="mb-1 block text-sm font-medium text-slate-700">Currency</span>
                   <input
                     value={editingPromo.currency}
-                    onChange={(event) => setEditingPromo({ ...editingPromo, currency: normalizeCurrency(event.target.value) })}
+                    onChange={(event) => {
+                      const currency = normalizeCurrency(event.target.value);
+                      // Keep the typed amount ($10 stays 10 in the new currency), not the minor units.
+                      const discountValue =
+                        editingPromo.discountType === 'amount'
+                          ? centsFromAmount(amountFromCents(editingPromo.discountValue, editingPromo.currency || 'USD'), currency || 'USD')
+                          : editingPromo.discountValue;
+                      setEditingPromo({ ...editingPromo, currency, discountValue });
+                    }}
                     className="w-full rounded-lg border border-slate-300 px-3 py-2"
                   />
                 </label>
