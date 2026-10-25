@@ -10,7 +10,8 @@ test.describe('AdminLayout', () => {
   test('renders account context, active navigation, children, and changes pages', async ({ mount, page }) => {
     await mount(<SharedLayoutStory />);
 
-    await expect(page.getByRole('heading', { name: 'Supreme Admin' })).toBeVisible();
+    // The header shows the account menu (the old "Supreme Admin" heading was replaced by the logo).
+    await expect(page.getByRole('button', { name: /Account menu for/ })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Content: dashboard' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Dashboard' })).toHaveAttribute('aria-current', 'page');
 
@@ -52,15 +53,12 @@ test.describe('AdminLayout', () => {
     await expect(page.getByText('logout requested')).toBeVisible();
   });
 
-  test('displays a live session countdown and header logout calls the handler', async ({ mount, page }) => {
-    await page.evaluate(() => {
-      window.sessionStorage.setItem('adminExpiresAt', new Date(Date.now() + 65_000).toISOString());
-    });
+  test('signing out from the header account menu calls the handler', async ({ mount, page }) => {
+    // The header session countdown/Logout button was removed; sign out lives in the account menu.
     await mount(<SharedLayoutStory />);
 
-    const logout = page.locator('button[aria-label="Logout"]');
-    await expect(logout).not.toContainText('00:00:00');
-    await logout.click();
+    await page.getByRole('button', { name: /Account menu for/ }).click();
+    await page.locator('#admin-profile-menu').getByRole('menuitem', { name: 'Sign Out' }).click();
     await expect(page.getByText('logout requested')).toBeVisible();
   });
 });

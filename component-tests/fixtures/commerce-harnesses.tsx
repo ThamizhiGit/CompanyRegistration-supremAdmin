@@ -53,6 +53,7 @@ export function PlansHarness({ mocks = [], scenario }: HarnessProps) {
         request: {
           query: ADMIN_SAVE_PROMO_CODE_MUTATION,
           variables: { input: {
+            id: undefined, createOnly: true,
             code: 'SAVE20', name: '', discountType: 'percent', discountValue: 20, currency: 'USD',
             active: true, startsAt: null, endsAt: null, maxRedemptions: null, perEmailLimit: null,
             perCompanyLimit: null, firstTimeCustomerOnly: false, minimumAmountCents: null,
