@@ -622,6 +622,7 @@ const PACKAGE_BATCH = 500; // adminCompanyPackages reads at most 500 ids per cal
 export const useCompanyPackages = (companyIds: number[]) => {
   const client = useApolloClient();
   const [rows, setRows] = useState<Map<number, CompanyPackageInfo>>(new Map());
+  const [failedIds, setFailedIds] = useState<Set<number>>(new Set());
   const [version, setVersion] = useState(0);
   const key = useMemo(() => [...new Set(companyIds.filter((id) => Number.isFinite(id)))].sort((a, b) => a - b).join(','), [companyIds]);
 
@@ -630,6 +631,7 @@ export const useCompanyPackages = (companyIds: number[]) => {
     const ids = key ? key.split(',').map(Number) : [];
     if (!ids.length) {
       setRows(new Map());
+      setFailedIds(new Set());
       return undefined;
     }
     const batches: number[][] = [];
@@ -642,22 +644,35 @@ export const useCompanyPackages = (companyIds: number[]) => {
             variables: { companyIds: batch },
             fetchPolicy: 'network-only',
           })
-          .then((result) => result.data?.adminCompanyPackages || [])
-          .catch(() => [] as CompanyPackageInfo[]),
+          .then((result) => ({ batch, rows: result.data?.adminCompanyPackages || [], failed: false }))
+          .catch(() => ({ batch, rows: [] as CompanyPackageInfo[], failed: true })),
       ),
     ).then((results) => {
       if (cancelled) return;
-      setRows(new Map(results.flat().map((row) => [row.companyId, row])));
+      setRows(new Map(results.flatMap((r) => r.rows).map((row) => [row.companyId, row])));
+      // Say so instead of showing "-" when a batch could not be read.
+      setFailedIds(new Set(results.filter((r) => r.failed).flatMap((r) => r.batch)));
     });
     return () => {
       cancelled = true;
     };
   }, [client, key, version]);
 
-  return { packages: rows, refetch: () => setVersion((v) => v + 1) };
+  return { packages: rows, failedIds, refetch: () => setVersion((v) => v + 1) };
 };
 
-export const PackageCell: React.FC<{ info?: CompanyPackageInfo; companyId: number }> = ({ info, companyId }) => {
+export const PackageCell: React.FC<{ info?: CompanyPackageInfo; companyId: number; failed?: boolean }> = ({
+  info,
+  companyId,
+  failed = false,
+}) => {
+  if (!info && failed) {
+    return (
+      <span className="text-xs text-rose-600" data-testid={`package-cell-error-${companyId}`}>
+        Couldn't load
+      </span>
+    );
+  }
   if (!info) return <span className="text-xs text-slate-400">-</span>;
   return (
     <div className="space-y-0.5" data-testid={`package-cell-${companyId}`}>
@@ -738,8 +753,14 @@ export const ChangePackageDialog: React.FC<{
   const allIds = useMemo(() => new Set(options.map((o) => o.id)), [options]);
   const before = current?.unrestricted ? allIds : expandModuleIds(current?.activeModules || [], options);
   const planModules = plan?.modules.map((m) => m.moduleId) || [];
-  // A package without modules leaves a legacy company as it is; others get core only.
-  const after = !planModules.length && current?.unrestricted ? allIds : expandModuleIds(planModules, options);
+  // Same rule as the server: a paid package without modules (an old plan)
+  // leaves a pre-package company as it is; Free never keeps every module.
+  // Without a server price (pricing null) a plan is not assumed free.
+  const planIsFree =
+    !!plan &&
+    (plan.id === 'free' || (!!plan.pricing && !(plan.pricing.monthlyPriceCents || 0) && !(plan.pricing.yearlyPriceCents || 0)));
+  const keepsLegacy = !!current?.unrestricted && !planModules.length && !planIsFree;
+  const after = keepsLegacy ? allIds : expandModuleIds(planModules, options);
   const diff = moduleDiff(before, after, options);
 
   const submit = async () => {
@@ -831,7 +852,7 @@ export const ChangePackageDialog: React.FC<{
               </select>
             </label>
           </div>
-          {current?.unrestricted && planModules.length ? (
+          {current?.unrestricted && plan && !keepsLegacy ? (
             <p className="flex items-start gap-2 rounded-lg bg-amber-50 p-3 text-sm text-amber-800" data-testid="change-package-legacy-warning">
               <AlertTriangle className="mt-0.5 h-4 w-4 flex-none" />
               This company has every module (it registered before packages). After this change it will only have the
