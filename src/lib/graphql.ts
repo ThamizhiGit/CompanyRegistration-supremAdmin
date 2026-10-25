@@ -892,8 +892,8 @@ export const ADMIN_SET_EXPENSE_STATUS_MUTATION = gql`
 // ---------------------------------------------------------------------------
 
 export const ADMIN_PACKAGE_MODULES_QUERY = gql`
-  query AdminPackageModules {
-    adminModules(includeInactive: true, limit: 200) {
+  query AdminPackageModules($offset: Int) {
+    adminModules(includeInactive: true, limit: 200, offset: $offset) {
       id
       name
       description
@@ -909,8 +909,8 @@ export const ADMIN_PACKAGE_MODULES_QUERY = gql`
 `;
 
 export const ADMIN_PLANS_PACKAGING_QUERY = gql`
-  query AdminPlansPackaging {
-    adminPlans(includeInactive: true, limit: 200) {
+  query AdminPlansPackaging($offset: Int) {
+    adminPlans(includeInactive: true, limit: 200, offset: $offset) {
       id
       name
       active
@@ -1024,6 +1024,7 @@ export const ADMIN_SAVE_CURRENCY_RATE_MUTATION = gql`
     $roundTo: Int
     $active: Boolean
     $isManual: Boolean
+    $createOnly: Boolean
   ) {
     adminSaveCurrencyRate(
       code: $code
@@ -1033,6 +1034,7 @@ export const ADMIN_SAVE_CURRENCY_RATE_MUTATION = gql`
       roundTo: $roundTo
       active: $active
       isManual: $isManual
+      createOnly: $createOnly
     ) {
       success
       message

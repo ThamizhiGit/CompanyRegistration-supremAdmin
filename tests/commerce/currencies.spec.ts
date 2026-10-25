@@ -31,3 +31,13 @@ test('a typed rate is pinned', async ({ adminPage: page, mockApi }) => {
     isManual: true,
   });
 });
+
+test('adding a currency that is already listed does not overwrite it', async ({ adminPage: page, mockApi }) => {
+  await page.getByRole('button', { name: 'Currencies' }).click();
+  await page.getByRole('button', { name: /Add currency/i }).click();
+  await page.getByTestId('currency-code').fill('LKR');
+  await page.getByTestId('currency-rate').fill('1');
+  await page.getByTestId('currency-save').click();
+  await expect(page.getByText('LKR is already in the list. Edit that row instead.')).toBeVisible();
+  expect(mockApi.lastVariables('AdminSaveCurrencyRate')).toBeUndefined();
+});

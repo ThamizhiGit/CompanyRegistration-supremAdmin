@@ -2,8 +2,10 @@
 // Same list as con-backend registration/currency.py.
 export const ZERO_DECIMAL_CURRENCIES = new Set([
   'BIF', 'CLP', 'DJF', 'GNF', 'JPY', 'KMF', 'KRW', 'MGA', 'PYG', 'RWF',
-  'UGX', 'VND', 'VUV', 'XAF', 'XOF', 'XPF',
+  'VND', 'VUV', 'XAF', 'XOF', 'XPF',
 ]);
+// ISK and UGX are not in the list: Stripe takes them as two-decimal amounts
+// (5 ISK = 500), whole units only -- the backend rounds them.
 
 /** Minor-unit digits of a currency: 0 for zero-decimal currencies, else 2. */
 export const currencyDecimals = (currency: string = 'USD'): number =>

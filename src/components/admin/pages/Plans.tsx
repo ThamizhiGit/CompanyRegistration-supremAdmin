@@ -20,6 +20,7 @@ import {
   PricingMode,
   draftToPlanInputFields,
   packagePriceLines,
+  useAllAdminPages,
   usePackageModuleOptions,
   validatePackageDraft,
 } from './PackageBuilder';
@@ -308,7 +309,8 @@ const toEditingPromo = (promo: PromoCodeType): EditingPromo => ({
   minimumAmountDollars:
     promo.minimumAmountCents === null || promo.minimumAmountCents === undefined
       ? ''
-      : String((promo.minimumAmountCents / 100).toFixed(2)),
+      : // Same currency rule as the save (centsFromAmount), so a JPY minimum isn't cut 100x.
+        amountFromCents(promo.minimumAmountCents, promo.currency || 'USD').toFixed(currencyDecimals(promo.currency || 'USD')),
   appliesToPlanIds: promo.appliesToPlanIds || [],
   applicableBillingIntervals: (promo.applicableBillingIntervals || []).filter((item): item is BillingInterval => item === 'monthly' || item === 'yearly'),
 });
@@ -432,13 +434,14 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
   });
 
   // Modules + computed prices live in a separate document so the base plan query stays stable.
-  const { data: packagingData, refetch: refetchPackaging } = useQuery<{ adminPlans: PlanPackaging[] }, Record<string, never>, any>(
+  // Every page of packages (the API returns at most 200 per call).
+  const { rows: packagingRows, refetch: refetchPackaging } = useAllAdminPages<PlanPackaging>(
     ADMIN_PLANS_PACKAGING_QUERY,
-    { fetchPolicy: 'cache-and-network' },
+    'adminPlans',
   );
   const packagingById = useMemo(
-    () => new Map((packagingData?.adminPlans || []).map((item) => [item.id, item])),
-    [packagingData],
+    () => new Map((packagingRows || []).map((item) => [item.id, item])),
+    [packagingRows],
   );
   const [savePlan, { loading: saving }] = useMutation<
     {
@@ -463,7 +466,7 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
   // Every active paid plan for the promo form. adminPlans is searched server-side
   // with the Plans search box, so the unfiltered packaging list is used instead.
   const premiumPlans = useMemo(() => {
-    const all = packagingData?.adminPlans;
+    const all = packagingRows;
     if (!all?.length) {
       return sourcePlans
         .filter((plan) => plan.active && plan.basePriceCents > 0)
@@ -472,7 +475,7 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
     return all
       .filter((plan) => plan.active && ((plan.pricing?.monthlyPriceCents || 0) > 0 || (plan.pricing?.yearlyPriceCents || 0) > 0))
       .map((plan) => ({ id: plan.id, name: plan.name || plan.id, billingInterval: plan.billingInterval || '' }));
-  }, [packagingData, sourcePlans]);
+  }, [packagingRows, sourcePlans]);
   const planStatusOptions = useMemo(
     () => buildColumnFilterOptions(sourcePlans, (plan) => (plan.active ? 'Active' : 'Inactive')),
     [sourcePlans],
