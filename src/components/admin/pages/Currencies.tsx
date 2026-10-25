@@ -118,6 +118,11 @@ export const Currencies: React.FC<{ onToast: (type: 'success' | 'error', msg: st
       onToast('error', 'Currency code must be 3 letters, e.g. LKR');
       return;
     }
+    // Saving is an upsert: adding a code that already exists would overwrite it.
+    if (editing.isNew && (code === 'USD' || rates.some((rate) => rate.code === code))) {
+      onToast('error', `${code} is already in the list. Edit that row instead.`);
+      return;
+    }
     const rateChanged = editing.ratePerUsd.trim() !== editing.originalRate;
     if ((editing.isNew || rateChanged) && !(Number(editing.ratePerUsd) > 0)) {
       onToast('error', 'Rate must be a positive number');
@@ -133,6 +138,8 @@ export const Currencies: React.FC<{ onToast: (type: 'success' | 'error', msg: st
           roundTo: Number(editing.roundTo) || 0,
           active: editing.active,
           isManual: editing.isManual,
+          // The server refuses to overwrite an existing code from the Add form too.
+          createOnly: editing.isNew,
         },
       });
       const payload = result.data?.adminSaveCurrencyRate;
