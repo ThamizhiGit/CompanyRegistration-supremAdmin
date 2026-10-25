@@ -486,7 +486,7 @@ export const Subscriptions: React.FC<{
     () => payments.map((payment) => Number(payment.companyId)).filter((id) => Number.isFinite(id) && id > 0),
     [payments],
   );
-  const { packages, refetch: refetchPackages } = useCompanyPackages(paymentCompanyIds);
+  const { packages, failedIds: packageFailedIds, refetch: refetchPackages } = useCompanyPackages(paymentCompanyIds);
   const [changingPackageFor, setChangingPackageFor] = useState<{ id: number; name: string } | null>(null);
   const companyNameById = useMemo(() => new Map(
     (companiesData?.adminCompanies || [])
@@ -875,7 +875,7 @@ export const Subscriptions: React.FC<{
                       </td>
                       <td className="py-3 px-3 text-slate-700">
                         {payment.companyId ? (
-                          <PackageCell info={packages.get(Number(payment.companyId))} companyId={Number(payment.companyId)} />
+                          <PackageCell info={packages.get(Number(payment.companyId))} companyId={Number(payment.companyId)} failed={packageFailedIds.has(Number(payment.companyId))} />
                         ) : (
                           <span className="text-xs text-slate-400">-</span>
                         )}
