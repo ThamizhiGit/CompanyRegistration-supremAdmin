@@ -148,7 +148,7 @@ test.describe('commerce / companies', () => {
             reason: 'Bank verified',
           },
         },
-        result: { data: { adminManualSubscription: { success: true, message: 'recorded' } } },
+        result: { data: { adminManualSubscriptionAction: { success: true, message: 'recorded', payment: null } } },
       },
     ];
     const component = await mount(<CompaniesHarness scenario="actions" />);

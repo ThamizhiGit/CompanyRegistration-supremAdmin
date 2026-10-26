@@ -129,7 +129,7 @@ export function CompaniesHarness({ mocks = [], scenario }: HarnessProps) {
             reason: 'Bank verified',
           },
         },
-        result: { data: { adminManualSubscription: { success: true, message: 'recorded' } } },
+        result: { data: { adminManualSubscriptionAction: { success: true, message: 'recorded', payment: null } } },
       },
     ] : []),
   ] : mocks;
