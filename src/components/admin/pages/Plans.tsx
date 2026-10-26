@@ -1339,7 +1339,12 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
                   <span className="mb-1 block text-sm font-medium text-slate-700">Currency</span>
                   <input
                     value={editing.currency}
-                    onChange={(event) => setEditing({ ...editing, currency: normalizeCurrency(event.target.value) })}
+                    onChange={(event) => {
+                      const currency = normalizeCurrency(event.target.value);
+                      // Keep the price as typed: the stored minor units follow the currency's decimals.
+                      const basePriceCents = centsFromAmount(amountFromCents(editing.basePriceCents, editing.currency), currency);
+                      setEditing({ ...editing, currency, basePriceCents });
+                    }}
                     className="w-full rounded-lg border border-slate-300 px-3 py-2"
                   />
                 </label>
