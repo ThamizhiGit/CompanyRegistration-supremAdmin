@@ -64,7 +64,8 @@ export const Currencies: React.FC<{ onToast: (type: 'success' | 'error', msg: st
     const timer = setTimeout(() => setDebouncedPreviewUsd(previewUsd), 400);
     return () => clearTimeout(timer);
   }, [previewUsd]);
-  const previewUsdCents = centsFromAmount(Number(debouncedPreviewUsd) || 0, 'USD');
+  // Kept within 1,000,000 USD (the server clamps to the same range).
+  const previewUsdCents = Math.min(Math.max(centsFromAmount(Number(debouncedPreviewUsd) || 0, 'USD'), 0), 100_000_000);
   const { data, loading, error, refetch } = useQuery<CurrencyRatesData, { previewUsdCents: number }, any>(ADMIN_CURRENCY_RATES_QUERY, {
     variables: { previewUsdCents },
     fetchPolicy: 'cache-and-network',

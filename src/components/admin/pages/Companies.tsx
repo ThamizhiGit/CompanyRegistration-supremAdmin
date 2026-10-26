@@ -662,7 +662,7 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
   const handleRefund = async () => {
     if (!selectedPayment) return;
     try {
-      await requestRefund({
+      const result: any = await requestRefund({
         variables: {
           paymentIntentId: selectedPayment.paymentIntentId,
           reason: refundReason || 'Admin requested refund',
@@ -670,6 +670,12 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
           amount: refundAmount ? centsFromAmount(parseFloat(refundAmount), selectedPayment.currency || 'USD') : null,
         },
       });
+      const payload = result?.data?.adminRequestRefund;
+      if (!payload?.success) {
+        // e.g. an amount above the payment: say so instead of "requested".
+        onToast('error', payload?.message || 'Refund could not be requested');
+        return;
+      }
       onToast('success', 'Refund requested');
       setSelectedPayment(null);
       setRefundReason('');
@@ -684,7 +690,7 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
   const handleManualSubscription = async () => {
     if (!selectedPayment || !selectedHistoryFor) return;
     try {
-      await manualProcess({
+      const result: any = await manualProcess({
         variables: {
           companyId: selectedPayment.companyId || selectedHistoryFor,
           subscriptionId: selectedPayment.paymentIntentId,
@@ -701,6 +707,11 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
           reason: manualReason,
         },
       });
+      const payload = result?.data?.adminManualSubscriptionAction;
+      if (!payload?.success) {
+        onToast('error', payload?.message || 'Failed to process manual subscription action');
+        return;
+      }
       onToast('success', 'Manual subscription action submitted');
       setManualReason('');
       setManualReceiver('');
