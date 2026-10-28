@@ -104,6 +104,8 @@ export const Currencies: React.FC<{ onToast: (type: 'success' | 'error', msg: st
   };
 
   const toggleActive = async (row: CurrencyRateRow) => {
+    // Switching off removes the currency from checkout at once: make sure it was meant.
+    if (row.active && !window.confirm(`Switch ${row.code} off? Customers will no longer be able to pay in it.`)) return;
     try {
       const result = await saveRate({ variables: { code: row.code, active: !row.active } });
       const payload = result.data?.adminSaveCurrencyRate;

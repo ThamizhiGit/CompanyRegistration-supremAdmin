@@ -19,6 +19,22 @@ test('switching a currency on and refreshing rates', async ({ adminPage: page, m
   await expect(page.getByText('Updated 1 currency(s).')).toBeVisible();
 });
 
+test('switching a currency off asks first', async ({ adminPage: page, mockApi }) => {
+  await page.getByRole('button', { name: 'Currencies' }).click();
+
+  page.once('dialog', (dialog) => void dialog.dismiss());
+  await page.getByTestId('currency-toggle-LKR').click();
+  await expect(page.getByTestId('currency-toggle-LKR')).toHaveText('On');
+  expect(mockApi.lastVariables('AdminSaveCurrencyRate')).toBeUndefined();
+
+  page.once('dialog', (dialog) => {
+    expect(dialog.message()).toContain('Switch LKR off?');
+    void dialog.accept();
+  });
+  await page.getByTestId('currency-toggle-LKR').click();
+  await expect.poll(() => mockApi.lastVariables('AdminSaveCurrencyRate')).toMatchObject({ code: 'LKR', active: false });
+});
+
 test('a typed rate is pinned', async ({ adminPage: page, mockApi }) => {
   await page.getByRole('button', { name: 'Currencies' }).click();
   await page.getByTestId('currency-edit-LKR').click();
