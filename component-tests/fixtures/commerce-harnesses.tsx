@@ -120,6 +120,10 @@ export function CompaniesHarness({ mocks = [], scenario }: HarnessProps) {
         result: { data: { adminRequestRefund: { success: true, message: 'queued' } } },
       },
       {
+        request: { query: ADMIN_REQUEST_REFUND_MUTATION, variables: { paymentIntentId: 'pi_acme', reason: 'Admin requested refund', amount: null } },
+        result: { data: { adminRequestRefund: { success: true, message: 'queued' } } },
+      },
+      {
         request: {
           query: ADMIN_MANUAL_SUBSCRIPTION_MUTATION,
           variables: {
