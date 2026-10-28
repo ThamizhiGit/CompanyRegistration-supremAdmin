@@ -169,4 +169,34 @@ test.describe('commerce / companies', () => {
     await component.getByRole('button', { name: /Trigger Manual/ }).click();
     await expect(component.getByLabel('toast')).toHaveText('success: Manual subscription action submitted');
   });
+
+  test('refuses a refund amount that is not above zero and confirms a full refund', async ({ mount, page }) => {
+    // The harness answers the full refund (amount: null) for pi_acme.
+    const component = await mount(<CompaniesHarness scenario="actions" />);
+
+    await component.getByTitle('View Company').click();
+    await component.getByRole('button', { name: /Detail/ }).click();
+    await expect(component.getByPlaceholder('Amount')).toHaveAttribute('step', '0.01');
+
+    await component.getByPlaceholder('Amount').fill('0');
+    await component.getByRole('button', { name: /Apply refund/ }).click();
+    await expect(component.getByLabel('toast')).toHaveText(
+      'error: Enter a refund amount greater than zero, or leave it empty for a full refund.',
+    );
+
+    // Empty amount = full refund: only after the admin confirms it.
+    await component.getByPlaceholder('Amount').fill('');
+    const dialogs: string[] = [];
+    page.once('dialog', (dialog) => {
+      dialogs.push(dialog.message());
+      void dialog.dismiss();
+    });
+    await component.getByRole('button', { name: /Apply refund/ }).click();
+    await expect.poll(() => dialogs).toEqual(['No amount entered: refund the full payment?']);
+    await expect(component.getByPlaceholder('Amount')).toBeVisible(); // still open: nothing requested
+
+    page.once('dialog', (dialog) => void dialog.accept());
+    await component.getByRole('button', { name: /Apply refund/ }).click();
+    await expect(component.getByLabel('toast')).toHaveText('success: Refund requested');
+  });
 });

@@ -9,7 +9,7 @@ import {
   ADMIN_REQUEST_REFUND_MUTATION,
   ADMIN_MANUAL_SUBSCRIPTION_MUTATION,
 } from '../../../lib/graphql';
-import { buildPayload, centsFromAmount, formatDate, formatDateTime, formatPrice, toDateTimeLocalValue } from '../../../lib/admin-utils';
+import { buildPayload, centsFromAmount, currencyDecimals, formatDate, formatDateTime, formatPrice, toDateTimeLocalValue } from '../../../lib/admin-utils';
 import {
   ArrowLeft,
   Building2,
@@ -661,13 +661,25 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
 
   const handleRefund = async () => {
     if (!selectedPayment) return;
+    const currency = selectedPayment.currency || 'USD';
+    let amount: number | null = null;
+    if (refundAmount.trim()) {
+      const value = Number(refundAmount);
+      // Minor units in the payment's own currency (¥500 is 500, $5 is 500).
+      amount = Number.isFinite(value) ? centsFromAmount(value, currency) : 0;
+      if (amount <= 0) {
+        onToast('error', 'Enter a refund amount greater than zero, or leave it empty for a full refund.');
+        return;
+      }
+    } else if (!window.confirm('No amount entered: refund the full payment?')) {
+      return;
+    }
     try {
       const result: any = await requestRefund({
         variables: {
           paymentIntentId: selectedPayment.paymentIntentId,
           reason: refundReason || 'Admin requested refund',
-          // Minor units in the payment's own currency (¥500 is 500, $5 is 500).
-          amount: refundAmount ? centsFromAmount(parseFloat(refundAmount), selectedPayment.currency || 'USD') : null,
+          amount,
         },
       });
       const payload = result?.data?.adminRequestRefund;
@@ -1680,7 +1692,7 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                       className="w-full h-10 border border-slate-300 bg-white rounded-lg px-3 text-sm focus:outline-none focus:ring-2 focus:ring-pink-100 focus:border-pink-400"
                       placeholder="Amount"
                       type="number"
-                      step="0.01"
+                      step={1 / 10 ** currencyDecimals(selectedPayment.currency || 'USD')}
                       min="0"
                     />
                   </label>

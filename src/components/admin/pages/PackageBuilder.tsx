@@ -724,7 +724,7 @@ export const ChangePackageDialog: React.FC<{
   const [planId, setPlanId] = useState(listedCurrent?.planId || '');
   const plan = plans.find((p) => p.id === planId);
   const intervals = plan?.pricing?.availableIntervals?.length ? plan.pricing.availableIntervals : ['monthly'];
-  const [interval, setInterval] = useState(listedCurrent?.billingInterval || '');
+  const [billingInterval, setBillingInterval] = useState(listedCurrent?.billingInterval || '');
   const touched = React.useRef(false);
   const [reason, setReason] = useState('');
   const [assign, { loading }] = useMutation<
@@ -738,7 +738,7 @@ export const ChangePackageDialog: React.FC<{
   useEffect(() => {
     if (!liveCurrent || touched.current) return;
     setPlanId(liveCurrent.planId || '');
-    setInterval(liveCurrent.billingInterval || '');
+    setBillingInterval(liveCurrent.billingInterval || '');
   }, [liveCurrent]);
   useEffect(() => {
     if (!planId && plans.length && currentReady) setPlanId(plans[0].id);
@@ -747,8 +747,8 @@ export const ChangePackageDialog: React.FC<{
     // Only once the package's intervals are known: before the plans load the
     // fallback ['monthly'] would silently move a yearly company to monthly.
     if (!plansLoaded || !plan) return;
-    if (!intervals.includes(interval)) setInterval(intervals[0]);
-  }, [plansLoaded, plan, intervals, interval]);
+    if (!intervals.includes(billingInterval)) setBillingInterval(intervals[0]);
+  }, [plansLoaded, plan, intervals, billingInterval]);
 
   const allIds = useMemo(() => new Set(options.map((o) => o.id)), [options]);
   const before = current?.unrestricted ? allIds : expandModuleIds(current?.activeModules || [], options);
@@ -771,7 +771,7 @@ export const ChangePackageDialog: React.FC<{
     }
     try {
       const result = await assign({
-        variables: { companyId, planId: plan.id, billingInterval: interval, reason: reason.trim() },
+        variables: { companyId, planId: plan.id, billingInterval, reason: reason.trim() },
       });
       const payload = result.data?.adminAssignCompanyPlan;
       if (!payload?.success) {
@@ -836,10 +836,10 @@ export const ChangePackageDialog: React.FC<{
             <label className="block">
               <span className="mb-1 block text-sm font-medium text-slate-700">Billing interval</span>
               <select
-                value={interval}
+                value={billingInterval}
                 onChange={(event) => {
                   touched.current = true;
-                  setInterval(event.target.value);
+                  setBillingInterval(event.target.value);
                 }}
                 className="w-full rounded-lg border border-slate-300 px-3 py-2"
                 data-testid="change-package-interval"
