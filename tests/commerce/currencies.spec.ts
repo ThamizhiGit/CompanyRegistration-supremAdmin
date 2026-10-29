@@ -19,7 +19,11 @@ test('switching a currency on and refreshing rates', async ({ adminPage: page, m
     void dialog.accept();
   });
   await page.getByTestId('currency-toggle-JPY').click();
-  await expect.poll(() => mockApi.lastVariables('AdminSaveCurrencyRate')).toMatchObject({ code: 'JPY', active: true });
+  await expect.poll(() => mockApi.lastVariables('AdminSaveCurrencyRate')).toMatchObject({
+    code: 'JPY',
+    active: true,
+    confirmed: true,
+  });
   expect(dialogs[0]).toContain('JPY still has a placeholder rate (1 USD = 150 JPY)');
 
   await page.getByTestId('currencies-refresh').click();
@@ -77,7 +81,12 @@ test('a typed rate far from the current one asks first, showing old and new', as
 
   page.once('dialog', (dialog) => void dialog.accept());
   await page.getByTestId('currency-save').click();
-  await expect.poll(() => mockApi.lastVariables('AdminSaveCurrencyRate')).toMatchObject({ code: 'LKR', ratePerUsd: '3.0' });
+  // The server asks for the confirmation too.
+  await expect.poll(() => mockApi.lastVariables('AdminSaveCurrencyRate')).toMatchObject({
+    code: 'LKR',
+    ratePerUsd: '3.0',
+    confirmed: true,
+  });
 });
 
 test('a typed rate is pinned', async ({ adminPage: page, mockApi }) => {
@@ -96,6 +105,7 @@ test('a typed rate is pinned', async ({ adminPage: page, mockApi }) => {
     code: 'LKR',
     ratePerUsd: '301.5',
     isManual: true,
+    confirmed: false,
   });
   expect(dialogs).toEqual([]);
 });

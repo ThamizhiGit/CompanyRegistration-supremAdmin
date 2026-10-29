@@ -1025,6 +1025,7 @@ export const ADMIN_SAVE_CURRENCY_RATE_MUTATION = gql`
     $active: Boolean
     $isManual: Boolean
     $createOnly: Boolean
+    $confirmed: Boolean
   ) {
     adminSaveCurrencyRate(
       code: $code
@@ -1035,6 +1036,7 @@ export const ADMIN_SAVE_CURRENCY_RATE_MUTATION = gql`
       active: $active
       isManual: $isManual
       createOnly: $createOnly
+      confirmed: $confirmed
     ) {
       success
       message
