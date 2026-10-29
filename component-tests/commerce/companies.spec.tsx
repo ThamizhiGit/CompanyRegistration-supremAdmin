@@ -118,7 +118,7 @@ test.describe('commerce / companies', () => {
     await expect(picker).not.toBeVisible();
   });
 
-  test('requests a partial refund and sends a manual subscription action', async ({ mount }) => {
+  test('requests a partial refund and sends a manual subscription action', async ({ mount, page }) => {
     const mocks: MockedResponse[] = [
       companiesMock([company]),
       historyMock,
@@ -139,12 +139,12 @@ test.describe('commerce / companies', () => {
             paymentMethod: 'card',
             receiverMedium: 'merchant-7',
             senderMedium: 'customer-7',
-            gatewayPayload: JSON.stringify({
+            gatewayPayload: {
               paymentIntentId: 'pi_acme',
               method: 'card',
               reason: 'Bank verified',
               source: 'portal',
-            }),
+            },
             reason: 'Bank verified',
           },
         },
@@ -158,8 +158,15 @@ test.describe('commerce / companies', () => {
     await component.getByRole('button', { name: /Detail/ }).click();
     await component.getByPlaceholder('Refund reason').fill('Duplicate charge');
     await component.getByPlaceholder('Amount').fill('10');
+    // A partial refund is confirmed too, with the amount and currency.
+    const dialogs: string[] = [];
+    page.once('dialog', (dialog) => {
+      dialogs.push(dialog.message());
+      void dialog.accept();
+    });
     await component.getByRole('button', { name: /Apply refund/ }).click();
     await expect(component.getByLabel('toast')).toHaveText('success: Refund requested');
+    expect(dialogs).toEqual(['Refund $10.00 (USD) of this payment?']);
 
     // Re-open the payment detail because a successful refund closes it.
     await component.getByRole('button', { name: /Detail/ }).click();
@@ -198,5 +205,33 @@ test.describe('commerce / companies', () => {
     page.once('dialog', (dialog) => void dialog.accept());
     await component.getByRole('button', { name: /Apply refund/ }).click();
     await expect(component.getByLabel('toast')).toHaveText('success: Refund requested');
+  });
+
+  test('a double click sends one refund and one manual action', async ({ mount, page }) => {
+    // Each answer is mocked once and takes 800 ms: a second request would fail.
+    const component = await mount(<CompaniesHarness scenario="slow-actions" />);
+    await component.getByTitle('View Company').click();
+    await component.getByRole('button', { name: /Detail/ }).click();
+    await component.getByPlaceholder('Refund reason').fill('Duplicate charge');
+    await component.getByPlaceholder('Amount').fill('10');
+
+    let confirms = 0;
+    page.on('dialog', (dialog) => {
+      confirms += 1;
+      void dialog.accept();
+    });
+    await component.getByRole('button', { name: /Apply refund/ }).dblclick();
+    await expect(component.getByRole('button', { name: /Requesting refund/ })).toBeDisabled();
+    await expect(component.getByLabel('toast')).toHaveText('success: Refund requested');
+    expect(confirms).toBe(1);
+
+    await component.getByRole('button', { name: /Detail/ }).click();
+    await component.getByPlaceholder('Receiver medium').fill('merchant-7');
+    await component.getByPlaceholder('Sender medium').fill('customer-7');
+    await component.getByPlaceholder('Reason / notes').fill('Bank verified');
+    await component.getByRole('button', { name: /Trigger Manual/ }).dblclick();
+    await expect(component.getByRole('button', { name: /Submitting/ })).toBeDisabled();
+    await expect(component.getByLabel('toast')).toHaveText('success: Manual subscription action submitted');
+    await expect(component.getByRole('button', { name: /Trigger Manual/ })).toBeEnabled();
   });
 });

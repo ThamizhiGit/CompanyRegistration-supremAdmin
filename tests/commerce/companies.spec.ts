@@ -113,3 +113,27 @@ test('changing the package of a pre-package company warns about what it loses', 
   await expect(dialog.getByTestId('change-package-losses')).toContainText('Project Management');
   await expect(dialog.getByTestId('change-package-losses')).toContainText('AI Workforce Intelligence');
 });
+
+test('the package dialog reuses the module and package lists instead of downloading them each time', async ({
+  adminPage: page,
+  mockApi,
+}) => {
+  await page.getByRole('button', { name: 'Companies' }).click();
+  const dialog = page.getByTestId('change-package-dialog');
+  const countOf = (operation: string) => mockApi.requests.get(operation)?.length ?? 0;
+
+  await page.getByTestId('change-package-12').click();
+  await expect(dialog.getByTestId('change-package-plan')).toBeVisible();
+  await expect.poll(() => countOf('AdminPlansPackaging')).toBeGreaterThan(0);
+  const modules = countOf('AdminPackageModules');
+  const plans = countOf('AdminPlansPackaging');
+  await dialog.getByRole('button', { name: 'Cancel' }).click();
+  await expect(dialog).toHaveCount(0);
+
+  await page.getByTestId('change-package-12').click();
+  await expect(dialog.getByTestId('change-package-plan')).toBeVisible();
+  await dialog.getByTestId('change-package-plan').selectOption('premium_yearly');
+  await expect(dialog.getByTestId('change-package-diff')).toContainText('+ Invoicing & Statement of Accounts');
+  expect(countOf('AdminPackageModules')).toBe(modules);
+  expect(countOf('AdminPlansPackaging')).toBe(plans);
+});
