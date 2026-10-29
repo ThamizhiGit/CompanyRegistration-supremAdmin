@@ -6,6 +6,13 @@ export const ZERO_DECIMAL_CURRENCIES = new Set([
 ]);
 // ISK and UGX are not in the list: Stripe takes them as two-decimal amounts
 // (5 ISK = 500), whole units only -- the backend rounds them.
+export const WHOLE_UNIT_CURRENCIES = new Set(['ISK', 'UGX']);
+
+/** Smallest amount an admin can type: 1 for JPY and for ISK/UGX (whole units), else 0.01. */
+export const currencyInputStep = (currency: string = 'USD'): number => {
+  const code = (currency || 'USD').toUpperCase();
+  return WHOLE_UNIT_CURRENCIES.has(code) ? 1 : 1 / 10 ** currencyDecimals(code);
+};
 
 /** Minor-unit digits of a currency: 0 for zero-decimal currencies, else 2. */
 export const currencyDecimals = (currency: string = 'USD'): number =>
