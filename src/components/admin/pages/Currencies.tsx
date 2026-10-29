@@ -42,7 +42,13 @@ interface EditingRate {
   roundTo: number;
   active: boolean;
   isManual: boolean;
+  /** As loaded (an existing row): switched on, and where its rate came from. */
+  originalActive: boolean;
+  source: string;
 }
+
+/** A typed rate further than this from the current one asks for confirmation (300 typed as 3.0...). */
+const RATE_CHANGE_CONFIRM_RATIO = 0.2;
 
 const SOURCE_LABELS: Record<string, string> = {
   auto: 'Automatic',
@@ -87,6 +93,14 @@ export const Currencies: React.FC<{ onToast: (type: 'success' | 'error', msg: st
   const info = data?.adminCurrencyRates;
   const rates = info?.rates || [];
 
+  // A seed rate is a placeholder nobody has checked: customers would be
+  // charged at it as soon as the currency is switched on.
+  const confirmPlaceholderRate = (code: string, ratePerUsd: string) =>
+    window.confirm(
+      `${code} still has a placeholder rate (1 USD = ${ratePerUsd} ${code}) that has not been checked. ` +
+        'Customers will be charged at this rate. Switch it on anyway? (Refresh or type the rate first to be safe.)',
+    );
+
   const handleRefresh = async () => {
     try {
       const result = await refreshRates();
@@ -106,6 +120,7 @@ export const Currencies: React.FC<{ onToast: (type: 'success' | 'error', msg: st
   const toggleActive = async (row: CurrencyRateRow) => {
     // Switching off removes the currency from checkout at once: make sure it was meant.
     if (row.active && !window.confirm(`Switch ${row.code} off? Customers will no longer be able to pay in it.`)) return;
+    if (!row.active && row.source === 'seed' && !confirmPlaceholderRate(row.code, row.ratePerUsd)) return;
     try {
       const result = await saveRate({ variables: { code: row.code, active: !row.active } });
       const payload = result.data?.adminSaveCurrencyRate;
@@ -135,6 +150,21 @@ export const Currencies: React.FC<{ onToast: (type: 'success' | 'error', msg: st
     const rateChanged = editing.ratePerUsd.trim() !== editing.originalRate;
     if ((editing.isNew || rateChanged) && !(Number(editing.ratePerUsd) > 0)) {
       onToast('error', 'Rate must be a positive number');
+      return;
+    }
+    const oldRate = Number(editing.originalRate);
+    const newRate = Number(editing.ratePerUsd);
+    if (!editing.isNew && rateChanged && oldRate > 0 && Math.abs(newRate - oldRate) / oldRate > RATE_CHANGE_CONFIRM_RATIO) {
+      const change = Math.round(((newRate - oldRate) / oldRate) * 100);
+      const confirmed = window.confirm(
+        `The new ${code} rate is ${change > 0 ? '+' : ''}${change}% from the current one.\n\n` +
+          `Current: 1 USD = ${editing.originalRate} ${code}\nNew: 1 USD = ${editing.ratePerUsd.trim()} ${code}\n\nSave this rate?`,
+      );
+      if (!confirmed) return;
+    }
+    // Switching on a currency whose (unchanged) rate is still a placeholder.
+    if (!editing.isNew && editing.active && !editing.originalActive && editing.source === 'seed' && !rateChanged &&
+      !confirmPlaceholderRate(code, editing.originalRate)) {
       return;
     }
     try {
@@ -175,6 +205,8 @@ export const Currencies: React.FC<{ onToast: (type: 'success' | 'error', msg: st
       roundTo: row.roundTo,
       active: row.active,
       isManual: row.isManual,
+      originalActive: row.active,
+      source: row.source,
     });
 
   return (
@@ -203,7 +235,10 @@ export const Currencies: React.FC<{ onToast: (type: 'success' | 'error', msg: st
           <button
             type="button"
             onClick={() =>
-              setEditing({ isNew: true, code: '', name: '', symbol: '', ratePerUsd: '', originalRate: '', roundTo: 0, active: false, isManual: true })
+              setEditing({
+                isNew: true, code: '', name: '', symbol: '', ratePerUsd: '', originalRate: '', roundTo: 0, active: false,
+                isManual: true, originalActive: false, source: 'manual',
+              })
             }
             className="inline-flex h-9 items-center gap-2 rounded-lg bg-sky-600 px-3 text-sm font-semibold text-white hover:bg-sky-700"
             data-testid="currencies-add"

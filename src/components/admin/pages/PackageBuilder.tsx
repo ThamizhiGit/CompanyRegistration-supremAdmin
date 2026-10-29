@@ -228,50 +228,121 @@ export const validatePackageDraft = (draft: PackageDraft, options: PackageModule
 };
 
 const ADMIN_PAGE_LIMIT = 200; // the backend's largest page
+/** Safety stop: 50 pages (10,000 rows). A server that ignores `offset` would otherwise loop forever. */
+const ADMIN_MAX_PAGES = 50;
+/** A full list loaded this recently is reused (e.g. each time a dialog opens) instead of downloaded again. */
+const ADMIN_LIST_REUSE_MS = 5 * 60 * 1000;
+
+interface AdminListEntry {
+  rows?: unknown[];
+  loadedAt: number;
+  inFlight?: Promise<unknown[]>;
+  listeners: Set<(rows: unknown[]) => void>;
+}
+
+// One entry per (Apollo client, query, field), shared by every hook using that
+// client while the app is open (a new client -- e.g. after signing in again --
+// starts empty).
+const adminListCache = new WeakMap<object, Map<any, Map<string, AdminListEntry>>>();
+
+const adminListEntry = (client: object, query: any, field: string): AdminListEntry => {
+  let byQuery = adminListCache.get(client);
+  if (!byQuery) {
+    byQuery = new Map();
+    adminListCache.set(client, byQuery);
+  }
+  let byField = byQuery.get(query);
+  if (!byField) {
+    byField = new Map();
+    byQuery.set(query, byField);
+  }
+  let entry = byField.get(field);
+  if (!entry) {
+    entry = { loadedAt: 0, listeners: new Set() };
+    byField.set(field, entry);
+  }
+  return entry;
+};
+
+const loadAllAdminPages = async (client: any, query: any, field: string): Promise<unknown[]> => {
+  const all: unknown[] = [];
+  for (let pageIndex = 0; ; pageIndex += 1) {
+    if (pageIndex >= ADMIN_MAX_PAGES) {
+      throw new Error(`The list is longer than ${ADMIN_MAX_PAGES * ADMIN_PAGE_LIMIT} rows and could not be loaded in full.`);
+    }
+    const result = await client.query({
+      query,
+      variables: { offset: pageIndex * ADMIN_PAGE_LIMIT },
+      fetchPolicy: 'network-only',
+    });
+    const page: unknown[] = result.data?.[field] || [];
+    all.push(...page);
+    if (page.length < ADMIN_PAGE_LIMIT) return all;
+  }
+};
 
 /**
  * Every row of a 200-per-page admin list (adminModules, adminPlans): pages are
- * read with `offset` until a short page, so nothing past 200 is cut off.
+ * read with `offset` until a short page (at most ADMIN_MAX_PAGES), so nothing
+ * past 200 is cut off. A list loaded in the last few minutes is reused by every
+ * component that asks for it; `refetch()` downloads it again for all of them.
  */
 export const useAllAdminPages = <T,>(query: any, field: string) => {
   const client = useApolloClient();
-  const [rows, setRows] = useState<T[] | undefined>(undefined);
-  const [loading, setLoading] = useState(true);
+  const entry = adminListEntry(client, query, field);
+  const fresh = entry.rows !== undefined && Date.now() - entry.loadedAt < ADMIN_LIST_REUSE_MS;
+  const [rows, setRows] = useState<T[] | undefined>(fresh ? (entry.rows as T[]) : undefined);
+  const [loading, setLoading] = useState(!fresh);
   const [error, setError] = useState<Error | null>(null);
   const [version, setVersion] = useState(0);
 
+  // Another component reloaded the same list: show the new rows here too.
+  useEffect(() => {
+    const listener = (next: unknown[]) => setRows(next as T[]);
+    entry.listeners.add(listener);
+    return () => {
+      entry.listeners.delete(listener);
+    };
+  }, [entry]);
+
   useEffect(() => {
     let cancelled = false;
+    const reusable = version === 0 && entry.rows !== undefined && Date.now() - entry.loadedAt < ADMIN_LIST_REUSE_MS;
+    if (reusable) {
+      setRows(entry.rows as T[]);
+      setLoading(false);
+      return undefined;
+    }
     setLoading(true);
-    (async () => {
-      const all: T[] = [];
-      for (let offset = 0; ; offset += ADMIN_PAGE_LIMIT) {
-        const result = await client.query<any, { offset: number }, any>({
-          query,
-          variables: { offset },
-          fetchPolicy: 'network-only',
-        });
-        const page: T[] = result.data?.[field] || [];
-        all.push(...page);
-        if (page.length < ADMIN_PAGE_LIMIT) break;
-      }
+    // One download at a time per list; a refetch waits for it and starts a new one.
+    const previous = entry.inFlight;
+    const request = (async () => {
+      if (previous && version === 0) return previous;
+      if (previous) await previous.catch(() => undefined);
+      const all = await loadAllAdminPages(client, query, field);
+      entry.rows = all;
+      entry.loadedAt = Date.now();
+      entry.listeners.forEach((listener) => listener(all));
       return all;
-    })()
+    })();
+    entry.inFlight = request;
+    request
       .then((all) => {
         if (cancelled) return;
-        setRows(all);
+        setRows(all as T[]);
         setError(null);
       })
       .catch((err) => {
         if (!cancelled) setError(err instanceof Error ? err : new Error(String(err)));
       })
       .finally(() => {
+        if (entry.inFlight === request) entry.inFlight = undefined;
         if (!cancelled) setLoading(false);
       });
     return () => {
       cancelled = true;
     };
-  }, [client, query, field, version]);
+  }, [client, query, field, version, entry]);
 
   return { rows, loading, error, refetch: () => setVersion((v) => v + 1) };
 };
