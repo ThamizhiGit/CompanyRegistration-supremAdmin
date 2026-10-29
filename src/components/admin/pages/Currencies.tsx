@@ -120,9 +120,11 @@ export const Currencies: React.FC<{ onToast: (type: 'success' | 'error', msg: st
   const toggleActive = async (row: CurrencyRateRow) => {
     // Switching off removes the currency from checkout at once: make sure it was meant.
     if (row.active && !window.confirm(`Switch ${row.code} off? Customers will no longer be able to pay in it.`)) return;
-    if (!row.active && row.source === 'seed' && !confirmPlaceholderRate(row.code, row.ratePerUsd)) return;
+    const placeholder = !row.active && row.source === 'seed';
+    if (placeholder && !confirmPlaceholderRate(row.code, row.ratePerUsd)) return;
     try {
-      const result = await saveRate({ variables: { code: row.code, active: !row.active } });
+      // The server refuses a placeholder rate unless the admin confirmed it.
+      const result = await saveRate({ variables: { code: row.code, active: !row.active, confirmed: placeholder } });
       const payload = result.data?.adminSaveCurrencyRate;
       if (!payload?.success) {
         onToast('error', payload?.message || 'Currency could not be updated');
@@ -154,18 +156,21 @@ export const Currencies: React.FC<{ onToast: (type: 'success' | 'error', msg: st
     }
     const oldRate = Number(editing.originalRate);
     const newRate = Number(editing.ratePerUsd);
+    // Set once the admin confirmed a check below; the server asks for it too.
+    let confirmed = false;
     if (!editing.isNew && rateChanged && oldRate > 0 && Math.abs(newRate - oldRate) / oldRate > RATE_CHANGE_CONFIRM_RATIO) {
       const change = Math.round(((newRate - oldRate) / oldRate) * 100);
-      const confirmed = window.confirm(
+      const confirmedChange = window.confirm(
         `The new ${code} rate is ${change > 0 ? '+' : ''}${change}% from the current one.\n\n` +
           `Current: 1 USD = ${editing.originalRate} ${code}\nNew: 1 USD = ${editing.ratePerUsd.trim()} ${code}\n\nSave this rate?`,
       );
-      if (!confirmed) return;
+      if (!confirmedChange) return;
+      confirmed = true;
     }
     // Switching on a currency whose (unchanged) rate is still a placeholder.
-    if (!editing.isNew && editing.active && !editing.originalActive && editing.source === 'seed' && !rateChanged &&
-      !confirmPlaceholderRate(code, editing.originalRate)) {
-      return;
+    if (!editing.isNew && editing.active && !editing.originalActive && editing.source === 'seed' && !rateChanged) {
+      if (!confirmPlaceholderRate(code, editing.originalRate)) return;
+      confirmed = true;
     }
     try {
       const result = await saveRate({
@@ -179,6 +184,7 @@ export const Currencies: React.FC<{ onToast: (type: 'success' | 'error', msg: st
           isManual: editing.isManual,
           // The server refuses to overwrite an existing code from the Add form too.
           createOnly: editing.isNew,
+          confirmed,
         },
       });
       const payload = result.data?.adminSaveCurrencyRate;
