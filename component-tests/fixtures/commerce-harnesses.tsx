@@ -19,7 +19,12 @@ import {
 
 // 'slow-actions': like 'actions', but the refund / manual action answers take
 // a moment (a second request while one is in flight finds no mock and fails).
-type HarnessProps = { mocks?: MockedResponse[]; scenario?: 'loading' | 'error' | 'empty' | 'data' | 'actions' | 'slow-actions' };
+type HarnessProps = {
+  mocks?: MockedResponse[];
+  scenario?: 'loading' | 'error' | 'empty' | 'data' | 'actions' | 'slow-actions';
+  /** Currency of the company's payment (default USD). */
+  paymentCurrency?: string;
+};
 
 const companyVariables = {
   search: null, status: null, subscriptionStatus: null, dueDateFrom: null,
@@ -80,7 +85,7 @@ export function PlansHarness({ mocks = [], scenario }: HarnessProps) {
   );
 }
 
-export function CompaniesHarness({ mocks = [], scenario }: HarnessProps) {
+export function CompaniesHarness({ mocks = [], scenario, paymentCurrency = 'USD' }: HarnessProps) {
   const [toast, setToast] = useState('');
   const company = {
     id: 7, company: 'Acme Labs', planId: 'premium', planName: 'Premium', employeeCount: 12,
@@ -93,7 +98,7 @@ export function CompaniesHarness({ mocks = [], scenario }: HarnessProps) {
   const payment = {
     paymentIntentId: 'pi_acme', email: 'billing@acme.test', planId: 'premium', planName: 'Premium',
     employeeCountSnapshot: 12, originalAmountCents: 2500, finalAmountCents: 2500, status: 'succeeded',
-    amount: 2500, currency: 'USD', companyId: 7, companyName: 'Acme Labs', source: 'portal',
+    amount: 2500, currency: paymentCurrency, companyId: 7, companyName: 'Acme Labs', source: 'portal',
     createdAt: '2026-01-02T00:00:00.000Z', dueDate: '2026-08-01T12:00:00.000Z',
     recurringDate: '2026-09-01T12:00:00.000Z', deniedReason: null, gatewayMethod: 'card',
     gatewayRefReceiverMedium: 'merchant-7', gatewayRefSenderMedium: 'customer-7',
