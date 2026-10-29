@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { useQuery, useMutation } from '@apollo/client/react';
 import {
   ADMIN_COMPANIES_QUERY,
@@ -249,6 +249,12 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
   const [updatePaymentStatus] = useMutation(ADMIN_UPDATE_PAYMENT_STATUS_MUTATION);
   const [requestRefund] = useMutation(ADMIN_REQUEST_REFUND_MUTATION);
   const [manualProcess] = useMutation(ADMIN_MANUAL_SUBSCRIPTION_MUTATION);
+  // Money actions: one request at a time. The ref blocks a second click
+  // before React re-renders; the state disables the buttons.
+  const refundInFlightRef = useRef(false);
+  const [refundInFlight, setRefundInFlight] = useState(false);
+  const manualInFlightRef = useRef(false);
+  const [manualInFlight, setManualInFlight] = useState(false);
 
   const rawCompanies = companiesData?.adminCompanies || [];
   // Package / modules per company (batched: the list is not paginated).
@@ -660,8 +666,8 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
   };
 
   const handleRefund = async () => {
-    if (!selectedPayment) return;
-    const currency = selectedPayment.currency || 'USD';
+    if (!selectedPayment || refundInFlightRef.current) return;
+    const currency = (selectedPayment.currency || 'USD').toUpperCase();
     let amount: number | null = null;
     if (refundAmount.trim()) {
       const value = Number(refundAmount);
@@ -671,9 +677,12 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
         onToast('error', 'Enter a refund amount greater than zero, or leave it empty for a full refund.');
         return;
       }
+      if (!window.confirm(`Refund ${formatPrice(amount, currency)} (${currency}) of this payment?`)) return;
     } else if (!window.confirm('No amount entered: refund the full payment?')) {
       return;
     }
+    refundInFlightRef.current = true;
+    setRefundInFlight(true);
     try {
       const result: any = await requestRefund({
         variables: {
@@ -696,11 +705,16 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
       refetchCompanies();
     } catch (err: any) {
       onToast('error', err.message || 'Failed to request refund');
+    } finally {
+      refundInFlightRef.current = false;
+      setRefundInFlight(false);
     }
   };
 
   const handleManualSubscription = async () => {
-    if (!selectedPayment || !selectedHistoryFor) return;
+    if (!selectedPayment || !selectedHistoryFor || manualInFlightRef.current) return;
+    manualInFlightRef.current = true;
+    setManualInFlight(true);
     try {
       const result: any = await manualProcess({
         variables: {
@@ -710,12 +724,12 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
           paymentMethod: manualMethod,
           receiverMedium: manualReceiver,
           senderMedium: manualSender,
-          gatewayPayload: JSON.stringify({
+          gatewayPayload: {
             paymentIntentId: selectedPayment.paymentIntentId,
             method: manualMethod,
             reason: manualReason,
             source: manualSource,
-          }),
+          },
           reason: manualReason,
         },
       });
@@ -732,6 +746,9 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
       refetchCompanies();
     } catch (err: any) {
       onToast('error', err.message || 'Failed to process manual subscription action');
+    } finally {
+      manualInFlightRef.current = false;
+      setManualInFlight(false);
     }
   };
 
@@ -1698,10 +1715,12 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                   </label>
                   <button
                       type="button"
-                      className="w-full h-10 inline-flex items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-pink-600 to-rose-500 text-white text-sm font-semibold shadow-sm hover:from-pink-700 hover:to-rose-600 transition-colors"
+                      className="w-full h-10 inline-flex items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-pink-600 to-rose-500 text-white text-sm font-semibold shadow-sm hover:from-pink-700 hover:to-rose-600 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
                     onClick={handleRefund}
+                    disabled={refundInFlight}
+                    aria-busy={refundInFlight}
                   >
-                      <HandCoins className="w-4 h-4" /> Apply refund
+                      <HandCoins className="w-4 h-4" /> {refundInFlight ? 'Requesting refund...' : 'Apply refund'}
                   </button>
                   </div>
                   <p className="mt-3 text-[11px] leading-relaxed text-slate-400">
@@ -1786,10 +1805,12 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                 <div className="mt-4 flex justify-end">
                   <button
                     type="button"
-                    className="w-full sm:w-auto h-10 inline-flex items-center justify-center gap-2 px-5 rounded-lg bg-gradient-to-r from-cyan-500 to-sky-500 text-white text-sm font-semibold shadow-sm hover:from-cyan-600 hover:to-sky-600 transition-colors"
+                    className="w-full sm:w-auto h-10 inline-flex items-center justify-center gap-2 px-5 rounded-lg bg-gradient-to-r from-cyan-500 to-sky-500 text-white text-sm font-semibold shadow-sm hover:from-cyan-600 hover:to-sky-600 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
                     onClick={handleManualSubscription}
+                    disabled={manualInFlight}
+                    aria-busy={manualInFlight}
                   >
-                    <Clipboard className="w-4 h-4" /> Trigger Manual
+                    <Clipboard className="w-4 h-4" /> {manualInFlight ? 'Submitting...' : 'Trigger Manual'}
                   </button>
                 </div>
               </section>
