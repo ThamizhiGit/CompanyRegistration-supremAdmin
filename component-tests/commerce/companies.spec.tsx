@@ -207,6 +207,16 @@ test.describe('commerce / companies', () => {
     await expect(component.getByLabel('toast')).toHaveText('success: Refund requested');
   });
 
+  test('an ISK refund is typed in whole units (Stripe refuses fractions)', async ({ mount }) => {
+    const component = await mount(<CompaniesHarness scenario="actions" paymentCurrency="ISK" />);
+    await component.getByTitle('View Company').click();
+    await component.getByRole('button', { name: /Detail/ }).click();
+    await expect(component.getByPlaceholder('Amount')).toHaveAttribute('step', '1');
+    await component.getByPlaceholder('Amount').fill('5.5');
+    await component.getByRole('button', { name: /Apply refund/ }).click();
+    await expect(component.getByLabel('toast')).toHaveText('error: ISK refunds must be in whole units.');
+  });
+
   test('a double click sends one refund and one manual action', async ({ mount, page }) => {
     // Each answer is mocked once and takes 800 ms: a second request would fail.
     const component = await mount(<CompaniesHarness scenario="slow-actions" />);
