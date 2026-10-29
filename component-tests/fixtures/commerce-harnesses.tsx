@@ -17,7 +17,9 @@ import {
   ADMIN_SAVE_PROMO_CODE_MUTATION,
 } from '../../src/lib/graphql';
 
-type HarnessProps = { mocks?: MockedResponse[]; scenario?: 'loading' | 'error' | 'empty' | 'data' | 'actions' };
+// 'slow-actions': like 'actions', but the refund / manual action answers take
+// a moment (a second request while one is in flight finds no mock and fails).
+type HarnessProps = { mocks?: MockedResponse[]; scenario?: 'loading' | 'error' | 'empty' | 'data' | 'actions' | 'slow-actions' };
 
 const companyVariables = {
   search: null, status: null, subscriptionStatus: null, dueDateFrom: null,
@@ -97,10 +99,12 @@ export function CompaniesHarness({ mocks = [], scenario }: HarnessProps) {
     gatewayRefReceiverMedium: 'merchant-7', gatewayRefSenderMedium: 'customer-7',
     gatewayPayload: '{}', paymentGatewayStatus: 'settled',
   };
+  const actions = scenario === 'actions' || scenario === 'slow-actions';
+  const actionDelay = scenario === 'slow-actions' ? { delay: 800 } : {};
   const scenarioMocks: MockedResponse[] = scenario ? [
     {
       request: { query: ADMIN_COMPANIES_QUERY, variables: companyVariables },
-      maxUsageCount: scenario === 'actions' ? 3 : 1,
+      maxUsageCount: actions ? 3 : 1,
       ...(scenario === 'loading' ? { delay: 60_000, result: { data: { adminCompanies: [] } } } :
         scenario === 'error' ? { error: new Error('company service unavailable') } :
         { result: { data: { adminCompanies: scenario === 'empty' ? [] : [company] } } }),
@@ -109,7 +113,7 @@ export function CompaniesHarness({ mocks = [], scenario }: HarnessProps) {
       request: { query: ADMIN_COMPANIES_QUERY, variables: { ...companyVariables, search: 'missing' } },
       result: { data: { adminCompanies: [company] } },
     }] : []),
-    ...(scenario === 'actions' ? [
+    ...(actions ? [
       {
         request: { query: ADMIN_COMPANY_PAYMENT_HISTORY_QUERY, variables: { companyId: 7, dateFrom: null, dateTo: null, status: null } },
         maxUsageCount: 3,
@@ -117,6 +121,7 @@ export function CompaniesHarness({ mocks = [], scenario }: HarnessProps) {
       },
       {
         request: { query: ADMIN_REQUEST_REFUND_MUTATION, variables: { paymentIntentId: 'pi_acme', reason: 'Duplicate charge', amount: 1000 } },
+        ...actionDelay,
         result: { data: { adminRequestRefund: { success: true, message: 'queued' } } },
       },
       {
@@ -129,10 +134,11 @@ export function CompaniesHarness({ mocks = [], scenario }: HarnessProps) {
           variables: {
             companyId: 7, subscriptionId: 'pi_acme', source: 'portal', paymentMethod: 'card',
             receiverMedium: 'merchant-7', senderMedium: 'customer-7',
-            gatewayPayload: JSON.stringify({ paymentIntentId: 'pi_acme', method: 'card', reason: 'Bank verified', source: 'portal' }),
+            gatewayPayload: { paymentIntentId: 'pi_acme', method: 'card', reason: 'Bank verified', source: 'portal' },
             reason: 'Bank verified',
           },
         },
+        ...actionDelay,
         result: { data: { adminManualSubscriptionAction: { success: true, message: 'recorded', payment: null } } },
       },
     ] : []),
