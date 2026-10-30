@@ -119,12 +119,21 @@ export const Currencies: React.FC<{ onToast: (type: 'success' | 'error', msg: st
 
   const toggleActive = async (row: CurrencyRateRow) => {
     // Switching off removes the currency from checkout at once: make sure it was meant.
-    if (row.active && !window.confirm(`Switch ${row.code} off? Customers will no longer be able to pay in it.`)) return;
+    if (
+      row.active &&
+      !window.confirm(
+        `Switch ${row.code} off? Customers will no longer be able to pay in it, and companies billed in it ` +
+          'move to their package currency at their next renewal.',
+      )
+    ) {
+      return;
+    }
     const placeholder = !row.active && row.source === 'seed';
     if (placeholder && !confirmPlaceholderRate(row.code, row.ratePerUsd)) return;
     try {
       // The server refuses a placeholder rate unless the admin confirmed it.
-      const result = await saveRate({ variables: { code: row.code, active: !row.active, confirmed: placeholder } });
+      // Switching off is confirmed above too (the server asks when companies are billed in it).
+      const result = await saveRate({ variables: { code: row.code, active: !row.active, confirmed: placeholder || row.active } });
       const payload = result.data?.adminSaveCurrencyRate;
       if (!payload?.success) {
         onToast('error', payload?.message || 'Currency could not be updated');
@@ -165,6 +174,18 @@ export const Currencies: React.FC<{ onToast: (type: 'success' | 'error', msg: st
           `Current: 1 USD = ${editing.originalRate} ${code}\nNew: 1 USD = ${editing.ratePerUsd.trim()} ${code}\n\nSave this rate?`,
       );
       if (!confirmedChange) return;
+      confirmed = true;
+    }
+    // Switched off from the edit form: same question as the On/Off button.
+    if (!editing.isNew && !editing.active && editing.originalActive) {
+      if (
+        !window.confirm(
+          `Switch ${code} off? Customers will no longer be able to pay in it, and companies billed in it ` +
+            'move to their package currency at their next renewal.',
+        )
+      ) {
+        return;
+      }
       confirmed = true;
     }
     // Switching on a currency whose (unchanged) rate is still a placeholder.

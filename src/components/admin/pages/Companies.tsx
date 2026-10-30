@@ -613,6 +613,8 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
       onToast('success', 'Company detail updated');
       setEditingDetail(null);
       refetchCompanies();
+      // The plan or status may have changed the package column.
+      refetchPackages();
     } catch (err: any) {
       onToast('error', err.message || 'Failed to update company details');
     }
@@ -749,6 +751,7 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
       setManualSender('');
       refetchHistory();
       refetchCompanies();
+      refetchPackages();
     } catch (err: any) {
       onToast('error', err.message || 'Failed to process manual subscription action');
     } finally {

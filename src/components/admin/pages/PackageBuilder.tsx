@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useApolloClient, useMutation, useQuery } from '@apollo/client/react';
 import { AlertTriangle, ChevronDown, ChevronRight, Layers, X } from 'lucide-react';
 import {
@@ -230,8 +230,12 @@ export const validatePackageDraft = (draft: PackageDraft, options: PackageModule
 const ADMIN_PAGE_LIMIT = 200; // the backend's largest page
 /** Safety stop: 50 pages (10,000 rows). A server that ignores `offset` would otherwise loop forever. */
 const ADMIN_MAX_PAGES = 50;
-/** A full list loaded this recently is reused (e.g. each time a dialog opens) instead of downloaded again. */
-const ADMIN_LIST_REUSE_MS = 5 * 60 * 1000;
+/**
+ * A full list loaded this recently is reused (e.g. a dialog opened again right
+ * away) instead of downloaded again. Short, so a change another admin made
+ * shows up the next time a dialog opens.
+ */
+const ADMIN_LIST_REUSE_MS = 30 * 1000;
 
 interface AdminListEntry {
   rows?: unknown[];
@@ -689,41 +693,72 @@ export const FeatureAreaChips: React.FC<{ moduleIds: string[]; options: PackageM
 // ---------------------------------------------------------------------------
 const PACKAGE_BATCH = 500; // adminCompanyPackages reads at most 500 ids per call
 
-/** Package rows for the given company ids, fetched in batches of 500. */
+/**
+ * Package rows for the given company ids, fetched in batches of 500. Rows
+ * already loaded are kept when the list changes (a search, a filter): only
+ * companies not seen yet are asked for. refetch() reloads them all.
+ */
 export const useCompanyPackages = (companyIds: number[]) => {
   const client = useApolloClient();
   const [rows, setRows] = useState<Map<number, CompanyPackageInfo>>(new Map());
   const [failedIds, setFailedIds] = useState<Set<number>>(new Set());
   const [version, setVersion] = useState(0);
+  // One cache per version: rows read so far, the reads still running (so a
+  // list that changes while a read is out waits for it instead of dropping
+  // those companies), and the ids whose last read failed.
+  type PackageCache = {
+    version: number;
+    rows: Map<number, CompanyPackageInfo>;
+    read: Set<number>;
+    pending: Map<number, Promise<void>>;
+    failed: Set<number>;
+  };
+  const loaded = useRef<PackageCache>({ version: 0, rows: new Map(), read: new Set(), pending: new Map(), failed: new Set() });
   const key = useMemo(() => [...new Set(companyIds.filter((id) => Number.isFinite(id)))].sort((a, b) => a - b).join(','), [companyIds]);
 
   useEffect(() => {
     let cancelled = false;
-    const ids = key ? key.split(',').map(Number) : [];
-    if (!ids.length) {
-      setRows(new Map());
-      setFailedIds(new Set());
-      return undefined;
+    if (loaded.current.version !== version) {
+      loaded.current = { version, rows: new Map(), read: new Set(), pending: new Map(), failed: new Set() };
     }
-    const batches: number[][] = [];
-    for (let i = 0; i < ids.length; i += PACKAGE_BATCH) batches.push(ids.slice(i, i + PACKAGE_BATCH));
-    Promise.all(
-      batches.map((batch) =>
-        client
-          .query<{ adminCompanyPackages: CompanyPackageInfo[] }, { companyIds: number[] }, any>({
-            query: ADMIN_COMPANY_PACKAGES_QUERY,
-            variables: { companyIds: batch },
-            fetchPolicy: 'network-only',
-          })
-          .then((result) => ({ batch, rows: result.data?.adminCompanyPackages || [], failed: false }))
-          .catch(() => ({ batch, rows: [] as CompanyPackageInfo[], failed: true })),
-      ),
-    ).then((results) => {
+    const cache = loaded.current;
+    const ids = key ? key.split(',').map(Number) : [];
+    const show = () => {
       if (cancelled) return;
-      setRows(new Map(results.flatMap((r) => r.rows).map((row) => [row.companyId, row])));
-      // Say so instead of showing "-" when a batch could not be read.
-      setFailedIds(new Set(results.filter((r) => r.failed).flatMap((r) => r.batch)));
-    });
+      setRows(new Map(ids.filter((id) => cache.rows.has(id)).map((id) => [id, cache.rows.get(id)!])));
+      setFailedIds(new Set(ids.filter((id) => cache.failed.has(id))));
+    };
+    // Not read yet, or the last read failed (asked again).
+    const missing = ids.filter((id) => !cache.pending.has(id) && (!cache.read.has(id) || cache.failed.has(id)));
+    for (let i = 0; i < missing.length; i += PACKAGE_BATCH) {
+      const batch = missing.slice(i, i + PACKAGE_BATCH);
+      const read = client
+        .query<{ adminCompanyPackages: CompanyPackageInfo[] }, { companyIds: number[] }, any>({
+          query: ADMIN_COMPANY_PACKAGES_QUERY,
+          variables: { companyIds: batch },
+          fetchPolicy: 'network-only',
+        })
+        .then((result) => {
+          (result.data?.adminCompanyPackages || []).forEach((row) => cache.rows.set(row.companyId, row));
+          // A company with no package row is still read (shown as "-").
+          batch.forEach((id) => {
+            cache.failed.delete(id);
+            cache.read.add(id);
+          });
+        })
+        .catch(() => {
+          // Say so instead of showing "-"; asked again next time.
+          batch.forEach((id) => cache.failed.add(id));
+        })
+        .finally(() => batch.forEach((id) => cache.pending.delete(id)));
+      batch.forEach((id) => cache.pending.set(id, read));
+    }
+    const waiting = [...new Set(ids.map((id) => cache.pending.get(id)).filter(Boolean))] as Promise<void>[];
+    if (!waiting.length) {
+      show();
+    } else {
+      Promise.all(waiting).then(show);
+    }
     return () => {
       cancelled = true;
     };

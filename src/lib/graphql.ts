@@ -373,11 +373,11 @@ export const ADMIN_MANUAL_SUBSCRIPTION_MUTATION = gql`
   mutation AdminManualSubscriptionAction(
     $companyId: Int!
     $subscriptionId: String
-    $source: String
+    $source: String!
     $paymentMethod: String
     $receiverMedium: String
     $senderMedium: String
-    $gatewayPayload: String
+    $gatewayPayload: GenericScalar
     $reason: String
   ) {
     adminManualSubscriptionAction(
