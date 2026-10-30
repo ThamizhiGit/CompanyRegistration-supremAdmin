@@ -441,7 +441,7 @@ export const Subscriptions: React.FC<{
           paymentMethod: manualPaymentMethod,
           receiverMedium: manualReceiver.trim() || null,
           senderMedium: manualSender.trim() || null,
-          gatewayPayload: JSON.stringify({
+          gatewayPayload: {
             method: manualPaymentMethod,
             source: manualSource,
             receiverMedium: manualReceiver.trim() || null,
@@ -449,7 +449,7 @@ export const Subscriptions: React.FC<{
             note: manualNote.trim(),
             paymentIntentId: editingPayment.paymentIntentId,
             recordedFrom: 'supreme_dashboard',
-          }),
+          },
           reason: manualReason.trim(),
         },
         refetchQueries: [
