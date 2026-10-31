@@ -3,16 +3,17 @@ import { expect, test } from '@playwright/experimental-ct-react';
 import { UserActivityLog } from '../../src/components/admin/pages/UserActivityLog';
 import { ADMIN_ACTIVITY_LOG_QUERY } from '../../src/lib/graphql';
 import { apollo, delayed } from '../fixtures/operations-test-utils';
+import { paged } from '../fixtures/paging';
 
 test.describe('standalone UserActivityLog', () => {
-  const initialVariables = {
+  const initialVariables = paged({
     actor: '',
     action: '',
     companyId: null,
     userId: null,
     from: null,
     to: null,
-  };
+  });
   const log = {
     id: 'log-1',
     actor: 'ops@example.com',

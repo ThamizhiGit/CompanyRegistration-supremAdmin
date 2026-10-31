@@ -2,6 +2,7 @@ import React from 'react';
 import { expect, test } from '@playwright/experimental-ct-react';
 import { type MockedResponse } from '@apollo/client/testing';
 import { PlansHarness } from '../fixtures/commerce-harnesses';
+import { paged } from '../fixtures/paging';
 import {
   ADMIN_DELETE_PLAN_MUTATION,
   ADMIN_PLANS_QUERY,
@@ -9,8 +10,8 @@ import {
   ADMIN_SAVE_PROMO_CODE_MUTATION,
 } from '../../src/lib/graphql';
 
-const planVariables = { includeInactive: true, search: null, active: null };
-const promoVariables = { includeInactive: true, search: null, active: null, planId: null };
+const planVariables = paged({ includeInactive: true, search: null, active: null });
+const promoVariables = paged({ includeInactive: true, search: null, active: null, planId: null });
 
 const paidPlan = {
   id: 'team',

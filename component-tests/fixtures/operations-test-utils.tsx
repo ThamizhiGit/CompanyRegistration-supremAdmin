@@ -1,12 +1,12 @@
 import React, { type ReactNode } from 'react';
 // Shared Apollo helpers for operations component scenarios.
 import type { MockedResponse } from '@apollo/client/testing';
-import { MockedProvider } from '@apollo/client/testing/react';
+import { SchemaMockedProvider } from './schema-mocks';
 
 export const apollo = (children: ReactNode, mocks: ReadonlyArray<MockedResponse>) => (
-  <MockedProvider mocks={mocks}>
+  <SchemaMockedProvider mocks={mocks}>
     {children}
-  </MockedProvider>
+  </SchemaMockedProvider>
 );
 
 export const delayed = <T,>(mock: T): T & { delay: number } => ({

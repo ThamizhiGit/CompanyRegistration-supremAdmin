@@ -8,7 +8,15 @@ import {
   ADMIN_PACKAGE_MODULES_QUERY,
   ADMIN_PLANS_PACKAGING_QUERY,
 } from '../../../lib/graphql';
-import { amountFromCents, centsFromAmount, currencyDecimals, formatPrice } from '../../../lib/admin-utils';
+import {
+  amountFromCents,
+  centsFromAmount,
+  currencyInputStep,
+  formatPrice,
+  formatPriceOrUnavailable,
+  moneyInputError,
+  wholeNumberError,
+} from '../../../lib/admin-utils';
 
 /**
  * Packages (dynamic packages): the admin sets the package price; modules carry
@@ -26,6 +34,8 @@ export interface PackageModuleSelection {
   priceOverride: string;
 }
 
+export type YearlyPriceMode = 'fixed' | 'percent';
+
 export interface PackageDraft {
   pricingMode: PricingMode;
   basePriceCents: number;
@@ -34,9 +44,20 @@ export interface PackageDraft {
   bundleDiscountPct: number;
   yearlyPriceOverride: string;
   yearlyDiscountPct: number;
+  /**
+   * How the yearly price of a "monthly or yearly" package is set. Kept in the
+   * draft (not in the yearly fields' own state) so it always matches what is
+   * saved. Unset: a typed yearly price means 'fixed'.
+   */
+  yearlyMode?: YearlyPriceMode;
   isPublic: boolean;
   modules: PackageModuleSelection[];
+  /** Editing a package that has no modules today (an old plan, Free): it may be saved without. */
+  allowEmptyModules?: boolean;
 }
+
+export const yearlyModeOf = (draft: Pick<PackageDraft, 'yearlyMode' | 'yearlyPriceOverride'>): YearlyPriceMode =>
+  draft.yearlyMode ?? (draft.yearlyPriceOverride.trim() ? 'fixed' : 'percent');
 
 export interface PackageModuleOption {
   id: string;
@@ -56,6 +77,7 @@ export interface PlanPackagingInfo {
   name?: string | null;
   active?: boolean | null;
   billingInterval?: string | null;
+  perEmployee?: boolean | null;
   version: number;
   isPublic: boolean;
   subscribersCount?: number | null;
@@ -180,35 +202,56 @@ export const moduleDiff = (before: Set<string>, after: Set<string>, options: Pac
 // Draft <-> API
 // ---------------------------------------------------------------------------
 /** Fields sent with adminSavePlan. Pricing is always the admin-entered package price. */
-export const draftToPlanInputFields = (draft: PackageDraft) => ({
-  pricingMode: 'fixed' as PricingMode,
-  bundleDiscountPct: 0,
-  billingInterval: draft.billingInterval,
-  yearlyPriceCents:
-    draft.billingInterval === 'both' && draft.yearlyPriceOverride.trim()
-      ? centsFromAmount(Number(draft.yearlyPriceOverride) || 0, draft.currency)
-      : null,
-  yearlyDiscountPct: draft.billingInterval === 'both' ? Number(draft.yearlyDiscountPct) || 0 : 0,
-  isPublic: draft.isPublic,
-  modules: draft.modules.map((m) => ({ moduleId: m.moduleId, priceOverrideCents: null })),
-});
+export const draftToPlanInputFields = (draft: PackageDraft) => {
+  const both = draft.billingInterval === 'both';
+  const mode = yearlyModeOf(draft);
+  return {
+    pricingMode: 'fixed' as PricingMode,
+    bundleDiscountPct: 0,
+    billingInterval: draft.billingInterval,
+    // The typed text is converted here, once (no float error: "1.005" -> 101).
+    yearlyPriceCents:
+      both && mode === 'fixed' && draft.yearlyPriceOverride.trim()
+        ? centsFromAmount(draft.yearlyPriceOverride, draft.currency)
+        : null,
+    yearlyDiscountPct: both && mode === 'percent' ? Number(draft.yearlyDiscountPct) || 0 : 0,
+    isPublic: draft.isPublic,
+    modules: draft.modules.map((m) => ({ moduleId: m.moduleId, priceOverrideCents: null })),
+  };
+};
 
 /** The yearly amount the customer will see for a "monthly or yearly" package. */
 export const derivedYearlyCents = (draft: PackageDraft): number | null => {
   if (draft.billingInterval !== 'both') return null;
-  if (draft.yearlyPriceOverride.trim()) return centsFromAmount(Number(draft.yearlyPriceOverride) || 0, draft.currency);
-  const pct = Math.min(Math.max(Number(draft.yearlyDiscountPct) || 0, 0), 100);
+  const mode = yearlyModeOf(draft);
+  if (mode === 'fixed' && draft.yearlyPriceOverride.trim()) {
+    const cents = centsFromAmount(draft.yearlyPriceOverride, draft.currency);
+    return Number.isFinite(cents) ? cents : 0;
+  }
+  // No yearly price saved: the server charges 12 monthly payments less the discount.
+  const pct = mode === 'percent' ? Math.min(Math.max(Number(draft.yearlyDiscountPct) || 0, 0), 100) : 0;
   return Math.round((draft.basePriceCents * 12 * (100 - pct)) / 100);
 };
 
+/** The ids adminSavePlan checks: a part whose feature area is also chosen is covered by the area. */
+const sentModuleIds = (draft: PackageDraft, byId: Map<string, PackageModuleOption>) => {
+  const selected = new Set(draft.modules.map((m) => m.moduleId));
+  return [...selected].filter((id) => !selected.has(byId.get(id)?.parentId || ''));
+};
+
 export const validatePackageDraft = (draft: PackageDraft, options: PackageModuleOption[]): string | null => {
-  if (draft.modules.length === 0) return 'Select the modules this package unlocks.';
+  if (draft.modules.length === 0 && !draft.allowEmptyModules) return 'Select the modules this package unlocks.';
   if (draft.basePriceCents < 0) return 'Package price cannot be negative.';
-  if (draft.yearlyDiscountPct < 0 || draft.yearlyDiscountPct > 100) return 'Yearly discount must be between 0 and 100%.';
-  if (draft.billingInterval === 'both' && draft.yearlyPriceOverride.trim()) {
-    const yearly = Number(draft.yearlyPriceOverride);
-    if (!Number.isFinite(yearly)) return 'Yearly price must be a number.';
-    if (yearly < 0) return 'Yearly price cannot be negative.';
+  if (draft.billingInterval === 'both') {
+    if (yearlyModeOf(draft) === 'percent') {
+      // An Int on the server: 12.5 would fail the whole save with a GraphQL error.
+      const problem = wholeNumberError(draft.yearlyDiscountPct, 'Yearly discount (%)', 0, 100);
+      if (problem) return problem;
+    } else {
+      if (!draft.yearlyPriceOverride.trim()) return 'Enter the yearly price, or choose “% off 12 months”.';
+      const problem = moneyInputError(draft.yearlyPriceOverride, draft.currency || 'USD', 'Yearly price');
+      if (problem) return problem;
+    }
   }
   // A paid package must not become free on the yearly option (a 0 price or a
   // 100% discount).
@@ -216,9 +259,13 @@ export const validatePackageDraft = (draft: PackageDraft, options: PackageModule
   if (draft.basePriceCents > 0 && yearlyCents !== null && yearlyCents <= 0) {
     return 'Yearly price must be above 0 for a paid package.';
   }
-  const covered = expandModuleIds(draft.modules.map((m) => m.moduleId), options);
+  // Same rule as the server (adminSavePlan): every module sent must have what it
+  // depends on in the package; parts covered by a chosen feature area are not
+  // checked one by one.
   const byId = new Map(options.map((o) => [o.id, o]));
-  for (const id of covered) {
+  const sent = sentModuleIds(draft, byId);
+  const covered = expandModuleIds(sent, options);
+  for (const id of sent) {
     const option = byId.get(id);
     if (!option) continue;
     const missing = (option.dependsOn || []).filter((dep) => !covered.has(dep) && !covered.has(byId.get(dep)?.parentId || ''));
@@ -254,6 +301,11 @@ const adminListEntry = (client: object, query: any, field: string): AdminListEnt
   if (!byQuery) {
     byQuery = new Map();
     adminListCache.set(client, byQuery);
+    // Signing out clears the Apollo store: drop these lists with it, so the
+    // next admin never sees the previous session's packages.
+    (client as { onClearStore?: (cb: () => Promise<unknown>) => unknown }).onClearStore?.(async () => {
+      adminListCache.delete(client);
+    });
   }
   let byField = byQuery.get(query);
   if (!byField) {
@@ -278,8 +330,14 @@ const loadAllAdminPages = async (client: any, query: any, field: string): Promis
       query,
       variables: { offset: pageIndex * ADMIN_PAGE_LIMIT },
       fetchPolicy: 'network-only',
+      // The app's default errorPolicy is 'all', which resolves a failed page
+      // with no data: that read as "no more rows" and showed an empty or cut
+      // list. A failed page is an error.
+      errorPolicy: 'none',
     });
-    const page: unknown[] = result.data?.[field] || [];
+    if (result.error) throw result.error;
+    const page = result.data?.[field];
+    if (!Array.isArray(page)) throw new Error(`The server returned no ${field} list.`);
     all.push(...page);
     if (page.length < ADMIN_PAGE_LIMIT) return all;
   }
@@ -354,7 +412,8 @@ export const useAllAdminPages = <T,>(query: any, field: string) => {
 export const usePackageModuleOptions = () => {
   const { rows, loading, error } = useAllAdminPages<PackageModuleOption>(ADMIN_PACKAGE_MODULES_QUERY, 'adminModules');
   const options = useMemo(() => [...(rows || [])].sort(bySortOrder), [rows]);
-  return { options, loading, error };
+  // `ready`: the full module list is known (gains/losses and dependency checks need it).
+  return { options, loading, error, ready: rows !== undefined && !error };
 };
 
 // ---------------------------------------------------------------------------
@@ -363,17 +422,27 @@ export const usePackageModuleOptions = () => {
 const TreeCheckbox: React.FC<{
   checked: boolean;
   indeterminate?: boolean;
+  disabled?: boolean;
   onChange: () => void;
   testId: string;
-}> = ({ checked, indeterminate = false, onChange, testId }) => {
+}> = ({ checked, indeterminate = false, disabled = false, onChange, testId }) => {
   const ref = React.useRef<HTMLInputElement>(null);
   useEffect(() => {
     if (ref.current) ref.current.indeterminate = indeterminate;
   }, [indeterminate]);
-  return <input ref={ref} type="checkbox" className="mt-1" checked={checked} onChange={onChange} data-testid={testId} />;
+  return (
+    <input
+      ref={ref}
+      type="checkbox"
+      className="mt-1 disabled:cursor-not-allowed"
+      checked={checked}
+      disabled={disabled}
+      title={disabled ? 'Switched off: it cannot be added to a package' : undefined}
+      onChange={onChange}
+      data-testid={testId}
+    />
+  );
 };
-
-type YearlyPriceMode = 'fixed' | 'percent';
 
 /**
  * Yearly offer for a package: a fixed yearly price (e.g. $100 instead of
@@ -386,8 +455,11 @@ export const YearlyPricingFields: React.FC<{
   onChange: (next: PackageDraft) => void;
 }> = ({ value, onChange }) => {
   const currency = value.currency || 'USD';
-  const step = currencyDecimals(currency) === 0 ? '1' : '0.01';
-  const [mode, setMode] = useState<YearlyPriceMode>(value.yearlyPriceOverride.trim() ? 'fixed' : 'percent');
+  // 1 for JPY and for ISK/UGX (whole units), else 0.01.
+  const step = String(currencyInputStep(currency));
+  // Read from the draft on every render: a local copy went stale when the
+  // draft changed underneath it (another plan, or packaging loaded later).
+  const mode = yearlyModeOf(value);
   const fullYear = value.basePriceCents * 12;
   const yearly = derivedYearlyCents(value);
   const savingPct = yearly !== null && fullYear > 0 ? Math.round(((fullYear - yearly) / fullYear) * 100) : 0;
@@ -419,12 +491,16 @@ export const YearlyPricingFields: React.FC<{
 
   const switchMode = (next: YearlyPriceMode) => {
     if (next === mode) return;
-    setMode(next);
     if (next === 'fixed') {
       // Start from what the current discount gives, so nothing jumps.
-      onChange({ ...value, yearlyPriceOverride: String(amountFromCents(yearly ?? fullYear, currency)), yearlyDiscountPct: 0 });
+      onChange({
+        ...value,
+        yearlyMode: 'fixed',
+        yearlyPriceOverride: String(amountFromCents(yearly ?? fullYear, currency)),
+        yearlyDiscountPct: 0,
+      });
     } else {
-      onChange({ ...value, yearlyPriceOverride: '' });
+      onChange({ ...value, yearlyMode: 'percent', yearlyPriceOverride: '' });
     }
   };
 
@@ -519,7 +595,19 @@ export const PackageBuilder: React.FC<{
     setCovered(next);
   };
 
-  const setAll = (on: boolean) => setCovered(on ? new Set(options.map((o) => o.id)) : new Set());
+  // "Select all" adds the active modules: the server refuses a switched-off
+  // module newly added to a package (ones already in it stay).
+  const setAll = (on: boolean) =>
+    setCovered(on ? new Set(options.filter((o) => o.active || covered.has(o.id)).map((o) => o.id)) : new Set());
+  const nameOf = useMemo(() => new Map(options.map((o) => [o.id, o.name])), [options]);
+  const requiresLabel = (module: PackageModuleOption) =>
+    module.dependsOn?.length ? (
+      <span className="block text-[11px] text-amber-700">
+        Requires: {module.dependsOn.map((dep) => nameOf.get(dep) || dep).join(', ')}
+      </span>
+    ) : null;
+  // A switched-off module can stay in a package but can't be newly added.
+  const blocked = (module: PackageModuleOption) => !module.active && !covered.has(module.id);
 
   const validation = validatePackageDraft(value, options);
   const currency = value.currency || 'USD';
@@ -583,6 +671,7 @@ export const PackageBuilder: React.FC<{
                   <TreeCheckbox
                     checked={full}
                     indeterminate={partial}
+                    disabled={blocked(module) && !partial}
                     onChange={() => toggle(node)}
                     testId={`module-checkbox-${module.id}`}
                   />
@@ -592,6 +681,7 @@ export const PackageBuilder: React.FC<{
                       {!module.active ? <span className="ml-1 text-[11px] font-normal text-slate-400">(inactive)</span> : null}
                     </span>
                     {module.description ? <span className="mt-0.5 block text-xs text-slate-500">{module.description}</span> : null}
+                    {requiresLabel(module)}
                     {children.length ? (
                       <span className="mt-0.5 block text-[11px] text-slate-500">
                         {full ? 'All parts' : `${chosen} of ${children.length} parts`}
@@ -616,14 +706,14 @@ export const PackageBuilder: React.FC<{
                       <label key={child.id} className="flex cursor-pointer items-start gap-2 text-sm text-slate-700">
                         <TreeCheckbox
                           checked={covered.has(child.id)}
+                          disabled={blocked(child)}
                           onChange={() => toggle(node, child)}
                           testId={`module-checkbox-${child.id}`}
                         />
                         <span>
                           {child.name}
-                          {child.dependsOn?.length ? (
-                            <span className="block text-[11px] text-amber-700">Requires: {child.dependsOn.join(', ')}</span>
-                          ) : null}
+                          {!child.active ? <span className="ml-1 text-[11px] text-slate-400">(inactive)</span> : null}
+                          {requiresLabel(child)}
                         </span>
                       </label>
                     ))}
@@ -659,6 +749,12 @@ export const PackageBuilder: React.FC<{
         </p>
       </div>
 
+      {!value.modules.length && value.allowEmptyModules ? (
+        <p className="text-xs text-slate-500" data-testid="package-no-modules">
+          This package has no modules and can be saved as it is: companies registered before packages keep every
+          module; new sign-ups get core features only.
+        </p>
+      ) : null}
       {validation ? (
         <p className="flex items-center gap-2 text-sm text-amber-700" data-testid="package-validation">
           <AlertTriangle className="h-4 w-4" /> {validation}
@@ -737,9 +833,15 @@ export const useCompanyPackages = (companyIds: number[]) => {
           query: ADMIN_COMPANY_PACKAGES_QUERY,
           variables: { companyIds: batch },
           fetchPolicy: 'network-only',
+          // With the app default ('all') a failed read resolved with no rows and
+          // every company showed "-" instead of "Couldn't load".
+          errorPolicy: 'none',
         })
         .then((result) => {
-          (result.data?.adminCompanyPackages || []).forEach((row) => cache.rows.set(row.companyId, row));
+          if (result.error) throw result.error;
+          const packageRows = result.data?.adminCompanyPackages;
+          if (!Array.isArray(packageRows)) throw new Error('The server returned no package list.');
+          packageRows.forEach((row) => cache.rows.set(row.companyId, row));
           // A company with no package row is still read (shown as "-").
           batch.forEach((id) => {
             cache.failed.delete(id);
@@ -810,7 +912,7 @@ export const ChangePackageDialog: React.FC<{
   onDone: (message: string) => void;
   onError: (message: string) => void;
 }> = ({ companyId, companyName, current: listedCurrent, onClose, onDone, onError }) => {
-  const { options } = usePackageModuleOptions();
+  const { options, ready: modulesReady, error: modulesError } = usePackageModuleOptions();
   const { rows: allPlans, error: plansError } = useAllAdminPages<PlanPackagingInfo>(ADMIN_PLANS_PACKAGING_QUERY, 'adminPlans');
   // The company's package, read fresh: the list's copy can be missing (its
   // fetch failed) or stale, and the change preview must never guess.
@@ -839,16 +941,17 @@ export const ChangePackageDialog: React.FC<{
     any,
     any
   >(ADMIN_ASSIGN_COMPANY_PLAN_MUTATION);
+  // One request at a time: Apollo's `loading` only disables the button after a re-render.
+  const inFlight = useRef(false);
+  const [submitting, setSubmitting] = useState(false);
 
   // Start from the company's real package and interval once they are known.
+  // A company without a package gets no pre-selected package: the admin picks one.
   useEffect(() => {
     if (!liveCurrent || touched.current) return;
     setPlanId(liveCurrent.planId || '');
     setBillingInterval(liveCurrent.billingInterval || '');
   }, [liveCurrent]);
-  useEffect(() => {
-    if (!planId && plans.length && currentReady) setPlanId(plans[0].id);
-  }, [planId, plans, currentReady]);
   useEffect(() => {
     // Only once the package's intervals are known: before the plans load the
     // fallback ['monthly'] would silently move a yearly company to monthly.
@@ -868,13 +971,31 @@ export const ChangePackageDialog: React.FC<{
   const keepsLegacy = !!current?.unrestricted && !planModules.length && !planIsFree;
   const after = keepsLegacy ? allIds : expandModuleIds(planModules, options);
   const diff = moduleDiff(before, after, options);
+  // Gains/losses are only right once every module is known (a part shows under
+  // its feature area, and "every module" means the full list).
+  const previewReady = modulesReady && currentReady && !!plan;
+  const canSubmit = previewReady && plansLoaded && !loading && !submitting;
+
+  const priceOf = (target: PlanPackagingInfo | undefined, interval: string | null | undefined) => {
+    if (!target) return null;
+    if (!target.pricing) return 'Pricing unavailable';
+    const yearly = interval === 'yearly';
+    const cents = yearly ? target.pricing.yearlyPriceCents : target.pricing.monthlyPriceCents;
+    if (cents === null || cents === undefined) return 'Pricing unavailable';
+    return `${formatPriceOrUnavailable(cents, target.pricing.currency)} / ${yearly ? 'year' : 'month'}${target.perEmployee ? ' per employee' : ''}`;
+  };
+  const currentPlan = (allPlans || []).find((p) => p.id === current?.planId);
+  const newPrice = priceOf(plan, billingInterval);
+  const currentPrice = priceOf(currentPlan, current?.billingInterval);
 
   const submit = async () => {
-    if (!plan || !currentReady) return;
+    if (!canSubmit || !plan || inFlight.current) return;
     if (!reason.trim()) {
       onError('A reason is required to change a package');
       return;
     }
+    inFlight.current = true;
+    setSubmitting(true);
     try {
       const result = await assign({
         variables: { companyId, planId: plan.id, billingInterval, reason: reason.trim() },
@@ -887,6 +1008,9 @@ export const ChangePackageDialog: React.FC<{
       onDone(`${companyName} moved to ${plan.name || plan.id}`);
     } catch (err: any) {
       onError(err?.message || 'Package could not be changed');
+    } finally {
+      inFlight.current = false;
+      setSubmitting(false);
     }
   };
 
@@ -906,6 +1030,12 @@ export const ChangePackageDialog: React.FC<{
               Packages could not be loaded. Close and try again.
             </p>
           ) : null}
+          {modulesError ? (
+            <p className="flex items-start gap-2 rounded-lg bg-rose-50 p-3 text-sm text-rose-700" data-testid="change-package-modules-error">
+              <AlertTriangle className="mt-0.5 h-4 w-4 flex-none" />
+              Modules could not be loaded, so the change can't be previewed. Close and try again.
+            </p>
+          ) : null}
           {currentError ? (
             <p className="flex items-start gap-2 rounded-lg bg-rose-50 p-3 text-sm text-rose-700" data-testid="change-package-current-error">
               <AlertTriangle className="mt-0.5 h-4 w-4 flex-none" />
@@ -918,12 +1048,17 @@ export const ChangePackageDialog: React.FC<{
               {currentReady ? current?.planName || current?.planId || 'No package' : currentError ? 'Unknown' : 'Loading…'}
             </span>
             {current?.unrestricted ? ' (every module — legacy access)' : ''}
+            {currentReady && currentPrice ? (
+              <span className="text-slate-500" data-testid="change-package-current-price">
+                {' '}· {currentPrice}
+              </span>
+            ) : null}
           </p>
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             <label className="block">
               <span className="mb-1 block text-sm font-medium text-slate-700">Package</span>
               <select
-                value={planId}
+                value={plan ? planId : ''}
                 onChange={(event) => {
                   touched.current = true;
                   setPlanId(event.target.value);
@@ -931,6 +1066,11 @@ export const ChangePackageDialog: React.FC<{
                 className="w-full rounded-lg border border-slate-300 px-3 py-2"
                 data-testid="change-package-plan"
               >
+                {!plan ? (
+                  <option value="" disabled>
+                    {plansLoaded ? 'Choose a package…' : 'Loading packages…'}
+                  </option>
+                ) : null}
                 {plans.map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.name || p.id}
@@ -958,6 +1098,14 @@ export const ChangePackageDialog: React.FC<{
               </select>
             </label>
           </div>
+          {plan ? (
+            <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+              New price:{' '}
+              <span className="font-semibold text-slate-900" data-testid="change-package-price">
+                {newPrice}
+              </span>
+            </p>
+          ) : null}
           {current?.unrestricted && plan && !keepsLegacy ? (
             <p className="flex items-start gap-2 rounded-lg bg-amber-50 p-3 text-sm text-amber-800" data-testid="change-package-legacy-warning">
               <AlertTriangle className="mt-0.5 h-4 w-4 flex-none" />
@@ -965,26 +1113,36 @@ export const ChangePackageDialog: React.FC<{
               modules of the new package.
             </p>
           ) : null}
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2" data-testid="change-package-diff">
-            <div className="rounded-lg border border-emerald-100 bg-emerald-50/50 p-3">
-              <p className="mb-1 text-xs font-black uppercase text-emerald-700">Gains</p>
-              {diff.gains.length ? (
-                <ul className="space-y-0.5 text-sm text-slate-700">{diff.gains.map((g) => <li key={g}>+ {g}</li>)}</ul>
-              ) : (
-                <p className="text-sm text-slate-400">Nothing new</p>
-              )}
+          {previewReady ? (
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2" data-testid="change-package-diff">
+              <div className="rounded-lg border border-emerald-100 bg-emerald-50/50 p-3">
+                <p className="mb-1 text-xs font-black uppercase text-emerald-700">Gains</p>
+                {diff.gains.length ? (
+                  <ul className="space-y-0.5 text-sm text-slate-700">{diff.gains.map((g) => <li key={g}>+ {g}</li>)}</ul>
+                ) : (
+                  <p className="text-sm text-slate-400">Nothing new</p>
+                )}
+              </div>
+              <div className="rounded-lg border border-rose-100 bg-rose-50/50 p-3">
+                <p className="mb-1 text-xs font-black uppercase text-rose-700">Loses</p>
+                {diff.losses.length ? (
+                  <ul className="space-y-0.5 text-sm text-slate-700" data-testid="change-package-losses">
+                    {diff.losses.map((l) => <li key={l}>− {l}</li>)}
+                  </ul>
+                ) : (
+                  <p className="text-sm text-slate-400">Nothing</p>
+                )}
+              </div>
             </div>
-            <div className="rounded-lg border border-rose-100 bg-rose-50/50 p-3">
-              <p className="mb-1 text-xs font-black uppercase text-rose-700">Loses</p>
-              {diff.losses.length ? (
-                <ul className="space-y-0.5 text-sm text-slate-700" data-testid="change-package-losses">
-                  {diff.losses.map((l) => <li key={l}>− {l}</li>)}
-                </ul>
-              ) : (
-                <p className="text-sm text-slate-400">Nothing</p>
-              )}
-            </div>
-          </div>
+          ) : (
+            <p className="text-sm text-slate-500" data-testid="change-package-diff-pending">
+              {!plan && plansLoaded
+                ? 'Choose a package to see what the company gains and loses.'
+                : modulesError || currentError
+                  ? 'The change cannot be previewed.'
+                  : 'Loading the change preview…'}
+            </p>
+          )}
           <label className="block">
             <span className="mb-1 block text-sm font-medium text-slate-700">Reason</span>
             <input
@@ -1003,11 +1161,11 @@ export const ChangePackageDialog: React.FC<{
           <button
             type="button"
             onClick={submit}
-            disabled={loading || !plan || !currentReady}
+            disabled={!canSubmit}
             className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
             data-testid="change-package-submit"
           >
-            {loading ? 'Saving…' : 'Change package'}
+            {loading || submitting ? 'Saving…' : 'Change package'}
           </button>
         </div>
       </div>
@@ -1033,8 +1191,18 @@ type ApplyResult = {
     message?: string | null;
     appliedCount?: number | null;
     companies?: SubscriberChange[] | null;
+    /** The package version the answer is for (the apply sends it back as expectedVersion). */
+    planVersion?: number | null;
   };
 };
+
+/** What a preview promised, order-independent: a fresh dry run must match it before applying. */
+const previewSignature = (companies: SubscriberChange[] | null | undefined) =>
+  JSON.stringify(
+    [...(companies || [])]
+      .map((c) => [c.companyId, c.currentVersion, c.wasUnrestricted, [...c.gains].sort(), [...c.losses].sort()])
+      .sort((a, b) => Number(a[0]) - Number(b[0])),
+  );
 
 export const ApplyToSubscribersDialog: React.FC<{
   planId: string;
@@ -1042,11 +1210,20 @@ export const ApplyToSubscribersDialog: React.FC<{
   onClose: () => void;
   onDone: (message: string) => void;
   onError: (message: string) => void;
-}> = ({ planId, planName, onClose, onDone, onError }) => {
+  /** Some companies may have been moved before a failure: the caller reloads its counts. */
+  onRefresh?: () => void;
+}> = ({ planId, planName, onClose, onDone, onError, onRefresh }) => {
   const { options } = usePackageModuleOptions();
   const [run, { loading }] = useMutation<
     ApplyResult,
-    { planId: string; dryRun: boolean; onlyOutdated: boolean; includeUnrestricted: boolean; reason?: string },
+    {
+      planId: string;
+      dryRun: boolean;
+      onlyOutdated: boolean;
+      includeUnrestricted: boolean;
+      reason?: string;
+      expectedVersion?: number | null;
+    },
     any,
     any
   >(ADMIN_APPLY_PLAN_TO_SUBSCRIBERS_MUTATION);
@@ -1054,6 +1231,11 @@ export const ApplyToSubscribersDialog: React.FC<{
   const [reason, setReason] = useState('');
   // Pre-package companies (full access today) are left alone unless the admin opts in.
   const [includeUnrestricted, setIncludeUnrestricted] = useState(false);
+  // Bumped to load the preview again (after a failed or partial apply).
+  const [previewRun, setPreviewRun] = useState(0);
+  // One apply at a time: Apollo's `loading` only disables the button after a re-render.
+  const inFlight = useRef(false);
+  const [applying, setApplying] = useState(false);
   const nameOf = useMemo(() => new Map(options.map((o) => [o.id, o.name])), [options]);
   const describe = (ids: string[]) => summarizeFeatureAreas(ids, options).map((a) => (a.partial ? `${a.name} (${a.partial})` : a.name)).join(', ') || ids.map((id) => nameOf.get(id) || id).join(', ');
 
@@ -1082,25 +1264,61 @@ export const ApplyToSubscribersDialog: React.FC<{
       current = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [planId, includeUnrestricted]);
+  }, [planId, includeUnrestricted, previewRun]);
+
+  // A failure can come after some companies were already moved: reload the
+  // caller's counts and this preview (it then lists the companies still left).
+  const refreshAfterFailure = () => {
+    onRefresh?.();
+    setPreviewRun((value) => value + 1);
+  };
 
   const apply = async () => {
+    if (inFlight.current || preview === null) return;
     if (!reason.trim()) {
       onError('A reason is required');
       return;
     }
+    inFlight.current = true;
+    setApplying(true);
     try {
+      // The package may have been edited (a new version) or companies moved
+      // since this preview: check again first, so nothing is applied that the
+      // admin did not see. The server refuses too if the version moved after this check.
+      const check = await run({ variables: { planId, dryRun: true, onlyOutdated: true, includeUnrestricted } });
+      const fresh = check.data?.adminApplyPlanToSubscribers;
+      if (!fresh?.success) {
+        onError(fresh?.message || 'Could not check the change again');
+        return;
+      }
+      if (previewSignature(fresh.companies) !== previewSignature(preview)) {
+        setPreview(fresh.companies || []);
+        onError('The package or its subscribers changed since this preview. Check the updated list and apply again.');
+        return;
+      }
       const result = await run({
-        variables: { planId, dryRun: false, onlyOutdated: true, includeUnrestricted, reason: reason.trim() },
+        variables: {
+          planId,
+          dryRun: false,
+          onlyOutdated: true,
+          includeUnrestricted,
+          reason: reason.trim(),
+          expectedVersion: fresh.planVersion ?? null,
+        },
       });
       const payload = result.data?.adminApplyPlanToSubscribers;
       if (!payload?.success) {
         onError(payload?.message || 'Could not apply the package');
+        refreshAfterFailure();
         return;
       }
       onDone(`${payload.appliedCount ?? 0} company(s) now have the current ${planName} modules`);
     } catch (err: any) {
       onError(err?.message || 'Could not apply the package');
+      refreshAfterFailure();
+    } finally {
+      inFlight.current = false;
+      setApplying(false);
     }
   };
 
@@ -1178,11 +1396,11 @@ export const ApplyToSubscribersDialog: React.FC<{
             <button
               type="button"
               onClick={apply}
-              disabled={loading}
+              disabled={loading || applying}
               className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
               data-testid="apply-subscribers-submit"
             >
-              {loading ? 'Applying…' : `Apply to ${preview.length} company(s)`}
+              {applying ? 'Applying…' : `Apply to ${preview.length} company(s)`}
             </button>
           ) : null}
         </div>

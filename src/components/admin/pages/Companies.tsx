@@ -1,5 +1,5 @@
 import React, { useMemo, useRef, useState } from 'react';
-import { useQuery, useMutation } from '@apollo/client/react';
+import { useMutation } from '@apollo/client/react';
 import {
   ADMIN_COMPANIES_QUERY,
   ADMIN_ASSIGN_COMPANY_PLAN_MUTATION,
@@ -9,7 +9,8 @@ import {
   ADMIN_REQUEST_REFUND_MUTATION,
   ADMIN_MANUAL_SUBSCRIPTION_MUTATION,
 } from '../../../lib/graphql';
-import { buildPayload, centsFromAmount, currencyInputStep, formatDate, formatDateTime, formatPrice, toDateTimeLocalValue, WHOLE_UNIT_CURRENCIES } from '../../../lib/admin-utils';
+import { buildPayload, centsFromAmount, currencyInputStep, formatDate, formatDateTime, formatPrice, isWholeUnitCurrency, toDateTimeLocalValue } from '../../../lib/admin-utils';
+import { PartialListWarning, useAllPagesQuery } from '../../../lib/useAllPagesQuery';
 import {
   ArrowLeft,
   Building2,
@@ -67,6 +68,8 @@ interface CompanyType {
   trialEndsAt?: string | null;
   nextBillingDate?: string | null;
   nextBillingAmountCents?: number | null;
+  /** The company's billing currency: next billing amounts are in it. */
+  currency?: string | null;
   subscriptionDueDate: string | null;
   subscriptionRecurringDate: string | null;
   paymentHistoryCount?: number;
@@ -213,28 +216,29 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
     recurringDateTo: null,
   }), [search]);
 
-  const { data: companiesData, loading: companiesLoading, error: companiesError, refetch: refetchCompanies } = useQuery<
-    { adminCompanies: CompanyType[] },
-    {
-      search: string | null;
-      status: string | null;
-      subscriptionStatus: string | null;
-      dueDateFrom: string | null;
-      dueDateTo: string | null;
-      recurringDateFrom: string | null;
-      recurringDateTo: string | null;
-    },
-    any
-  >(ADMIN_COMPANIES_QUERY, {
+  // Every company and payment (not the API's first page of 50).
+  const {
+    rows: companyRows,
+    loading: companiesLoading,
+    error: companiesError,
+    pageError: companiesPageError,
+    loadingMore: companiesLoadingMore,
+    refetch: refetchCompanies,
+  } = useAllPagesQuery<CompanyType, typeof companyQueryVariables>(ADMIN_COMPANIES_QUERY, 'adminCompanies', {
     fetchPolicy: 'cache-and-network',
     variables: companyQueryVariables,
   });
 
-  const { data: historyData, loading: historyLoading, refetch: refetchHistory } = useQuery<
-    { adminCompanyPaymentHistory: CompanyPaymentType[] },
-    { companyId: number; dateFrom: string | null; dateTo: string | null; status: string | null },
-    any
-  >(ADMIN_COMPANY_PAYMENT_HISTORY_QUERY, {
+  const {
+    rows: historyRows,
+    loading: historyLoading,
+    pageError: historyPageError,
+    loadingMore: historyLoadingMore,
+    refetch: refetchHistory,
+  } = useAllPagesQuery<
+    CompanyPaymentType,
+    { companyId: number; dateFrom: string | null; dateTo: string | null; status: string | null }
+  >(ADMIN_COMPANY_PAYMENT_HISTORY_QUERY, 'adminCompanyPaymentHistory', {
     variables: {
       companyId: selectedHistoryFor || -1,
       dateFrom: historyDateFrom || null,
@@ -256,12 +260,12 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
   const manualInFlightRef = useRef(false);
   const [manualInFlight, setManualInFlight] = useState(false);
 
-  const rawCompanies = companiesData?.adminCompanies || [];
+  const rawCompanies = companyRows || [];
   // Package / modules per company (batched: the list is not paginated).
   const companyIds = useMemo(() => rawCompanies.map((company) => Number(company.id)), [rawCompanies]);
   const { packages, failedIds: packageFailedIds, refetch: refetchPackages } = useCompanyPackages(companyIds);
   const [changingPackageFor, setChangingPackageFor] = useState<{ id: number; name: string } | null>(null);
-  const historyItems = historyData?.adminCompanyPaymentHistory || [];
+  const historyItems = historyRows || [];
   const paymentStatuses = ['pending', 'succeeded', 'failed', 'refunded'] as const;
   const normalizeStatus = (status?: string | null) => (status || '').trim().toLowerCase();
   const getEffectiveSubscriptionStatus = (company: CompanyType) => {
@@ -589,7 +593,7 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
     }
     const shouldClearBillingDates = editingDetail.planId === 'free';
     try {
-      await updateCompanyDetail({
+      const detailResult: any = await updateCompanyDetail({
         variables: {
           input: {
             id: editingDetail.id,
@@ -601,14 +605,26 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
           },
         },
       });
+      // success: false (e.g. a refused status change) is not an update.
+      const detailPayload = detailResult?.data?.adminUpdateCompanyDetail;
+      if (detailPayload && detailPayload.success === false) {
+        onToast('error', detailPayload.message || 'Company details could not be updated');
+        return;
+      }
       if (editingDetail.planId !== editingDetail.originalPlanId) {
-        await assignCompanyPlan({
+        const planResult: any = await assignCompanyPlan({
           variables: {
             companyId: editingDetail.id,
             planId: editingDetail.planId,
             reason: editingDetail.subscriptionStatusReason || 'Admin plan change',
           },
         });
+        const planPayload = planResult?.data?.adminAssignCompanyPlan;
+        if (planPayload && planPayload.success === false) {
+          onToast('error', planPayload.message || 'Company details were saved, but the plan could not be changed');
+          refetchCompanies();
+          return;
+        }
       }
       onToast('success', 'Company detail updated');
       setEditingDetail(null);
@@ -652,13 +668,18 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
 
   const handlePaymentStatusChange = async (paymentIntentId: string, status: string) => {
     try {
-      await updatePaymentStatus({
+      const result: any = await updatePaymentStatus({
         variables: {
           paymentIntentId,
           status,
           reason: status === 'failed' ? 'manual_update_failed' : null,
         },
       });
+      const payload = result?.data?.adminUpdatePaymentStatus;
+      if (payload && payload.success === false) {
+        onToast('error', payload.message || 'Payment status could not be updated');
+        return;
+      }
       onToast('success', 'Payment status updated');
       refetchHistory();
       refetchCompanies();
@@ -674,13 +695,13 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
     if (refundAmount.trim()) {
       const value = Number(refundAmount);
       // Minor units in the payment's own currency (¥500 is 500, $5 is 500).
-      amount = Number.isFinite(value) ? centsFromAmount(value, currency) : 0;
+      amount = Number.isFinite(value) ? centsFromAmount(refundAmount, currency) : 0;
       if (amount <= 0) {
         onToast('error', 'Enter a refund amount greater than zero, or leave it empty for a full refund.');
         return;
       }
-      if (WHOLE_UNIT_CURRENCIES.has(currency) && !Number.isInteger(value)) {
-        // Stripe refuses fractions of ISK/UGX.
+      if (isWholeUnitCurrency(currency) && !Number.isInteger(value)) {
+        // Stripe refuses fractions of ISK/UGX; JPY & co. have no minor unit.
         onToast('error', `${currency} refunds must be in whole units.`);
         return;
       }
@@ -777,6 +798,13 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
         <h2 className="text-2xl font-bold text-slate-800">Companies</h2>
         <p className="text-slate-600">Manage tenants, plan assignments, subscriptions, and payment history</p>
       </div>
+      <PartialListWarning
+        error={companiesPageError}
+        loadingMore={companiesLoadingMore}
+        shown={rawCompanies.length}
+        what="companies"
+        onRetry={() => refetchCompanies()}
+      />
 
       <div className="bg-white rounded-lg border border-slate-200 p-4 space-y-3">
         <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
@@ -1411,7 +1439,7 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                             ['Plan', getCompanyPlanName(viewingCompany)],
                             ['Trial ends', formatDateTime(viewingCompany.trialEndsAt || '')],
                             ['Next billing date', formatDateTime(viewingCompany.nextBillingDate || '')],
-                            ['Next billing amount', viewingCompany.nextBillingAmountCents !== null && viewingCompany.nextBillingAmountCents !== undefined ? formatPrice(viewingCompany.nextBillingAmountCents, viewingCompany.latestPaymentCurrency || 'USD') : '-'],
+                            ['Next billing amount', viewingCompany.nextBillingAmountCents !== null && viewingCompany.nextBillingAmountCents !== undefined ? formatPrice(viewingCompany.nextBillingAmountCents, viewingCompany.currency || viewingCompany.latestPaymentCurrency || 'USD') : '-'],
                             ['Due date', formatDateTime(viewingCompany.subscriptionDueDate || '')],
                             ['Recurring date', formatDateTime(viewingCompany.subscriptionRecurringDate || '')],
                           ].map(([label, value]) => (
@@ -1491,6 +1519,15 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                 </div>
               </div>
 
+              <div className="mx-5">
+                <PartialListWarning
+                  error={historyPageError}
+                  loadingMore={historyLoadingMore}
+                  shown={historyItems.length}
+                  what="payments"
+                  onRetry={() => refetchHistory()}
+                />
+              </div>
               {historyLoading ? (
                 <div className="mx-5 mb-5 text-center py-10 text-slate-500">Loading payment history...</div>
               ) : historyItems.length === 0 ? (

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery } from '@apollo/client/react';
 import { Check, Download, Edit2, Filter, Plus, Printer, RotateCcw, Save, Search, Trash2, X } from 'lucide-react';
 import {
@@ -24,8 +24,19 @@ import {
   useAllAdminPages,
   usePackageModuleOptions,
   validatePackageDraft,
+  type YearlyPriceMode,
 } from './PackageBuilder';
-import { amountFromCents, centsFromAmount, currencyDecimals, formatPrice } from '../../../lib/admin-utils';
+import {
+  amountFromCents,
+  amountInputFromCents,
+  centsFromAmount,
+  currencyDecimals,
+  currencyInputStep,
+  formatPrice,
+  moneyInputError,
+  wholeNumberError,
+} from '../../../lib/admin-utils';
+import { PartialListWarning, useAllPagesQuery } from '../../../lib/useAllPagesQuery';
 import { buildColumnFilterOptions, ColumnFilter, matchesColumnFilter } from '../ColumnFilter';
 
 type BillingInterval = 'monthly' | 'yearly' | 'both';
@@ -62,6 +73,12 @@ interface EditingPlan {
   id: string;
   name: string;
   description: string;
+  /**
+   * The price as typed. Kept as text and converted only when saved, so
+   * changing the currency never changes it (10.50 USD -> JPY -> USD stays 10.50).
+   */
+  basePriceInput: string;
+  /** Minor units of basePriceInput in `currency` (for the live previews). */
   basePriceCents: number;
   currency: string;
   billingInterval: BillingInterval;
@@ -77,8 +94,10 @@ interface EditingPlan {
   bundleDiscountPct: number;
   yearlyPriceOverride: string;
   yearlyDiscountPct: number;
+  yearlyMode?: YearlyPriceMode;
   isPublic: boolean;
   modules: PackageModuleSelection[];
+  allowEmptyModules?: boolean;
 }
 
 interface PromoCodeType {
@@ -110,7 +129,12 @@ interface EditingPromo {
   code: string;
   name: string;
   discountType: DiscountType;
-  discountValue: number;
+  /**
+   * The discount as typed: a percentage, or an amount in `currency`. Kept as
+   * text and converted to minor units only when saved, so switching the
+   * currency back and forth never changes it.
+   */
+  discountInput: string;
   currency: string;
   active: boolean;
   startsAt: string;
@@ -217,23 +241,29 @@ const parseFeatures = (features: PlanType['features']): string[] => {
   }
 };
 
-const toEditingPlan = (plan: PlanType, packaging?: PlanPackaging): EditingPlan => ({
-  pricingMode: packaging?.pricingMode || 'fixed',
-  bundleDiscountPct: Number(packaging?.bundleDiscountPct) || 0,
-  yearlyPriceOverride:
-    packaging?.yearlyPriceCents === null || packaging?.yearlyPriceCents === undefined
-      ? ''
-      : String(amountFromCents(packaging.yearlyPriceCents, plan.currency || 'USD')),
-  yearlyDiscountPct: Number(packaging?.yearlyDiscountPct) || 0,
-  isPublic: packaging?.isPublic ?? true,
-  modules: (packaging?.modules || []).map((m) => ({ moduleId: m.moduleId, priceOverride: '' })),
+/**
+ * The edit form for a plan. Needs its packaging row (modules, visibility,
+ * yearly price): editing without it saved a private plan as public, dropped
+ * its yearly price and its modules -- the caller waits until it is loaded.
+ */
+const toEditingPlan = (plan: PlanType, packaging: PlanPackaging): EditingPlan => ({
+  pricingMode: packaging.pricingMode || 'fixed',
+  bundleDiscountPct: Number(packaging.bundleDiscountPct) || 0,
+  yearlyPriceOverride: amountInputFromCents(packaging.yearlyPriceCents, plan.currency || 'USD'),
+  yearlyDiscountPct: Number(packaging.yearlyDiscountPct) || 0,
+  yearlyMode: packaging.yearlyPriceCents === null || packaging.yearlyPriceCents === undefined ? 'percent' : 'fixed',
+  isPublic: packaging.isPublic ?? true,
+  modules: (packaging.modules || []).map((m) => ({ moduleId: m.moduleId, priceOverride: '' })),
+  // An old plan (or Free) without modules can still be edited and saved as it is.
+  allowEmptyModules: !(packaging.modules || []).length,
   id: plan.id,
   name: plan.name,
   description: plan.description || '',
+  basePriceInput: amountInputFromCents(plan.basePriceCents, plan.currency || 'USD'),
   basePriceCents: plan.basePriceCents,
   currency: normalizeCurrency(plan.currency || 'USD'),
   // The interval the package is actually sold on (a yearly-only package stays yearly).
-  billingInterval: (packaging?.billingInterval as BillingInterval) || plan.billingInterval || 'monthly',
+  billingInterval: (packaging.billingInterval as BillingInterval) || plan.billingInterval || 'monthly',
   perEmployee: Boolean(plan.perEmployee),
   trialMonths: plan.trialMonths || 0,
   employeeLimit: plan.employeeLimit === null || plan.employeeLimit === undefined ? '' : String(plan.employeeLimit),
@@ -253,6 +283,7 @@ const newEditingPlan = (plans: PlanType[]): EditingPlan => ({
   id: '',
   name: '',
   description: '',
+  basePriceInput: '0',
   basePriceCents: 0,
   currency: 'USD',
   billingInterval: 'monthly',
@@ -269,7 +300,7 @@ const newEditingPromo = (defaultPlanId: string | null = null): EditingPromo => (
   code: '',
   name: '',
   discountType: 'percent',
-  discountValue: 10,
+  discountInput: '10',
   currency: 'USD',
   active: true,
   startsAt: '',
@@ -298,7 +329,10 @@ const toEditingPromo = (promo: PromoCodeType): EditingPromo => ({
   code: promo.code,
   name: promo.name || '',
   discountType: promo.discountType,
-  discountValue: promo.discountValue,
+  discountInput:
+    promo.discountType === 'amount'
+      ? amountInputFromCents(promo.discountValue, promo.currency || 'USD')
+      : String(promo.discountValue ?? ''),
   currency: normalizeCurrency(promo.currency || 'USD'),
   active: promo.active,
   startsAt: toDateTimeLocal(promo.startsAt),
@@ -326,7 +360,8 @@ const planToInput = (plan: EditingPlan, createOnly = false) => ({
   createOnly,
   name: plan.name.trim(),
   description: plan.description.trim(),
-  basePriceCents: plan.basePriceCents,
+  // Converted from the typed text here, once, in the plan's final currency.
+  basePriceCents: centsFromAmount(plan.basePriceInput || '0', plan.currency || 'USD'),
   currency: normalizeCurrency(plan.currency || 'USD'),
   billingInterval: plan.billingInterval,
   perEmployee: plan.perEmployee,
@@ -349,7 +384,11 @@ const promoToInput = (promo: EditingPromo, createOnly = false) => ({
   code: promo.code.trim().toUpperCase(),
   name: promo.name.trim(),
   discountType: promo.discountType,
-  discountValue: Number(promo.discountValue) || 0,
+  // A percentage as typed; an amount converted once, in the promo's final currency.
+  discountValue:
+    promo.discountType === 'amount'
+      ? centsFromAmount(promo.discountInput || '0', promo.currency || 'USD')
+      : Number(promo.discountInput) || 0,
   currency: normalizeCurrency(promo.currency || 'USD'),
   active: promo.active,
   startsAt: fromDateTimeLocal(promo.startsAt),
@@ -359,11 +398,13 @@ const promoToInput = (promo: EditingPromo, createOnly = false) => ({
   perCompanyLimit: promo.perCompanyLimit.trim() ? Number(promo.perCompanyLimit) : null,
   firstTimeCustomerOnly: promo.firstTimeCustomerOnly,
   minimumAmountCents: promo.minimumAmountDollars.trim()
-    ? centsFromAmount(Number(promo.minimumAmountDollars), promo.currency || 'USD')
+    ? centsFromAmount(promo.minimumAmountDollars, promo.currency || 'USD')
     : null,
   appliesToPlanIds: promo.appliesToPlanIds,
   applicableBillingIntervals: promo.applicableBillingIntervals,
 });
+
+const monthsLabel = (months: number) => `${months} month${months === 1 ? '' : 's'}`;
 
 const billingCopy = (plan: PlanType) => {
   if (plan.basePriceCents === 0) return 'forever';
@@ -408,34 +449,54 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
   const [applyFor, setApplyFor] = useState<{ planId: string; planName: string } | null>(null);
   const { options: moduleOptions } = usePackageModuleOptions();
 
-  const { data, loading, error, refetch } = useQuery<
-    { adminPlans: PlanType[] },
-    { includeInactive: boolean; search: string | null; active: boolean | null },
-    any
-  >(ADMIN_PLANS_QUERY, {
-    variables: {
-      includeInactive: true,
-      search: search.trim() || null,
-      active: null,
+  // Every plan, not the API's first page of 50.
+  const {
+    rows: planRows,
+    loading,
+    error,
+    pageError: planPageError,
+    loadingMore: plansLoadingMore,
+    refetch,
+  } = useAllPagesQuery<PlanType, { includeInactive: boolean; search: string | null; active: boolean | null }>(
+    ADMIN_PLANS_QUERY,
+    'adminPlans',
+    {
+      variables: {
+        includeInactive: true,
+        search: search.trim() || null,
+        active: null,
+      },
+      fetchPolicy: 'cache-and-network',
     },
-    fetchPolicy: 'cache-and-network',
-  });
-  // The promo editor picks its currency from the stored currencies.
+  );
+  // The plan and promo editors pick their currency from the stored currencies.
+  // Read fresh each time an editor opens: one added on the Currencies page shows up.
   const { data: currencyData } = useQuery<
     { adminCurrencyRates: { rates: { code: string; name?: string | null }[] } },
     { previewUsdCents: number },
     any
-  >(ADMIN_CURRENCY_RATES_QUERY, { variables: { previewUsdCents: 0 }, skip: !editingPromo, fetchPolicy: 'cache-first' });
-  const promoCurrencyOptions = useMemo(() => {
+  >(ADMIN_CURRENCY_RATES_QUERY, {
+    variables: { previewUsdCents: 0 },
+    skip: !editingPromo && !editing,
+    fetchPolicy: 'cache-and-network',
+  });
+  const currencyOptionsWith = (current: string) => {
     const codes = (currencyData?.adminCurrencyRates?.rates || []).map((rate) => normalizeCurrency(rate.code)).filter(Boolean);
-    const current = editingPromo ? normalizeCurrency(editingPromo.currency || 'USD') : 'USD';
-    return Array.from(new Set(['USD', ...codes, current])).sort();
-  }, [currencyData, editingPromo]);
-  const { data: promoData, loading: promoLoading, refetch: refetchPromos } = useQuery<
-    { adminPromoCodes: PromoCodeType[] },
-    { includeInactive: boolean; search: string | null; active: boolean | null; planId: string | null },
-    any
-  >(ADMIN_PROMO_CODES_QUERY, {
+    return Array.from(new Set(['USD', ...codes, normalizeCurrency(current || 'USD')])).sort();
+  };
+  const promoCurrencyOptions = currencyOptionsWith(editingPromo?.currency || 'USD');
+  const planCurrencyOptions = currencyOptionsWith(editing?.currency || 'USD');
+  const {
+    rows: promoRows,
+    loading: promoLoading,
+    error: promoError,
+    pageError: promoPageError,
+    loadingMore: promosLoadingMore,
+    refetch: refetchPromos,
+  } = useAllPagesQuery<
+    PromoCodeType,
+    { includeInactive: boolean; search: string | null; active: boolean | null; planId: string | null }
+  >(ADMIN_PROMO_CODES_QUERY, 'adminPromoCodes', {
     variables: {
       includeInactive: true,
       search: promoSearch.trim() || null,
@@ -447,13 +508,21 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
 
   // Modules + computed prices live in a separate document so the base plan query stays stable.
   // Every page of packages (the API returns at most 200 per call).
-  const { rows: packagingRows, refetch: refetchPackaging } = useAllAdminPages<PlanPackaging>(
-    ADMIN_PLANS_PACKAGING_QUERY,
-    'adminPlans',
-  );
+  const {
+    rows: packagingRows,
+    loading: packagingLoading,
+    error: packagingError,
+    refetch: refetchPackaging,
+  } = useAllAdminPages<PlanPackaging>(ADMIN_PLANS_PACKAGING_QUERY, 'adminPlans');
+  // Plans deleted here, hidden until the packaging list is read again (so the
+  // id can be used again for a new plan right away).
+  const [deletedPlanIds, setDeletedPlanIds] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    setDeletedPlanIds(new Set());
+  }, [packagingRows]);
   const packagingById = useMemo(
-    () => new Map((packagingRows || []).map((item) => [item.id, item])),
-    [packagingRows],
+    () => new Map((packagingRows || []).filter((item) => !deletedPlanIds.has(item.id)).map((item) => [item.id, item])),
+    [packagingRows, deletedPlanIds],
   );
   const [savePlan, { loading: saving }] = useMutation<
     {
@@ -468,13 +537,25 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
     any
   >(ADMIN_SAVE_PLAN_MUTATION);
   const [deletePlan, { loading: deleting }] = useMutation<DeletePlanMutationData, { id: string; reason: string }, any, any>(ADMIN_DELETE_PLAN_MUTATION);
+  // One request per action at a time: Apollo's `loading` only disables a
+  // button after a re-render, so a quick double click could send twice.
+  const busy = useRef<Set<string>>(new Set());
+  const once = async (key: string, action: () => Promise<void>) => {
+    if (busy.current.has(key)) return;
+    busy.current.add(key);
+    try {
+      await action();
+    } finally {
+      busy.current.delete(key);
+    }
+  };
   const [savePromoCode, { loading: savingPromo }] = useMutation<SavePromoCodeMutationData, { input: ReturnType<typeof promoToInput> }, any, any>(ADMIN_SAVE_PROMO_CODE_MUTATION);
   const [deactivatePromoCode, { loading: deactivatingPromo }] = useMutation<DeactivatePromoCodeMutationData, { id: string; reason: string }, any, any>(ADMIN_DEACTIVATE_PROMO_CODE_MUTATION);
 
-  const backendPlans = data?.adminPlans || [];
+  const backendPlans = planRows || [];
   const sourcePlans = backendPlans.length > 0 ? backendPlans : canonicalPlans;
   const backendReady = !error && backendPlans.length > 0;
-  const promoCodes = promoData?.adminPromoCodes || [];
+  const promoCodes = promoRows || [];
   // Every active paid plan for the promo form. adminPlans is searched server-side
   // with the Plans search box, so the unfiltered packaging list is used instead.
   const premiumPlans = useMemo(() => {
@@ -553,9 +634,22 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
     setEditing(newEditingPlan(sourcePlans));
   };
 
+  // Editing needs the plan's packaging row; Edit stays disabled while it loads.
+  const packagingPending = (plan: PlanType) => !packagingById.has(plan.id) && packagingLoading && !packagingError;
   const openEditPlan = (plan: PlanType) => {
+    const packaging = packagingById.get(plan.id);
+    if (!packaging) {
+      onToast(
+        'error',
+        packagingError
+          ? `The package details of "${plan.name}" could not be loaded (${packagingError.message}). Try again.`
+          : `The package details of "${plan.name}" are still loading. Try again in a moment.`,
+      );
+      if (!packagingLoading) refetchPackaging();
+      return;
+    }
     setEditingMode('edit');
-    setEditing(toEditingPlan(plan, packagingById.get(plan.id)));
+    setEditing(toEditingPlan(plan, packaging));
   };
 
   const closePlanWindow = () => {
@@ -578,10 +672,21 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
     setEditingPromoMode('create');
   };
 
-  const handleSave = async () => {
+  const handleSave = () => once('save-plan', savePlanNow);
+  const savePlanNow = async () => {
     if (!editing) return;
     if (!editing.id.trim() || !editing.name.trim()) {
       onToast('error', 'Plan id and name are required');
+      return;
+    }
+    // Checked before the request: the server takes whole numbers (an Int) and
+    // whole units for JPY / ISK / UGX, and refuses the whole save otherwise.
+    const fieldProblem =
+      moneyInputError(editing.basePriceInput, editing.currency || 'USD', 'Package price') ||
+      wholeNumberError(editing.trialMonths, 'Trial months', 0) ||
+      wholeNumberError(editing.employeeLimit, 'Employee limit', 0);
+    if (fieldProblem) {
+      onToast('error', fieldProblem);
       return;
     }
 
@@ -616,7 +721,7 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
         return;
       }
       onToast('success', `Plan "${editing.name}" ${editingMode === 'create' ? 'created' : 'saved'}`);
-      const saved = { planId: editing.id, planName: editing.name };
+      const saved = { planId: editing.id.trim(), planName: editing.name };
       closePlanWindow();
       refetch();
       refetchPackaging();
@@ -630,18 +735,39 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
     }
   };
 
-  const handleSavePromo = async () => {
+  const handleSavePromo = () => once('save-promo', savePromoNow);
+  const savePromoNow = async () => {
     if (!editingPromo) return;
     if (!editingPromo.code.trim()) {
       onToast('error', 'Promo code is required');
       return;
     }
-    if (editingPromo.discountType === 'percent' && (editingPromo.discountValue <= 0 || editingPromo.discountValue > 100)) {
-      onToast('error', 'Percent discount must be between 1 and 100');
-      return;
+    const currency = editingPromo.currency || 'USD';
+    if (editingPromo.discountType === 'percent') {
+      // An Int on the server: 12.5 failed the whole save with a GraphQL error.
+      const value = Number(editingPromo.discountInput);
+      if (!editingPromo.discountInput.trim() || !Number.isInteger(value) || value < 1 || value > 100) {
+        onToast('error', 'Percent discount must be a whole number between 1 and 100');
+        return;
+      }
+    } else {
+      const problem = moneyInputError(editingPromo.discountInput, currency, 'Discount amount');
+      if (problem) {
+        onToast('error', problem);
+        return;
+      }
+      if (!(centsFromAmount(editingPromo.discountInput || '0', currency) > 0)) {
+        onToast('error', 'Fixed discount amount must be greater than 0');
+        return;
+      }
     }
-    if (editingPromo.discountType === 'amount' && editingPromo.discountValue <= 0) {
-      onToast('error', 'Fixed discount amount must be greater than 0');
+    const limitProblem =
+      moneyInputError(editingPromo.minimumAmountDollars, currency, 'Minimum amount') ||
+      wholeNumberError(editingPromo.maxRedemptions, 'Max redemptions', 0) ||
+      wholeNumberError(editingPromo.perEmailLimit, 'Per email limit', 0) ||
+      wholeNumberError(editingPromo.perCompanyLimit, 'Per company limit', 0);
+    if (limitProblem) {
+      onToast('error', limitProblem);
       return;
     }
     if (editingPromo.appliesToPlanIds.length === 0) {
@@ -666,7 +792,8 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
     }
   };
 
-  const handleDeletePlan = async (plan: PlanType) => {
+  const handleDeletePlan = (plan: PlanType) => once(`delete-plan-${plan.id}`, () => deletePlanNow(plan));
+  const deletePlanNow = async (plan: PlanType) => {
     const reason = window.prompt(`Reason for deleting ${plan.name}`, 'Admin deleted unused plan');
     if (!reason?.trim()) {
       onToast('error', 'Reason is required to delete a plan');
@@ -685,13 +812,19 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
         return;
       }
       onToast('success', `Plan "${plan.name}" deleted`);
+      // The packaging list (subscriber counts, promo plan list, the
+      // "id already exists" check) must forget the plan too, so its id can be
+      // used again right away.
+      setDeletedPlanIds((current) => new Set(current).add(plan.id));
+      refetchPackaging();
       await refetch();
     } catch (err: any) {
       onToast('error', err.message || 'Plan could not be deleted');
     }
   };
 
-  const handleDeactivatePromo = async (promo: PromoCodeType) => {
+  const handleDeactivatePromo = (promo: PromoCodeType) => once(`deactivate-promo-${promo.id}`, () => deactivatePromoNow(promo));
+  const deactivatePromoNow = async (promo: PromoCodeType) => {
     const reason = window.prompt(`Reason for deactivating ${promo.code}`, 'Admin deactivated promo code');
     if (!reason?.trim()) {
       onToast('error', 'Reason is required to deactivate a promo code');
@@ -924,6 +1057,23 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
         ) : null}
       </div>
 
+      {activeTab === 'plans' ? (
+        <PartialListWarning
+          error={planPageError}
+          loadingMore={plansLoadingMore}
+          shown={backendPlans.length}
+          what="plans"
+          onRetry={() => refetch()}
+        />
+      ) : null}
+      {activeTab === 'plans' && packagingError ? (
+        <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800" data-testid="packaging-load-error">
+          Package details (modules, yearly prices) could not be loaded: {packagingError.message}{' '}
+          <button type="button" className="font-semibold underline" onClick={() => refetchPackaging()}>
+            Try again
+          </button>
+        </p>
+      ) : null}
       {activeTab === 'plans' && loading && backendPlans.length === 0 ? (
         <div className="rounded-lg border border-slate-200 bg-white p-6 text-center text-slate-500">
           Loading plans...
@@ -982,7 +1132,7 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
                       <div>{plan.billingInterval}</div>
                       <div className="text-xs text-slate-500">{plan.perEmployee ? 'Per employee' : 'Flat'}</div>
                     </td>
-                    <td className="px-3 py-3 align-top text-[14px] text-slate-950">{plan.trialMonths} months</td>
+                    <td className="px-3 py-3 align-top text-[14px] text-slate-950">{monthsLabel(plan.trialMonths || 0)}</td>
                     <td className="px-3 py-3 align-top">
                       <span className={`rounded-md px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide ${
                         plan.active ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'
@@ -995,8 +1145,9 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
                         <button
                           type="button"
                           onClick={() => openEditPlan(plan)}
-                          title={`Edit ${plan.name}`}
-                          className="inline-flex h-8 w-8 items-center justify-center rounded-lg border-none text-slate-400 transition hover:bg-sky-400/10 hover:text-sky-500"
+                          disabled={packagingPending(plan)}
+                          title={packagingPending(plan) ? 'Loading package details…' : `Edit ${plan.name}`}
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-lg border-none text-slate-400 transition hover:bg-sky-400/10 hover:text-sky-500 disabled:opacity-50"
                         >
                           <Edit2 className="h-4 w-4" />
                           <span className="sr-only">Edit</span>
@@ -1044,7 +1195,7 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
                       <h3 className="text-base font-black leading-tight text-gray-800 transition-colors group-hover:text-sky-600">{plan.name}</h3>
                       {plan.trialMonths > 0 ? (
                         <span className="rounded-md border border-sky-200 bg-sky-50 px-2 py-0.5 text-[10px] font-black uppercase tracking-tight text-sky-700">
-                          Free for {plan.trialMonths} months
+                          Free for {monthsLabel(plan.trialMonths)}
                         </span>
                       ) : null}
                     </div>
@@ -1075,7 +1226,7 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
                   </div>
                   <div className="rounded-lg border border-amber-100 bg-amber-50/60 p-2.5">
                     <span className="mb-0.5 block text-[11px] font-black uppercase tracking-tight text-amber-600">Trial</span>
-                    <div className="text-sm font-bold text-gray-800">{plan.trialMonths} months</div>
+                    <div className="text-sm font-bold text-gray-800">{monthsLabel(plan.trialMonths || 0)}</div>
                     {plan.trialMonths > 0 ? (
                       <p className="mt-0.5 text-xs font-semibold text-amber-700">after free period</p>
                     ) : null}
@@ -1148,7 +1299,9 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
                 <button
                   type="button"
                   onClick={() => openEditPlan(plan)}
-                  className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-slate-200/70 bg-slate-50 px-3 text-[13px] font-semibold text-slate-600 transition hover:border-sky-300 hover:bg-sky-50 hover:text-sky-600"
+                  disabled={packagingPending(plan)}
+                  title={packagingPending(plan) ? 'Loading package details…' : undefined}
+                  className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-slate-200/70 bg-slate-50 px-3 text-[13px] font-semibold text-slate-600 transition hover:border-sky-300 hover:bg-sky-50 hover:text-sky-600 disabled:opacity-50"
                 >
                   <Edit2 className="h-4 w-4" />
                   Edit plan
@@ -1172,8 +1325,19 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
 
       {activeTab === 'promos' ? (
         <div className="relative overflow-x-clip overflow-y-visible rounded-lg border border-gray-200 bg-white p-2">
-          {promoLoading ? (
+          <PartialListWarning
+            error={promoPageError}
+            loadingMore={promosLoadingMore}
+            shown={promoCodes.length}
+            what="promo codes"
+            onRetry={() => refetchPromos()}
+          />
+          {promoLoading && !promoCodes.length ? (
             <div className="p-8 text-center text-slate-500">Loading promo codes...</div>
+          ) : promoError && !promoCodes.length ? (
+            <div className="p-8 text-center text-rose-600" data-testid="promo-load-error">
+              Promo codes could not be loaded: {promoError.message}
+            </div>
           ) : displayedPromoCodes.length === 0 ? (
             <div className="p-8 text-center text-slate-500">No promo codes found</div>
           ) : (
@@ -1286,6 +1450,10 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
             refetchPackaging();
           }}
           onError={(message) => onToast('error', message)}
+          onRefresh={() => {
+            refetchPackaging();
+            refetch();
+          }}
         />
       ) : null}
 
@@ -1338,10 +1506,14 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
                   <input
                     type="number"
                     min="0"
-                    step={currencyDecimals(editing.currency) === 0 ? '1' : '0.01'}
-                    value={amountFromCents(editing.basePriceCents, editing.currency)}
+                    step={String(currencyInputStep(editing.currency))}
+                    value={editing.basePriceInput}
                     onChange={(event) =>
-                      setEditing({ ...editing, basePriceCents: centsFromAmount(Number(event.target.value) || 0, editing.currency) })
+                      setEditing({
+                        ...editing,
+                        basePriceInput: event.target.value,
+                        basePriceCents: centsFromAmount(event.target.value, editing.currency) || 0,
+                      })
                     }
                     className="w-full rounded-lg border border-slate-300 px-3 py-2"
                     data-testid="plan-price"
@@ -1349,16 +1521,24 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
                 </label>
                 <label className="block">
                   <span className="mb-1 block text-sm font-medium text-slate-700">Currency</span>
-                  <input
-                    value={editing.currency}
+                  {/* A list, not a text box (typing "JPY" letter by letter converted the
+                      price at every keystroke). The typed price is kept as it is and
+                      converted only when saved, so switching back and forth changes nothing. */}
+                  <select
+                    value={normalizeCurrency(editing.currency || 'USD')}
                     onChange={(event) => {
                       const currency = normalizeCurrency(event.target.value);
-                      // Keep the price as typed: the stored minor units follow the currency's decimals.
-                      const basePriceCents = centsFromAmount(amountFromCents(editing.basePriceCents, editing.currency), currency);
-                      setEditing({ ...editing, currency, basePriceCents });
+                      setEditing({ ...editing, currency, basePriceCents: centsFromAmount(editing.basePriceInput, currency) || 0 });
                     }}
                     className="w-full rounded-lg border border-slate-300 px-3 py-2"
-                  />
+                    data-testid="plan-currency"
+                  >
+                    {planCurrencyOptions.map((code) => (
+                      <option key={code} value={code}>
+                        {code}
+                      </option>
+                    ))}
+                  </select>
                 </label>
                 <label className="block">
                   <span className="mb-1 block text-sm font-medium text-slate-700">Billing interval</span>
@@ -1378,6 +1558,7 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
                   <input
                     type="number"
                     min="0"
+                    step="1"
                     value={editing.trialMonths}
                     onChange={(event) => setEditing({ ...editing, trialMonths: Number(event.target.value) || 0 })}
                     className="w-full rounded-lg border border-slate-300 px-3 py-2"
@@ -1512,7 +1693,7 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
                       setEditingPromo({
                         ...editingPromo,
                         discountType,
-                        discountValue: discountType === editingPromo.discountType ? editingPromo.discountValue : 0,
+                        discountInput: discountType === editingPromo.discountType ? editingPromo.discountInput : '',
                       });
                     }}
                     className="w-full rounded-lg border border-slate-300 px-3 py-2"
@@ -1527,44 +1708,26 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
                       ? 'Discount %'
                       : `Discount amount (${(editingPromo.currency || 'USD').toUpperCase()})`}
                   </span>
-                  {/* A fixed discount is typed as an amount ($10, ¥1000) and kept in minor units. */}
+                  {/* A fixed discount is typed as an amount ($10, ¥1000), kept as typed and
+                      converted to minor units only when saved. */}
                   <input
                     type="number"
                     min="0"
-                    step={editingPromo.discountType === 'percent' || !currencyDecimals(editingPromo.currency || 'USD') ? '1' : '0.01'}
-                    value={
-                      editingPromo.discountType === 'percent'
-                        ? editingPromo.discountValue
-                        : amountFromCents(editingPromo.discountValue, editingPromo.currency || 'USD')
-                    }
-                    onChange={(event) => {
-                      const typed = Number(event.target.value) || 0;
-                      setEditingPromo({
-                        ...editingPromo,
-                        discountValue:
-                          editingPromo.discountType === 'percent'
-                            ? typed
-                            : centsFromAmount(typed, editingPromo.currency || 'USD'),
-                      });
-                    }}
+                    step={editingPromo.discountType === 'percent' ? '1' : String(currencyInputStep(editingPromo.currency || 'USD'))}
+                    value={editingPromo.discountInput}
+                    onChange={(event) => setEditingPromo({ ...editingPromo, discountInput: event.target.value })}
                     className="w-full rounded-lg border border-slate-300 px-3 py-2"
+                    data-testid="promo-discount"
                   />
                 </label>
                 <label className="block">
                   <span className="mb-1 block text-sm font-medium text-slate-700">Currency</span>
                   {/* A list, not a text box: typing "JPY" letter by letter converted
-                      the amount at every keystroke (10.50 USD -> J -> JP -> JPY -> ... -> 11.00). */}
+                      the amount at every keystroke. The typed amount is not touched here
+                      (10.50 USD -> JPY -> USD stays 10.50); it is converted when saved. */}
                   <select
                     value={normalizeCurrency(editingPromo.currency || 'USD')}
-                    onChange={(event) => {
-                      const currency = normalizeCurrency(event.target.value);
-                      // Keep the typed amount ($10 stays 10 in the new currency), not the minor units.
-                      const discountValue =
-                        editingPromo.discountType === 'amount'
-                          ? centsFromAmount(amountFromCents(editingPromo.discountValue, editingPromo.currency || 'USD'), currency || 'USD')
-                          : editingPromo.discountValue;
-                      setEditingPromo({ ...editingPromo, currency, discountValue });
-                    }}
+                    onChange={(event) => setEditingPromo({ ...editingPromo, currency: normalizeCurrency(event.target.value) })}
                     className="w-full rounded-lg border border-slate-300 px-3 py-2"
                     data-testid="promo-currency"
                   >
@@ -1608,6 +1771,8 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
                   <span className="mb-1 block text-sm font-medium text-slate-700">Max redemptions</span>
                   <input
                     type="number"
+                    min="0"
+                    step="1"
                     value={editingPromo.maxRedemptions}
                     onChange={(event) => setEditingPromo({ ...editingPromo, maxRedemptions: event.target.value })}
                     placeholder="Unlimited"
@@ -1618,6 +1783,8 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
                   <span className="mb-1 block text-sm font-medium text-slate-700">Per email</span>
                   <input
                     type="number"
+                    min="0"
+                    step="1"
                     value={editingPromo.perEmailLimit}
                     onChange={(event) => setEditingPromo({ ...editingPromo, perEmailLimit: event.target.value })}
                     placeholder="Unlimited"
@@ -1628,6 +1795,8 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
                   <span className="mb-1 block text-sm font-medium text-slate-700">Per company</span>
                   <input
                     type="number"
+                    min="0"
+                    step="1"
                     value={editingPromo.perCompanyLimit}
                     onChange={(event) => setEditingPromo({ ...editingPromo, perCompanyLimit: event.target.value })}
                     placeholder="Unlimited"
@@ -1635,10 +1804,13 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
                   />
                 </label>
                 <label className="block">
-                  <span className="mb-1 block text-sm font-medium text-slate-700">Minimum amount ($)</span>
+                  <span className="mb-1 block text-sm font-medium text-slate-700">
+                    Minimum amount ({normalizeCurrency(editingPromo.currency || 'USD')})
+                  </span>
                   <input
                     type="number"
-                    step="0.01"
+                    min="0"
+                    step={String(currencyInputStep(editingPromo.currency || 'USD'))}
                     value={editingPromo.minimumAmountDollars}
                     onChange={(event) => setEditingPromo({ ...editingPromo, minimumAmountDollars: event.target.value })}
                     placeholder="None"

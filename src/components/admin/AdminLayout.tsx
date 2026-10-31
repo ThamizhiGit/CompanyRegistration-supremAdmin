@@ -37,7 +37,6 @@ export const AdminLayout: React.FC<AdminLayoutProps> = ({
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [profileSectionOpen, setProfileSectionOpen] = useState(false);
-  const [sessionRemaining, setSessionRemaining] = useState('00:00:00');
   const [isDesktop, setIsDesktop] = useState(() => window.matchMedia('(min-width: 768px)').matches);
   const sidebarRef = useRef<HTMLElement>(null);
   const mobileMenuButtonRef = useRef<HTMLButtonElement>(null);
@@ -124,31 +123,6 @@ export const AdminLayout: React.FC<AdminLayoutProps> = ({
       document.removeEventListener('keydown', handleProfileKeyboard);
     };
   }, [profileMenuOpen]);
-
-  useEffect(() => {
-    const updateSessionRemaining = () => {
-      const expiresAt = window.sessionStorage.getItem('adminExpiresAt');
-      if (!expiresAt) {
-        setSessionRemaining('00:00:00');
-        return;
-      }
-
-      const remainingSeconds = Math.max(
-        0,
-        Math.floor((new Date(expiresAt).getTime() - Date.now()) / 1000)
-      );
-      const hours = Math.floor(remainingSeconds / 3600);
-      const minutes = Math.floor((remainingSeconds % 3600) / 60);
-      const seconds = remainingSeconds % 60;
-      setSessionRemaining(
-        [hours, minutes, seconds].map((value) => String(value).padStart(2, '0')).join(':')
-      );
-    };
-
-    updateSessionRemaining();
-    const intervalId = window.setInterval(updateSessionRemaining, 1000);
-    return () => window.clearInterval(intervalId);
-  }, []);
 
   useEffect(() => {
     if (!mobileSidebarOpen) return;

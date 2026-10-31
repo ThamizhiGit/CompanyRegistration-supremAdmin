@@ -6,7 +6,7 @@ import {
   ADMIN_REFRESH_CURRENCY_RATES_MUTATION,
   ADMIN_SAVE_CURRENCY_RATE_MUTATION,
 } from '../../../lib/graphql';
-import { centsFromAmount, formatDateTime, formatPrice } from '../../../lib/admin-utils';
+import { centsFromAmount, formatDateTime, formatPrice, wholeNumberError } from '../../../lib/admin-utils';
 
 interface CurrencyRateRow {
   code: string;
@@ -39,7 +39,8 @@ interface EditingRate {
   symbol: string;
   ratePerUsd: string;
   originalRate: string;
-  roundTo: number;
+  /** As typed (an Int on the server: 2.5 failed the whole save with a GraphQL error). */
+  roundTo: string;
   active: boolean;
   isManual: boolean;
   /** As loaded (an existing row): switched on, and where its rate came from. */
@@ -158,6 +159,11 @@ export const Currencies: React.FC<{ onToast: (type: 'success' | 'error', msg: st
       onToast('error', `${code} is already in the list. Edit that row instead.`);
       return;
     }
+    const roundProblem = wholeNumberError(editing.roundTo, 'Round prices up to', 0);
+    if (roundProblem) {
+      onToast('error', roundProblem);
+      return;
+    }
     const rateChanged = editing.ratePerUsd.trim() !== editing.originalRate;
     if ((editing.isNew || rateChanged) && !(Number(editing.ratePerUsd) > 0)) {
       onToast('error', 'Rate must be a positive number');
@@ -200,7 +206,7 @@ export const Currencies: React.FC<{ onToast: (type: 'success' | 'error', msg: st
           name: editing.name.trim(),
           symbol: editing.symbol.trim(),
           ratePerUsd: editing.isNew || rateChanged ? editing.ratePerUsd.trim() : null,
-          roundTo: Number(editing.roundTo) || 0,
+          roundTo: Number(editing.roundTo.trim() || 0),
           active: editing.active,
           isManual: editing.isManual,
           // The server refuses to overwrite an existing code from the Add form too.
@@ -229,7 +235,7 @@ export const Currencies: React.FC<{ onToast: (type: 'success' | 'error', msg: st
       symbol: row.symbol,
       ratePerUsd: row.ratePerUsd,
       originalRate: row.ratePerUsd,
-      roundTo: row.roundTo,
+      roundTo: String(row.roundTo ?? 0),
       active: row.active,
       isManual: row.isManual,
       originalActive: row.active,
@@ -263,7 +269,7 @@ export const Currencies: React.FC<{ onToast: (type: 'success' | 'error', msg: st
             type="button"
             onClick={() =>
               setEditing({
-                isNew: true, code: '', name: '', symbol: '', ratePerUsd: '', originalRate: '', roundTo: 0, active: false,
+                isNew: true, code: '', name: '', symbol: '', ratePerUsd: '', originalRate: '', roundTo: '0', active: false,
                 isManual: true, originalActive: false, source: 'manual',
               })
             }
@@ -415,9 +421,11 @@ export const Currencies: React.FC<{ onToast: (type: 'success' | 'error', msg: st
                 <input
                   type="number"
                   min="0"
+                  step="1"
                   value={editing.roundTo}
-                  onChange={(event) => setEditing({ ...editing, roundTo: Number(event.target.value) || 0 })}
+                  onChange={(event) => setEditing({ ...editing, roundTo: event.target.value })}
                   className="w-full rounded-lg border border-slate-300 px-3 py-2"
+                  data-testid="currency-round-to"
                 />
               </label>
               <label className="flex items-center gap-2 text-sm text-slate-700">

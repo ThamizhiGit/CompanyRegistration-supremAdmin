@@ -119,3 +119,16 @@ test('adding a currency that is already listed does not overwrite it', async ({ 
   await expect(page.getByText('LKR is already in the list. Edit that row instead.')).toBeVisible();
   expect(mockApi.lastVariables('AdminSaveCurrencyRate')).toBeUndefined();
 });
+
+test('a decimal "round up to" is refused before it reaches the API (an Int there)', async ({ adminPage: page, mockApi }) => {
+  await page.getByRole('button', { name: 'Currencies' }).click();
+  await page.getByTestId('currency-edit-LKR').click();
+  await page.getByTestId('currency-round-to').fill('2.5');
+  await page.getByTestId('currency-save').click();
+  await expect(page.getByText('Round prices up to must be a whole number (0 or more).')).toBeVisible();
+  expect(mockApi.lastVariables('AdminSaveCurrencyRate')).toBeUndefined();
+
+  await page.getByTestId('currency-round-to').fill('5');
+  await page.getByTestId('currency-save').click();
+  await expect.poll(() => mockApi.lastVariables('AdminSaveCurrencyRate')).toMatchObject({ code: 'LKR', roundTo: 5 });
+});

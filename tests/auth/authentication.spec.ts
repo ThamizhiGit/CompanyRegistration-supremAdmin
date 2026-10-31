@@ -134,3 +134,26 @@ test.describe('Session lifecycle', () => {
     await expect(page.getByText('Your session has expired. Please sign in again.')).toBeVisible();
   });
 });
+
+test.describe('Signing out', () => {
+  test('clears the cached admin data, so the next sign-in reads it again', async ({ adminPage: page, mockApi }) => {
+    const packagingReads = () => mockApi.requests.get('AdminPlansPackaging')?.length ?? 0;
+    await page.getByRole('button', { name: 'Plans' }).click();
+    await expect(page.getByTestId('plan-subscribers-premium')).toBeVisible();
+    const before = packagingReads();
+    expect(before).toBeGreaterThan(0);
+
+    await page.getByRole('button', { name: 'Account menu for admin' }).click();
+    await page.locator('#admin-profile-menu').getByRole('menuitem', { name: 'Sign Out' }).click();
+    await expect(page.getByRole('heading', { name: 'Welcome back', exact: true })).toBeVisible();
+
+    await page.getByPlaceholder('Enter your username').fill('admin');
+    await page.getByPlaceholder('Enter your password').fill('pass');
+    await page.locator('button[type="submit"]').click();
+    await page.getByRole('button', { name: 'Plans' }).click();
+    await expect(page.getByTestId('plan-subscribers-premium')).toBeVisible();
+    // Within the 30 s reuse window the package list would have been reused
+    // from the previous session; signing out dropped it.
+    await expect.poll(packagingReads).toBeGreaterThan(before);
+  });
+});

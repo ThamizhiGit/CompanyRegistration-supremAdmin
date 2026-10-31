@@ -8,7 +8,7 @@ import {
   ADMIN_UPDATE_EXPENSE_MUTATION,
   ADMIN_SET_EXPENSE_STATUS_MUTATION,
 } from '../../../lib/graphql';
-import { formatPrice, centsFromDollars } from '../../../lib/admin-utils';
+import { centsFromDollars } from '../../../lib/admin-utils';
 import { useDebouncedValue } from '../../../lib/useDebouncedValue';
 import { buildColumnFilterOptions, ColumnFilter, matchesColumnFilter } from '../ColumnFilter';
 
@@ -227,11 +227,19 @@ const statusClasses: Record<ExpenseStatus, string> = {
 
 const normalizeCurrencyValue = (currency: string) => sanitizeCurrency(currency) || 'USD';
 
+/**
+ * Expenses keep every currency in hundredths (the form sends amount x 100 for
+ * JPY too, and saved rows are stored that way), so they are shown as /100.
+ * formatPrice reads zero-decimal currencies (JPY...) as whole units and
+ * showed JPY expenses 100x too large.
+ */
 const toMoney = (value: number, currency = 'USD') => {
+  const code = normalizeCurrencyValue(currency);
+  const amount = (Number(value) || 0) / 100;
   try {
-    return formatPrice(value, normalizeCurrencyValue(currency));
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency: code }).format(amount);
   } catch {
-    return `$${(value / 100).toFixed(2)}`;
+    return `${code} ${amount.toFixed(2)}`;
   }
 };
 
@@ -490,18 +498,18 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
     () =>
       editing.lineItems.map((line) => {
         const quantity = Number.parseFloat(line.quantity || '0');
-        const unitPrice = Number.parseFloat(line.unitPriceCents || '0');
+        const unitPrice = centsFromDollars(line.unitPriceCents || '0');
         const quantityValue = Number.isNaN(quantity) ? 0 : quantity;
-        const priceValue = Number.isNaN(unitPrice) ? 0 : unitPrice;
-        const cost = Math.max(0, Math.round(quantityValue * centsFromDollars(priceValue)));
+        const priceCents = Number.isNaN(unitPrice) ? 0 : unitPrice;
+        const cost = Math.max(0, Math.round(quantityValue * priceCents));
         return cost;
       }),
     [editing.lineItems],
   );
 
   const subtotal = computedRows.reduce((acc, value) => acc + value, 0);
-  const taxCents = Number.parseFloat(editing.taxInput || '0') * 100;
-  const validTax = Number.isNaN(taxCents) ? 0 : Math.max(0, Math.round(taxCents));
+  const taxCents = centsFromDollars(editing.taxInput || '0');
+  const validTax = Number.isNaN(taxCents) ? 0 : Math.max(0, taxCents);
   const total = Math.max(0, subtotal + validTax);
   const displayCurrency = normalizeCurrencyValue(editing.currency);
   const currencyOptions = useMemo(() => Array.from(new Set([displayCurrency, ...CURRENCY_OPTIONS])), [displayCurrency]);
@@ -584,7 +592,7 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
       .filter((line) => line.label.trim())
       .map((line) => {
         const quantity = Math.max(0, Number.parseFloat(line.quantity || '0'));
-        const unitPriceCents = Math.max(0, centsFromDollars(Number.parseFloat(line.unitPriceCents || '0')));
+        const unitPriceCents = Math.max(0, centsFromDollars(line.unitPriceCents || '0') || 0);
         const payload: ExpenseLineItemInput = {
           lineType: line.lineType,
           label: line.label.trim(),
@@ -626,7 +634,7 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
       referenceLink: editing.referenceLink.trim() || undefined,
       metadata,
       lineItems,
-      taxCents: Number.isFinite(parsedTax) ? Math.max(0, Math.round(parsedTax * 100)) : 0,
+      taxCents: Number.isFinite(parsedTax) ? Math.max(0, centsFromDollars(editing.taxInput || '0')) : 0,
     };
   };
 

@@ -1,9 +1,9 @@
 import React from 'react';
-import { MockedProvider } from '@apollo/client/testing/react';
 import { expect, test } from '@playwright/experimental-ct-react';
 import App from '../../src/App';
 import {
   ADMIN_REVENUE_SUMMARY_QUERY,
+  ADMIN_UPDATE_USER_MUTATION,
   TOKEN_AUTH_MUTATION,
 } from '../../src/lib/graphql';
 import { GraphQLProvider } from '../../src/providers/GraphQLProvider';
@@ -11,6 +11,7 @@ import {
   SharedDashboardStory,
   SharedProviderConsumerStory,
 } from '../fixtures/shared-test-stories';
+import { SchemaMockedProvider } from '../fixtures/schema-mocks';
 
 const revenueSummary = {
   totalCompanies: 2,
@@ -47,9 +48,9 @@ test.describe('App authentication shell', () => {
   }) => {
     await page.setViewportSize({ width: 1280, height: 800 });
     await mount(
-      <MockedProvider>
+      <SchemaMockedProvider>
         <App />
-      </MockedProvider>,
+      </SchemaMockedProvider>,
     );
 
     await expect(page.getByRole('heading', { name: 'Welcome back' })).toBeVisible();
@@ -66,7 +67,7 @@ test.describe('App authentication shell', () => {
   test('logs in successfully, persists the session, and shows the admin dashboard', async ({ mount, page }) => {
     const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
     await mount(
-      <MockedProvider
+      <SchemaMockedProvider
         mocks={[
           {
             request: {
@@ -98,7 +99,7 @@ test.describe('App authentication shell', () => {
         ]}
       >
         <App />
-      </MockedProvider>,
+      </SchemaMockedProvider>,
     );
 
     await page.getByPlaceholder('Enter your username').fill('  root  ');
@@ -123,9 +124,9 @@ test.describe('App authentication shell', () => {
     });
 
     await mount(
-      <MockedProvider>
+      <SchemaMockedProvider>
         <App />
-      </MockedProvider>,
+      </SchemaMockedProvider>,
     );
 
     await expect(page.getByText('Your session has expired. Please sign in again.')).toBeVisible();
@@ -136,7 +137,7 @@ test.describe('App authentication shell', () => {
 
   test('shows authentication failures returned by the API', async ({ mount, page }) => {
     await mount(
-      <MockedProvider
+      <SchemaMockedProvider
         mocks={[
           {
             request: {
@@ -158,7 +159,7 @@ test.describe('App authentication shell', () => {
         ]}
       >
         <App />
-      </MockedProvider>,
+      </SchemaMockedProvider>,
     );
 
     await page.getByPlaceholder('Enter your username').fill('root');
@@ -177,5 +178,25 @@ test.describe('AdminDashboard', () => {
     await expect(page.getByRole('heading', { name: 'Plans & Pricing' })).toBeVisible();
     await page.getByRole('button', { name: 'Dashboard' }).click();
     await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible();
+  });
+});
+
+test.describe('Schema-checked mocks', () => {
+  test('refuse a mocked request the backend schema would reject', async ({ mount, page }) => {
+    // The user id is an Int on the server: a String id (as the page used to send) is refused.
+    await mount(
+      <SchemaMockedProvider
+        mocks={[
+          {
+            request: { query: ADMIN_UPDATE_USER_MUTATION, variables: { userId: '11', firstName: 'Ada' } },
+            result: { data: { adminUpdateUser: { success: true, message: null, user: null } } },
+          },
+        ]}
+      >
+        <p>mock child</p>
+      </SchemaMockedProvider>,
+    );
+    await expect(page.getByTestId('schema-mock-error')).toContainText('AdminUpdateUser: Variable "$userId"');
+    await expect(page.getByText('mock child')).toHaveCount(0);
   });
 });

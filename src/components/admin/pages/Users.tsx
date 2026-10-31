@@ -1,11 +1,13 @@
-import React, { useMemo, useState } from 'react';
-import { useQuery, useMutation, useLazyQuery } from '@apollo/client/react';
-import { ADMIN_USERS_QUERY, ADMIN_COMPANIES_QUERY, ADMIN_UPDATE_USER_MUTATION, ADMIN_ACTIVITY_LOG_QUERY } from '../../../lib/graphql';
+import React, { useMemo, useRef, useState } from 'react';
+import { useMutation } from '@apollo/client/react';
+import { ADMIN_USERS_QUERY, ADMIN_UPDATE_USER_MUTATION, ADMIN_ACTIVITY_LOG_QUERY } from '../../../lib/graphql';
+import { PartialListWarning, useAllPagesQuery } from '../../../lib/useAllPagesQuery';
 import { Search, Eye, Edit2, Filter } from 'lucide-react';
 import { buildColumnFilterOptions, ColumnFilter, matchesColumnFilter } from '../ColumnFilter';
 
 interface UserType {
-  id: string;
+  /** An Int on the server (AdminUserType.id). */
+  id: string | number;
   username: string;
   email: string;
   firstName: string;
@@ -14,11 +16,6 @@ interface UserType {
   isActive: boolean;
   company?: { id: number; company: string };
   location?: { id: number; location: string };
-}
-
-interface CompanyType {
-  id: number;
-  company: string;
 }
 
 interface UserActivityType {
@@ -35,7 +32,7 @@ interface UserActivityType {
 }
 
 interface EditUserType {
-  id: string;
+  id: string | number;
   firstName: string;
   lastName: string;
   email: string;
@@ -57,29 +54,45 @@ export const Users: React.FC<{onToast: (type: 'success'|'error', msg: string) =>
   const [editingUser, setEditingUser] = useState<EditUserType | null>(null);
   const [activityUserId, setActivityUserId] = useState<string | number | null>(null);
 
-  const { data: usersData, loading: usersLoading, error: usersError, refetch: refetchUsers } = useQuery<{adminUsers: UserType[]}, {
-    companyId: number | null;
-  }, any>(ADMIN_USERS_QUERY, {
+  // Every user (not the API's first page of 50).
+  const {
+    rows: userRows,
+    loading: usersLoading,
+    error: usersError,
+    pageError: usersPageError,
+    loadingMore: usersLoadingMore,
+    refetch: refetchUsers,
+  } = useAllPagesQuery<UserType, { companyId: number | null }>(ADMIN_USERS_QUERY, 'adminUsers', {
     variables: {
       companyId: null,
-    }
+    },
   });
-
-  const { data: companiesData } = useQuery<{adminCompanies: CompanyType[]}, {search: string | null}, any>(ADMIN_COMPANIES_QUERY, {
-    variables: { search: null },
-  });
-  const [getUserActivities, { data: activityData, loading: activityLoading, error: activityError }] = useLazyQuery<{
-    adminUserActivityLogs: UserActivityType[];
-  }, {
-    userId: string | number;
-  }, any>(ADMIN_ACTIVITY_LOG_QUERY, {
+  // The selected user's activity, every page of it.
+  const {
+    rows: activityRows,
+    loading: activityLoading,
+    error: activityError,
+    pageError: activityPageError,
+    loadingMore: activityLoadingMore,
+  } = useAllPagesQuery<UserActivityType, { userId: string | number }>(ADMIN_ACTIVITY_LOG_QUERY, 'adminUserActivityLogs', {
+    variables: { userId: activityUserId ?? '' },
+    skip: activityUserId === null,
     fetchPolicy: 'network-only',
   });
 
-  const [updateUser] = useMutation(ADMIN_UPDATE_USER_MUTATION);
+  const [updateUser] = useMutation<
+    { adminUpdateUser: { success?: boolean | null; message?: string | null } | null },
+    Record<string, unknown>,
+    any,
+    any
+  >(
+    ADMIN_UPDATE_USER_MUTATION,
+  );
+  // One save at a time: the ref blocks a second click before React re-renders.
+  const savingRef = useRef(false);
+  const [savingUser, setSavingUser] = useState(false);
 
-  const users = usersData?.adminUsers || [];
-  const companies = companiesData?.adminCompanies || [];
+  const users = userRows || [];
   const companyOptions = useMemo(
     () => buildColumnFilterOptions(users, (user) => user.company?.company || '-'),
     [users],
@@ -137,7 +150,7 @@ export const Users: React.FC<{onToast: (type: 'success'|'error', msg: string) =>
     });
   }, [users, normalizedSearch, nameSelections, emailSelections, usernameSelections, companySelections, locationSelections, roleSelections, statusSelections]);
   const activityUser = users.find((user) => String(user.id) === String(activityUserId));
-  const allActivityLogs = activityData?.adminUserActivityLogs || [];
+  const allActivityLogs = activityRows || [];
   const activityLogs = activityUserId === null
     ? []
     : allActivityLogs.filter((activity) => {
@@ -284,11 +297,19 @@ export const Users: React.FC<{onToast: (type: 'success'|'error', msg: string) =>
   };
 
   const handleSave = async () => {
-    if (!editingUser) return;
+    if (!editingUser || savingRef.current) return;
+    // The API takes the user id as an Int (sending the String id failed every edit).
+    const userId = Number(editingUser.id);
+    if (!Number.isInteger(userId)) {
+      onToast('error', `This user has no numeric id (${editingUser.id}); it can't be edited here.`);
+      return;
+    }
+    savingRef.current = true;
+    setSavingUser(true);
     try {
-      await updateUser({
+      const result = await updateUser({
         variables: {
-          userId: editingUser.id,
+          userId,
           firstName: editingUser.firstName,
           lastName: editingUser.lastName,
           email: editingUser.email,
@@ -297,11 +318,19 @@ export const Users: React.FC<{onToast: (type: 'success'|'error', msg: string) =>
           isActive: editingUser.isActive,
         },
       });
+      const payload = result.data?.adminUpdateUser;
+      if (payload && payload.success === false) {
+        onToast('error', payload.message || 'User could not be updated');
+        return;
+      }
       onToast('success', 'User updated');
       setEditingUser(null);
       refetchUsers();
     } catch (err: any) {
       onToast('error', err.message || 'Failed to update user');
+    } finally {
+      savingRef.current = false;
+      setSavingUser(false);
     }
   };
 
@@ -311,6 +340,13 @@ export const Users: React.FC<{onToast: (type: 'success'|'error', msg: string) =>
         <h2 className="text-2xl font-bold text-slate-800">Users</h2>
         <p className="text-slate-600">Cross-tenant user management</p>
       </div>
+      <PartialListWarning
+        error={usersPageError}
+        loadingMore={usersLoadingMore}
+        shown={users.length}
+        what="users"
+        onRetry={() => refetchUsers()}
+      />
 
       <div className="bg-white rounded-lg border border-slate-200 p-6 space-y-4">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -465,11 +501,7 @@ export const Users: React.FC<{onToast: (type: 'success'|'error', msg: string) =>
                         <div className="flex items-center justify-end gap-1 whitespace-nowrap">
                       <button
                         onClick={() => {
-                          const normalizedId = toActivityUserId(user.id);
-                          setActivityUserId(normalizedId);
-                          getUserActivities({
-                            variables: { userId: normalizedId },
-                          });
+                          setActivityUserId(toActivityUserId(user.id));
                         }}
                         title="View Activity"
                         className="p-2 hover:bg-blue-50 text-blue-600 rounded-lg"
@@ -518,6 +550,12 @@ export const Users: React.FC<{onToast: (type: 'success'|'error', msg: string) =>
               </button>
             </div>
             <div className="max-h-[calc(90vh-65px)] overflow-y-auto p-4">
+              <PartialListWarning
+                error={activityPageError}
+                loadingMore={activityLoadingMore}
+                shown={allActivityLogs.length}
+                what="activity entries"
+              />
               {activityLoading ? (
                 <div className="text-center py-6 text-slate-500">Loading activity...</div>
               ) : activityError ? (
@@ -649,11 +687,12 @@ export const Users: React.FC<{onToast: (type: 'success'|'error', msg: string) =>
                   Cancel
                 </button>
                 <button
-                  className="px-4 py-2 text-white rounded-lg"
+                  className="px-4 py-2 text-white rounded-lg disabled:opacity-50"
                   style={{ background: 'linear-gradient(135deg, #00cbd6 0%, #10b981 100%)' }}
                   onClick={handleSave}
+                  disabled={savingUser}
                 >
-                  Save
+                  {savingUser ? 'Saving…' : 'Save'}
                 </button>
               </div>
             </div>

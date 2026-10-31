@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 // Shared Apollo harnesses for commerce component scenarios.
 import { type MockedResponse } from '@apollo/client/testing';
-import { MockedProvider } from '@apollo/client/testing/react';
+import { SchemaMockedProvider } from './schema-mocks';
+import { paged } from './paging';
 import { Companies } from '../../src/components/admin/pages/Companies';
 import { Plans } from '../../src/components/admin/pages/Plans';
 import { Subscriptions } from '../../src/components/admin/pages/Subscriptions';
@@ -26,10 +27,10 @@ type HarnessProps = {
   paymentCurrency?: string;
 };
 
-const companyVariables = {
+const companyVariables = paged({
   search: null, status: null, subscriptionStatus: null, dueDateFrom: null,
   dueDateTo: null, recurringDateFrom: null, recurringDateTo: null,
-};
+});
 
 export function PlansHarness({ mocks = [], scenario }: HarnessProps) {
   const [toast, setToast] = useState('');
@@ -40,19 +41,19 @@ export function PlansHarness({ mocks = [], scenario }: HarnessProps) {
   };
   const scenarioMocks: MockedResponse[] = scenario ? [
     {
-      request: { query: ADMIN_PLANS_QUERY, variables: { includeInactive: true, search: null, active: null } },
+      request: { query: ADMIN_PLANS_QUERY, variables: paged({ includeInactive: true, search: null, active: null }) },
       maxUsageCount: scenario === 'actions' ? 3 : 1,
       ...(scenario === 'loading' ? { delay: 60_000, result: { data: { adminPlans: [] } } } :
         scenario === 'error' ? { error: new Error('plans unavailable') } :
         { result: { data: { adminPlans: scenario === 'empty' ? [] : [plan] } } }),
     },
     {
-      request: { query: ADMIN_PROMO_CODES_QUERY, variables: { includeInactive: true, search: null, active: null, planId: null } },
+      request: { query: ADMIN_PROMO_CODES_QUERY, variables: paged({ includeInactive: true, search: null, active: null, planId: null }) },
       maxUsageCount: scenario === 'actions' ? 3 : 1,
       result: { data: { adminPromoCodes: [] } },
     },
     ...(scenario === 'data' ? [{
-      request: { query: ADMIN_PLANS_QUERY, variables: { includeInactive: true, search: 'does-not-exist', active: null } },
+      request: { query: ADMIN_PLANS_QUERY, variables: paged({ includeInactive: true, search: 'does-not-exist', active: null }) },
       result: { data: { adminPlans: [plan] } },
     }] : []),
     ...(scenario === 'actions' ? [
@@ -76,12 +77,12 @@ export function PlansHarness({ mocks = [], scenario }: HarnessProps) {
     ] : []),
   ] : mocks;
   return (
-    <MockedProvider mocks={scenarioMocks}>
+    <SchemaMockedProvider mocks={scenarioMocks}>
       <>
         <Plans onToast={(type, message) => setToast(`${type}: ${message}`)} />
         <output aria-label="toast">{toast}</output>
       </>
-    </MockedProvider>
+    </SchemaMockedProvider>
   );
 }
 
@@ -120,7 +121,7 @@ export function CompaniesHarness({ mocks = [], scenario, paymentCurrency = 'USD'
     }] : []),
     ...(actions ? [
       {
-        request: { query: ADMIN_COMPANY_PAYMENT_HISTORY_QUERY, variables: { companyId: 7, dateFrom: null, dateTo: null, status: null } },
+        request: { query: ADMIN_COMPANY_PAYMENT_HISTORY_QUERY, variables: paged({ companyId: 7, dateFrom: null, dateTo: null, status: null }) },
         maxUsageCount: 3,
         result: { data: { adminCompanyPaymentHistory: [payment] } },
       },
@@ -149,12 +150,12 @@ export function CompaniesHarness({ mocks = [], scenario, paymentCurrency = 'USD'
     ] : []),
   ] : mocks;
   return (
-    <MockedProvider mocks={scenarioMocks}>
+    <SchemaMockedProvider mocks={scenarioMocks}>
       <>
         <Companies onToast={(type, message) => setToast(`${type}: ${message}`)} />
         <output aria-label="toast">{toast}</output>
       </>
-    </MockedProvider>
+    </SchemaMockedProvider>
   );
 }
 
@@ -172,23 +173,23 @@ export function SubscriptionsHarness({ mocks = [], scenario }: HarnessProps) {
   };
   const scenarioMocks: MockedResponse[] = scenario ? [
     {
-      request: { query: ADMIN_PAYMENTS_QUERY, variables: { status: null, companyId: null, dateFrom: null, dateTo: null, search: null } },
+      request: { query: ADMIN_PAYMENTS_QUERY, variables: paged({ status: null, companyId: null, dateFrom: null, dateTo: null, search: null }) },
       ...(scenario === 'loading' ? { delay: 60_000, result: { data: { adminPayments: [] } } } :
         scenario === 'error' ? { error: new Error('payments unavailable') } :
         { result: { data: { adminPayments: scenario === 'empty' ? [] : [payment] } } }),
     },
     ...(scenario === 'data' ? [{
-      request: { query: ADMIN_PAYMENTS_QUERY, variables: { status: null, companyId: null, dateFrom: null, dateTo: null, search: 'unknown' } },
+      request: { query: ADMIN_PAYMENTS_QUERY, variables: paged({ status: null, companyId: null, dateFrom: null, dateTo: null, search: 'unknown' }) },
       result: { data: { adminPayments: [payment] } },
     }] : []),
     { request: { query: ADMIN_COMPANIES_QUERY, variables: companyVariables }, result: { data: { adminCompanies: scenario === 'empty' ? [] : [{ id: 42, company: 'Orbit Works' }] } } },
   ] : mocks;
   return (
-    <MockedProvider mocks={scenarioMocks}>
+    <SchemaMockedProvider mocks={scenarioMocks}>
       <>
         <Subscriptions onToast={(type, message) => setToast(`${type}: ${message}`)} />
         <output aria-label="toast">{toast}</output>
       </>
-    </MockedProvider>
+    </SchemaMockedProvider>
   );
 }

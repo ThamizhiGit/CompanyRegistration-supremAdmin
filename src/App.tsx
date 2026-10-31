@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { useMutation } from '@apollo/client/react';
+import { useApolloClient, useMutation } from '@apollo/client/react';
 import {
   Users,
   Receipt,
@@ -49,6 +49,15 @@ export default function App() {
   const [adminUsername, setAdminUsername] = useState('');
   const [error, setError] = useState('');
   const [hide, setHide] = useState(true);
+  const client = useApolloClient();
+  // Signing out (or an expired session) must not leave the previous admin's
+  // data in the Apollo cache for whoever signs in next in this tab.
+  const endSession = (message = '') => {
+    clearAdminSession();
+    setAdminUsername('');
+    setError(message);
+    client.clearStore().catch(() => undefined);
+  };
 
   const [loginUser, { loading }] = useMutation<{
     superAdminTokenAuth: {
@@ -72,9 +81,7 @@ export default function App() {
     const expiresAt = STORAGE.getItem(ADMIN_EXPIRES_AT_KEY);
 
     if (token && storedUsername && isExpired(expiresAt)) {
-      clearAdminSession();
-      setAdminUsername('');
-      setError('Your session has expired. Please sign in again.');
+      endSession('Your session has expired. Please sign in again.');
       return;
     }
 
@@ -90,16 +97,12 @@ export default function App() {
 
     const delay = new Date(expiresAt).getTime() - Date.now();
     if (!Number.isFinite(delay) || delay <= 0) {
-      clearAdminSession();
-      setAdminUsername('');
-      setError('Your session has expired. Please sign in again.');
+      endSession('Your session has expired. Please sign in again.');
       return;
     }
 
     const timeoutId = window.setTimeout(() => {
-      clearAdminSession();
-      setAdminUsername('');
-      setError('Your session has expired. Please sign in again.');
+      endSession('Your session has expired. Please sign in again.');
     }, delay);
 
     return () => window.clearTimeout(timeoutId);
@@ -107,9 +110,7 @@ export default function App() {
 
   useEffect(() => {
     const handleExpiredSession = () => {
-      clearAdminSession();
-      setAdminUsername('');
-      setError('Your session has expired. Please sign in again.');
+      endSession('Your session has expired. Please sign in again.');
     };
 
     window.addEventListener('admin-session-expired', handleExpiredSession);
@@ -165,8 +166,7 @@ export default function App() {
   };
 
   const handleLogout = () => {
-    clearAdminSession();
-    setAdminUsername('');
+    endSession();
   };
 
   if (adminUsername) {

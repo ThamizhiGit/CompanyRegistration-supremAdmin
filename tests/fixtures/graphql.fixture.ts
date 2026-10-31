@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import {
   expect,
   test as base,
@@ -5,6 +6,7 @@ import {
   type Route,
 } from '@playwright/test';
 import { loginAsAdmin } from './auth.fixture';
+import { createSchemaValidator } from './schema-validation';
 import {
   createMockExpense,
   futureIso,
@@ -17,6 +19,13 @@ type GraphQLPayload = {
   variables?: Record<string, any>;
   query?: string;
 };
+
+// Every mocked request is checked against the backend schema first: a
+// request the real API would refuse (a wrong variable type, a missing
+// argument, 12.5 for an Int) gets the server's error and fails the test.
+const { request: checkRequest } = createSchemaValidator(
+  fs.readFileSync(new URL('./superadmin-schema.graphql', import.meta.url), 'utf8'),
+);
 
 type MockOverride =
   | Record<string, unknown>
@@ -106,6 +115,7 @@ const packagingFixtures = () => [
     name: 'Free',
     active: true,
     billingInterval: 'monthly',
+    perEmployee: false,
     pricingMode: 'fixed',
     bundleDiscountPct: 0,
     yearlyPriceCents: null,
@@ -124,6 +134,7 @@ const packagingFixtures = () => [
     name: 'Premium',
     active: true,
     billingInterval: 'monthly',
+    perEmployee: true,
     pricingMode: 'fixed',
     bundleDiscountPct: 0,
     yearlyPriceCents: null,
@@ -145,6 +156,7 @@ const packagingFixtures = () => [
     name: 'Premium Yearly',
     active: true,
     billingInterval: 'yearly',
+    perEmployee: false,
     pricingMode: 'fixed',
     bundleDiscountPct: 0,
     yearlyPriceCents: null,
@@ -176,6 +188,8 @@ function createMockGraphQLApi() {
       [12, { companyId: 12, planId: 'premium', planName: 'Premium', billingInterval: 'monthly', planVersion: 1, latestVersion: 2, updateAvailable: true, activeModules: ['employee_management'], unrestricted: false, access: 'package', __typename: 'AdminCompanyPackage' }],
     ]),
     requests: new Map<string, Array<Record<string, any>>>(),
+    /** Requests the backend schema would have refused (must stay empty). */
+    schemaErrors: [] as string[],
     overrides: new Map<string, MockOverride>(),
     plans: planFixtures(),
     companies: [
@@ -251,7 +265,8 @@ function createMockGraphQLApi() {
     ],
     users: [
       {
-        id: 'user-1',
+        // AdminUserType.id is an Int on the server.
+        id: 1,
         username: 'john',
         email: 'john@acme.com',
         firstName: 'John',
@@ -263,7 +278,7 @@ function createMockGraphQLApi() {
         __typename: 'User',
       },
       {
-        id: 'user-2',
+        id: 2,
         username: 'jane',
         email: 'jane@acme.com',
         firstName: 'Jane',
@@ -281,9 +296,9 @@ function createMockGraphQLApi() {
         actor: 'admin',
         action: 'CREATE',
         targetType: 'customuser',
-        targetId: 'user-1',
+        targetId: '1',
         companyId: 12,
-        userId: 'user-1',
+        userId: '1',
         details: '{"email":"john@acme.com","name":"John Doe"}',
         createdAt: pastIso(30),
         ipAddress: '127.0.0.1',
@@ -297,7 +312,7 @@ function createMockGraphQLApi() {
         targetType: 'expense',
         targetId: 'expense-legacy',
         companyId: 12,
-        userId: 'user-1',
+        userId: '1',
         details: '{"status":"approved"}',
         createdAt: pastIso(20),
         ipAddress: '127.0.0.1',
@@ -311,7 +326,7 @@ function createMockGraphQLApi() {
         targetType: 'expense',
         targetId: 'expense-other',
         companyId: 13,
-        userId: 'user-2',
+        userId: '2',
         details: '{"status":"removed"}',
         createdAt: pastIso(10),
         ipAddress: '127.0.0.1',
@@ -604,7 +619,7 @@ async function defaultResponse(payload: GraphQLPayload, api: MockGraphQLApi) {
       };
     case 'AdminUserActivityLogs': {
       const logs = api.activities.filter((activity) => {
-        if (variables.userId && activity.userId !== variables.userId) return false;
+        if (variables.userId && String(activity.userId) !== String(variables.userId)) return false;
         if (variables.companyId && activity.companyId !== variables.companyId) return false;
         return true;
       });
@@ -717,6 +732,12 @@ export async function installGraphQLMock(page: Page, api = createMockGraphQLApi(
 
     const operationName = payload.operationName ?? '';
     recordRequest(api, operationName, payload.variables ?? {});
+    const problems = checkRequest(payload.query ?? '', payload.variables, payload.operationName);
+    if (problems.length) {
+      api.schemaErrors.push(`${operationName || '(anonymous)'}: ${problems.join(' | ')}`);
+      await json(route, { errors: problems.map((message) => ({ message })) });
+      return;
+    }
     const override = api.overrides.get(operationName);
     const response = override
       ? typeof override === 'function'
@@ -738,6 +759,7 @@ export const test = base.extend<Fixtures>({
   mockApi: async ({ page }, use) => {
     const api = await installGraphQLMock(page);
     await use(api);
+    expect(api.schemaErrors, 'GraphQL requests the backend schema would refuse').toEqual([]);
   },
   adminPage: async ({ page, mockApi: _mockApi }, use) => {
     await loginAsAdmin(page);
