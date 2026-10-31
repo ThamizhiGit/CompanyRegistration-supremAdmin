@@ -9,6 +9,7 @@ import {
   ADMIN_SAVE_PROMO_CODE_MUTATION,
   ADMIN_SAVE_PLAN_MUTATION,
   ADMIN_PLANS_PACKAGING_QUERY,
+  ADMIN_CURRENCY_RATES_QUERY,
 } from '../../../lib/graphql';
 import {
   ApplyToSubscribersDialog,
@@ -419,6 +420,17 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
     },
     fetchPolicy: 'cache-and-network',
   });
+  // The promo editor picks its currency from the stored currencies.
+  const { data: currencyData } = useQuery<
+    { adminCurrencyRates: { rates: { code: string; name?: string | null }[] } },
+    { previewUsdCents: number },
+    any
+  >(ADMIN_CURRENCY_RATES_QUERY, { variables: { previewUsdCents: 0 }, skip: !editingPromo, fetchPolicy: 'cache-first' });
+  const promoCurrencyOptions = useMemo(() => {
+    const codes = (currencyData?.adminCurrencyRates?.rates || []).map((rate) => normalizeCurrency(rate.code)).filter(Boolean);
+    const current = editingPromo ? normalizeCurrency(editingPromo.currency || 'USD') : 'USD';
+    return Array.from(new Set(['USD', ...codes, current])).sort();
+  }, [currencyData, editingPromo]);
   const { data: promoData, loading: promoLoading, refetch: refetchPromos } = useQuery<
     { adminPromoCodes: PromoCodeType[] },
     { includeInactive: boolean; search: string | null; active: boolean | null; planId: string | null },
@@ -1540,8 +1552,10 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
                 </label>
                 <label className="block">
                   <span className="mb-1 block text-sm font-medium text-slate-700">Currency</span>
-                  <input
-                    value={editingPromo.currency}
+                  {/* A list, not a text box: typing "JPY" letter by letter converted
+                      the amount at every keystroke (10.50 USD -> J -> JP -> JPY -> ... -> 11.00). */}
+                  <select
+                    value={normalizeCurrency(editingPromo.currency || 'USD')}
                     onChange={(event) => {
                       const currency = normalizeCurrency(event.target.value);
                       // Keep the typed amount ($10 stays 10 in the new currency), not the minor units.
@@ -1552,7 +1566,14 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
                       setEditingPromo({ ...editingPromo, currency, discountValue });
                     }}
                     className="w-full rounded-lg border border-slate-300 px-3 py-2"
-                  />
+                    data-testid="promo-currency"
+                  >
+                    {promoCurrencyOptions.map((code) => (
+                      <option key={code} value={code}>
+                        {code}
+                      </option>
+                    ))}
+                  </select>
                 </label>
                 <label className="block">
                   <span className="mb-1 block text-sm font-medium text-slate-700">Starts at</span>
