@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { useQuery, useMutation } from '@apollo/client/react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useMutation } from '@apollo/client/react';
 import {
   ADMIN_PAYMENTS_QUERY,
   ADMIN_UPDATE_PAYMENT_STATUS_MUTATION,
@@ -28,6 +28,22 @@ import {
 } from 'lucide-react';
 import { buildColumnFilterOptions, ColumnFilter, matchesColumnFilter } from '../ColumnFilter';
 import { ChangePackageDialog, PackageCell, useCompanyPackages } from './PackageBuilder';
+import { PartialListWarning, useAllPagesQuery } from '../../../lib/useAllPagesQuery';
+
+/** The payload of an admin mutation: `success: false` is a refusal, not a success. */
+type ActionPayload = { success?: boolean | null; message?: string | null } | null | undefined;
+const refusal = (payload: ActionPayload, fallback: string) =>
+  payload && payload.success === false ? payload.message || fallback : null;
+
+const companyListVariables = {
+  search: null,
+  status: null,
+  subscriptionStatus: null,
+  dueDateFrom: null,
+  dueDateTo: null,
+  recurringDateFrom: null,
+  recurringDateTo: null,
+};
 
 type PaymentStatus = 'pending' | 'succeeded' | 'failed' | 'refunded' | null;
 type SortDirection = 'asc' | 'desc' | null;
@@ -201,35 +217,51 @@ export const Subscriptions: React.FC<{
     search: companySearch.trim() || null,
   };
 
-  const { data, loading, error, refetch } = useQuery<
-    { adminPayments: PaymentType[] },
-    { status: PaymentStatus; companyId: number | null; dateFrom: string | null; dateTo: string | null; search: string | null },
-    any
-  >(ADMIN_PAYMENTS_QUERY, {
+  // Every payment and company (not the API's first page of 50).
+  const {
+    rows: paymentRows,
+    loading,
+    error,
+    pageError: paymentsPageError,
+    loadingMore: paymentsLoadingMore,
+    refetch,
+  } = useAllPagesQuery<
+    PaymentType,
+    { status: PaymentStatus; companyId: number | null; dateFrom: string | null; dateTo: string | null; search: string | null }
+  >(ADMIN_PAYMENTS_QUERY, 'adminPayments', {
     variables: paymentQueryVariables,
   });
 
-  const { data: companiesData } = useQuery<
-    { adminCompanies: CompanyType[] },
-    { search: string | null; status: string | null; subscriptionStatus: string | null; dueDateFrom: string | null; dueDateTo: string | null; recurringDateFrom: string | null; recurringDateTo: string | null },
-    any
-  >(ADMIN_COMPANIES_QUERY, {
-    variables: {
-      search: null,
-      status: null,
-      subscriptionStatus: null,
-      dueDateFrom: null,
-      dueDateTo: null,
-      recurringDateFrom: null,
-      recurringDateTo: null,
-    },
-  });
+  const { rows: companyRows, refetch: refetchCompanies } = useAllPagesQuery<CompanyType, typeof companyListVariables>(
+    ADMIN_COMPANIES_QUERY,
+    'adminCompanies',
+    { variables: companyListVariables },
+  );
 
-  const [updatePaymentStatus] = useMutation(ADMIN_UPDATE_PAYMENT_STATUS_MUTATION);
-  const [updateCompanySubscription] = useMutation(ADMIN_UPDATE_COMPANY_SUBSCRIPTION_MUTATION);
-  const [suspendCompany] = useMutation(ADMIN_SUSPEND_COMPANY_MUTATION);
-  const [resumeCompany] = useMutation(ADMIN_RESUME_COMPANY_MUTATION);
-  const [manualSubscriptionAction] = useMutation(ADMIN_MANUAL_SUBSCRIPTION_MUTATION);
+  const [updatePaymentStatus] = useMutation<{ adminUpdatePaymentStatus: ActionPayload }, Record<string, unknown>, any, any>(ADMIN_UPDATE_PAYMENT_STATUS_MUTATION);
+  const [updateCompanySubscription] = useMutation<{ adminUpdateCompanySubscription: ActionPayload }, Record<string, unknown>, any, any>(
+    ADMIN_UPDATE_COMPANY_SUBSCRIPTION_MUTATION,
+  );
+  const [suspendCompany] = useMutation<{ adminSuspendCompany: ActionPayload }, Record<string, unknown>, any, any>(ADMIN_SUSPEND_COMPANY_MUTATION);
+  const [resumeCompany] = useMutation<{ adminResumeCompany: ActionPayload }, Record<string, unknown>, any, any>(ADMIN_RESUME_COMPANY_MUTATION);
+  const [manualSubscriptionAction] = useMutation<{ adminManualSubscriptionAction: ActionPayload }, Record<string, unknown>, any, any>(
+    ADMIN_MANUAL_SUBSCRIPTION_MUTATION,
+  );
+  // Admin actions: one request at a time. The ref blocks a second click before
+  // React re-renders; `savingAction` disables the buttons meanwhile.
+  const actionInFlight = useRef(false);
+  const [savingAction, setSavingAction] = useState<string | null>(null);
+  const runAction = async (name: string, action: () => Promise<void>) => {
+    if (actionInFlight.current) return;
+    actionInFlight.current = true;
+    setSavingAction(name);
+    try {
+      await action();
+    } finally {
+      actionInFlight.current = false;
+      setSavingAction(null);
+    }
+  };
 
   const openEditPayment = (payment: IndexedPaymentType) => {
     setEditingPayment(payment);
@@ -260,47 +292,32 @@ export const Subscriptions: React.FC<{
 
   const handleStatusChange = async (paymentIntentId: string, newStatus: string) => {
     setStatusOverrides((current) => ({ ...current, [paymentIntentId]: newStatus }));
+    const dropOverride = () =>
+      setStatusOverrides((current) => {
+        const next = { ...current };
+        delete next[paymentIntentId];
+        return next;
+      });
     try {
-      await updatePaymentStatus({
+      const result = await updatePaymentStatus({
         variables: {
           paymentIntentId,
           status: newStatus,
           reason: newStatus === 'failed' ? 'manual_update_failed' : null,
         },
-        refetchQueries: [
-          {
-            query: ADMIN_PAYMENTS_QUERY,
-            variables: paymentQueryVariables,
-          },
-          {
-            query: ADMIN_COMPANIES_QUERY,
-            variables: {
-              search: null,
-              status: null,
-              subscriptionStatus: null,
-              dueDateFrom: null,
-              dueDateTo: null,
-              recurringDateFrom: null,
-              recurringDateTo: null,
-            },
-          },
-        ],
-        awaitRefetchQueries: true,
       });
+      const refused = refusal(result.data?.adminUpdatePaymentStatus, 'Payment status could not be updated');
+      if (refused) {
+        dropOverride();
+        onToast('error', refused);
+        return false;
+      }
       onToast('success', 'Payment status updated');
-      await refetch(paymentQueryVariables);
-      setStatusOverrides((current) => {
-        const next = { ...current };
-        delete next[paymentIntentId];
-        return next;
-      });
+      await Promise.all([refetch(paymentQueryVariables), refetchCompanies()]);
+      dropOverride();
       return true;
     } catch (err: any) {
-      setStatusOverrides((current) => {
-        const next = { ...current };
-        delete next[paymentIntentId];
-        return next;
-      });
+      dropOverride();
       onToast('error', err.message || 'Failed to update payment status');
       return false;
     }
@@ -321,7 +338,7 @@ export const Subscriptions: React.FC<{
       return;
     }
     try {
-      await updateCompanySubscription({
+      const result = await updateCompanySubscription({
         variables: {
           input: {
             companyId: payment.companyId,
@@ -330,6 +347,11 @@ export const Subscriptions: React.FC<{
           },
         },
       });
+      const refused = refusal(result.data?.adminUpdateCompanySubscription, 'Due date could not be updated');
+      if (refused) {
+        onToast('error', refused);
+        return;
+      }
       onToast('success', 'Due date updated');
       await refetch(paymentQueryVariables);
       closeEditPayment();
@@ -357,7 +379,7 @@ export const Subscriptions: React.FC<{
       return;
     }
     try {
-      await suspendCompany({
+      const result = await suspendCompany({
         variables: {
           companyId: payment.companyId,
           scope: scope.trim(),
@@ -365,6 +387,11 @@ export const Subscriptions: React.FC<{
           suspendedUntil,
         },
       });
+      const refused = refusal(result.data?.adminSuspendCompany, 'Company could not be suspended');
+      if (refused) {
+        onToast('error', refused);
+        return;
+      }
       onToast('success', 'Company suspended');
       await refetch(paymentQueryVariables);
       closeEditPayment();
@@ -383,12 +410,17 @@ export const Subscriptions: React.FC<{
       return;
     }
     try {
-      await resumeCompany({
+      const result = await resumeCompany({
         variables: {
           companyId: payment.companyId,
           reason: reason.trim(),
         },
       });
+      const refused = refusal(result.data?.adminResumeCompany, 'Company could not be resumed');
+      if (refused) {
+        onToast('error', refused);
+        return;
+      }
       onToast('success', 'Company resumed');
       await refetch(paymentQueryVariables);
       closeEditPayment();
@@ -397,28 +429,33 @@ export const Subscriptions: React.FC<{
     }
   };
 
-  const submitStatusChange = async () => {
-    if (!editingPayment) return;
-    const updated = await handleStatusChange(editingPayment.paymentIntentId, editStatus);
-    if (updated) closeEditPayment();
-  };
+  const submitStatusChange = () =>
+    runAction('status', async () => {
+      if (!editingPayment) return;
+      const updated = await handleStatusChange(editingPayment.paymentIntentId, editStatus);
+      if (updated) closeEditPayment();
+    });
 
-  const submitDueDateChange = async () => {
-    if (!editingPayment) return;
-    await handleDueDateChange(editingPayment, editDueDate, editDueReason);
-  };
+  const submitDueDateChange = () =>
+    runAction('due', async () => {
+      if (!editingPayment) return;
+      await handleDueDateChange(editingPayment, editDueDate, editDueReason);
+    });
 
-  const submitSuspendCompany = async () => {
-    if (!editingPayment) return;
-    await handleSuspendCompany(editingPayment, suspendScope, suspendReason, suspendUntil);
-  };
+  const submitSuspendCompany = () =>
+    runAction('suspend', async () => {
+      if (!editingPayment) return;
+      await handleSuspendCompany(editingPayment, suspendScope, suspendReason, suspendUntil);
+    });
 
-  const submitResumeCompany = async () => {
-    if (!editingPayment) return;
-    await handleResumeCompany(editingPayment, resumeReason);
-  };
+  const submitResumeCompany = () =>
+    runAction('resume', async () => {
+      if (!editingPayment) return;
+      await handleResumeCompany(editingPayment, resumeReason);
+    });
 
-  const submitManualPayment = async () => {
+  const submitManualPayment = () => runAction('manual', recordManualPayment);
+  const recordManualPayment = async () => {
     if (!editingPayment) return;
     if (!editingPayment.companyId) {
       onToast('error', 'This payment is not linked to a company yet');
@@ -433,7 +470,7 @@ export const Subscriptions: React.FC<{
       return;
     }
     try {
-      await manualSubscriptionAction({
+      const result = await manualSubscriptionAction({
         variables: {
           companyId: editingPayment.companyId,
           subscriptionId: editingPayment.paymentIntentId,
@@ -452,35 +489,23 @@ export const Subscriptions: React.FC<{
           },
           reason: manualReason.trim(),
         },
-        refetchQueries: [
-          {
-            query: ADMIN_PAYMENTS_QUERY,
-            variables: paymentQueryVariables,
-          },
-          {
-            query: ADMIN_COMPANIES_QUERY,
-            variables: {
-              search: null,
-              status: null,
-              subscriptionStatus: null,
-              dueDateFrom: null,
-              dueDateTo: null,
-              recurringDateFrom: null,
-              recurringDateTo: null,
-            },
-          },
-        ],
-        awaitRefetchQueries: true,
       });
+      // The server answers success: false when it refuses (e.g. an unknown
+      // payment): that is not a recorded payment.
+      const refused = refusal(result.data?.adminManualSubscriptionAction, 'Manual payment could not be recorded');
+      if (refused) {
+        onToast('error', refused);
+        return;
+      }
       onToast('success', 'Manual payment recorded');
-      await refetch(paymentQueryVariables);
+      await Promise.all([refetch(paymentQueryVariables), refetchCompanies()]);
       closeEditPayment();
     } catch (err: any) {
       onToast('error', err.message || 'Failed to record manual payment');
     }
   };
 
-  const payments = data?.adminPayments || [];
+  const payments = paymentRows || [];
   // Current package per company on screen (the payment row shows what was paid for).
   const paymentCompanyIds = useMemo(
     () => payments.map((payment) => Number(payment.companyId)).filter((id) => Number.isFinite(id) && id > 0),
@@ -489,10 +514,10 @@ export const Subscriptions: React.FC<{
   const { packages, failedIds: packageFailedIds, refetch: refetchPackages } = useCompanyPackages(paymentCompanyIds);
   const [changingPackageFor, setChangingPackageFor] = useState<{ id: number; name: string } | null>(null);
   const companyNameById = useMemo(() => new Map(
-    (companiesData?.adminCompanies || [])
+    (companyRows || [])
       .filter((company) => company.company?.trim())
       .map((company) => [company.id, company.company.trim()] as const)
-  ), [companiesData]);
+  ), [companyRows]);
   const getGatewayLabel = (payment: PaymentType) =>
     paymentMethodLabel(payment.gatewayMethod) || paymentMethodLabel(payment.source) || '-';
   const getAmountFilterValue = (payment: PaymentType) =>
@@ -681,6 +706,13 @@ export const Subscriptions: React.FC<{
           Refresh
         </button>
       </div>
+      <PartialListWarning
+        error={paymentsPageError}
+        loadingMore={paymentsLoadingMore}
+        shown={payments.length}
+        what="payments"
+        onRetry={() => refetch()}
+      />
 
       <div className="rounded-xl border border-slate-200 bg-white p-3 space-y-3">
         {companyIdFilter !== null && (
@@ -1166,7 +1198,8 @@ export const Subscriptions: React.FC<{
                 <button
                   type="button"
                   onClick={submitStatusChange}
-                  className="rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-700"
+                  disabled={savingAction !== null}
+                  className="disabled:opacity-50 rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-700"
                 >
                   Save status
                 </button>
@@ -1196,7 +1229,8 @@ export const Subscriptions: React.FC<{
                 <button
                   type="button"
                   onClick={submitDueDateChange}
-                  className="rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-700"
+                  disabled={savingAction !== null}
+                  className="disabled:opacity-50 rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-700"
                 >
                   Save due date
                 </button>
@@ -1238,7 +1272,8 @@ export const Subscriptions: React.FC<{
                 <button
                   type="button"
                   onClick={submitSuspendCompany}
-                  className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-700"
+                  disabled={savingAction !== null}
+                  className="disabled:opacity-50 rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-700"
                 >
                   Suspend
                 </button>
@@ -1259,7 +1294,8 @@ export const Subscriptions: React.FC<{
                 <button
                   type="button"
                   onClick={submitResumeCompany}
-                  className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
+                  disabled={savingAction !== null}
+                  className="disabled:opacity-50 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
                 >
                   Resume
                 </button>
@@ -1344,10 +1380,11 @@ export const Subscriptions: React.FC<{
                   <button
                     type="button"
                     onClick={submitManualPayment}
-                    className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700"
+                    disabled={savingAction !== null}
+                    className="disabled:opacity-50 inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700"
                   >
                     <Clipboard className="h-4 w-4" />
-                    Record manual payment
+                    {savingAction === 'manual' ? 'Recording…' : 'Record manual payment'}
                   </button>
                 </div>
               </section>
