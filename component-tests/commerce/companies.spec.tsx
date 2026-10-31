@@ -2,6 +2,7 @@ import React from 'react';
 import { expect, test } from '@playwright/experimental-ct-react';
 import { type MockedResponse } from '@apollo/client/testing';
 import { CompaniesHarness } from '../fixtures/commerce-harnesses';
+import { paged } from '../fixtures/paging';
 import {
   ADMIN_COMPANIES_QUERY,
   ADMIN_COMPANY_PAYMENT_HISTORY_QUERY,
@@ -9,7 +10,7 @@ import {
   ADMIN_REQUEST_REFUND_MUTATION,
 } from '../../src/lib/graphql';
 
-const companyVariables = {
+const companyVariables = paged({
   search: null,
   status: null,
   subscriptionStatus: null,
@@ -17,7 +18,7 @@ const companyVariables = {
   dueDateTo: null,
   recurringDateFrom: null,
   recurringDateTo: null,
-};
+});
 
 const company = {
   id: 7,
@@ -73,7 +74,7 @@ const companiesMock = (items: unknown[], delay?: number): MockedResponse => ({
 const historyMock: MockedResponse = {
   request: {
     query: ADMIN_COMPANY_PAYMENT_HISTORY_QUERY,
-    variables: { companyId: 7, dateFrom: null, dateTo: null, status: null },
+    variables: paged({ companyId: 7, dateFrom: null, dateTo: null, status: null }),
   },
   result: { data: { adminCompanyPaymentHistory: [payment] } },
 };

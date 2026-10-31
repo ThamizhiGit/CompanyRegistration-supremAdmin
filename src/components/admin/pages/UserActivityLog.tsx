@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { useQuery } from '@apollo/client/react';
 import { ADMIN_ACTIVITY_LOG_QUERY } from '../../../lib/graphql';
+import { PartialListWarning, useAllPagesQuery } from '../../../lib/useAllPagesQuery';
 import { toDateTimeLocalValue, formatDateTime } from '../../../lib/admin-utils';
 import { useDebouncedValue } from '../../../lib/useDebouncedValue';
 
@@ -50,14 +50,15 @@ export const UserActivityLog: React.FC = () => {
     }
   };
 
-  const { data, loading, error } = useQuery<{adminUserActivityLogs: ActivityType[]}, {
+  // Every matching entry (not the API's first page of 50).
+  const { rows, loading, error, pageError, loadingMore, refetch } = useAllPagesQuery<ActivityType, {
     actor: string;
     action: string;
     companyId: number | null;
     userId: string | number | null;
     from: string | null;
     to: string | null;
-  }, any>(ADMIN_ACTIVITY_LOG_QUERY, {
+  }>(ADMIN_ACTIVITY_LOG_QUERY, 'adminUserActivityLogs', {
     variables: {
       actor: debouncedActor || '',
       action: debouncedAction || '',
@@ -68,7 +69,7 @@ export const UserActivityLog: React.FC = () => {
     }
   });
 
-  if (loading && !data) {
+  if (loading && !rows) {
     return <div className="text-center py-12 text-slate-500">Loading activity logs...</div>;
   }
 
@@ -76,7 +77,7 @@ export const UserActivityLog: React.FC = () => {
     return <div className="text-center py-12 text-red-600">Error: {error.message}</div>;
   }
 
-  const logs = data?.adminUserActivityLogs || [];
+  const logs = rows || [];
 
   return (
     <div className="space-y-8">
@@ -84,6 +85,7 @@ export const UserActivityLog: React.FC = () => {
         <h2 className="text-2xl font-bold text-slate-800">User Activity Log</h2>
         <p className="text-slate-600">Audit logs across user and company activity</p>
       </div>
+      <PartialListWarning error={pageError} loadingMore={loadingMore} shown={logs.length} what="entries" onRetry={() => refetch()} />
 
       <div className="bg-white rounded-lg border border-slate-200 p-6">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
