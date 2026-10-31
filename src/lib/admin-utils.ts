@@ -22,9 +22,61 @@ export const currencyDecimals = (currency: string = 'USD'): number =>
 export const amountFromCents = (cents: number, currency: string = 'USD'): number =>
   cents / 10 ** currencyDecimals(currency);
 
-/** Major amount typed by an admin -> minor units for the API. */
-export const centsFromAmount = (amount: number, currency: string = 'USD'): number =>
-  Math.round(amount * 10 ** currencyDecimals(currency));
+/** Minor units -> the text an amount input shows (1050 USD -> "10.5", 1000 JPY -> "1000"). */
+export const amountInputFromCents = (cents: number | null | undefined, currency: string = 'USD'): string =>
+  cents === null || cents === undefined ? '' : String(amountFromCents(cents, currency));
+
+/** `amount` x 10^digits, rounded half away from zero, without float error (1.005 -> 100.5 -> 101). */
+const shiftAndRound = (amount: number | string, digits: number): number => {
+  const text = typeof amount === 'number' ? String(amount) : amount.trim();
+  if (!text) return 0;
+  const value = Number(text);
+  if (!Number.isFinite(value)) return NaN;
+  // Move the decimal point in the text: 1.005 * 100 is 100.49999... in floating point.
+  const shifted = /e/i.test(text) ? value * 10 ** digits : Number(`${text}e${digits}`);
+  return Math.sign(shifted) * Math.round(Math.abs(shifted));
+};
+
+/** Major amount typed by an admin (a number or the input's text) -> minor units for the API. */
+export const centsFromAmount = (amount: number | string, currency: string = 'USD'): number =>
+  shiftAndRound(amount, currencyDecimals(currency));
+
+/** True for currencies an admin may only type whole amounts in (JPY, KRW, ... and ISK/UGX). */
+export const isWholeUnitCurrency = (currency: string = 'USD'): boolean => {
+  const code = (currency || 'USD').toUpperCase();
+  return currencyDecimals(code) === 0 || WHOLE_UNIT_CURRENCIES.has(code);
+};
+
+/**
+ * Why a typed money amount can't be saved in `currency`, or null when it can
+ * (blank is allowed -- the caller decides whether a value is required).
+ * Whole-unit currencies refuse decimals instead of silently rounding them.
+ */
+export const moneyInputError = (input: string, currency: string = 'USD', label = 'Amount'): string | null => {
+  const text = (input || '').trim();
+  if (!text) return null;
+  const value = Number(text);
+  if (!Number.isFinite(value)) return `${label} must be a number.`;
+  if (value < 0) return `${label} cannot be negative.`;
+  const code = (currency || 'USD').toUpperCase();
+  if (isWholeUnitCurrency(code) && !Number.isInteger(value)) return `${label} must be a whole number of ${code} (no decimals).`;
+  const minor = value * 10 ** currencyDecimals(code);
+  if (Math.abs(minor - Math.round(minor)) > 1e-6) return `${label} can have at most ${currencyDecimals(code)} decimals.`;
+  return null;
+};
+
+/** Why a typed value is not a whole number in [min, max], or null when it is (blank allowed). */
+export const wholeNumberError = (input: string | number, label: string, min = 0, max?: number): string | null => {
+  const text = String(input ?? '').trim();
+  if (!text) return null;
+  const value = Number(text);
+  if (!Number.isInteger(value) || value < min || (max !== undefined && value > max)) {
+    return max === undefined
+      ? `${label} must be a whole number${min > 0 ? ` of at least ${min}` : min === 0 ? ' (0 or more)' : ''}.`
+      : `${label} must be a whole number between ${min} and ${max}.`;
+  }
+  return null;
+};
 
 export const formatPrice = (cents: number | null, currency: string = 'USD'): string => {
   const code = (currency || 'USD').toUpperCase();
@@ -46,9 +98,8 @@ export const formatPrice = (cents: number | null, currency: string = 'USD'): str
 export const formatPriceOrUnavailable = (cents: number | null | undefined, currency: string = 'USD'): string =>
   cents === null || cents === undefined ? 'Pricing unavailable' : formatPrice(cents, currency);
 
-export const centsFromDollars = (dollars: number): number => {
-  return Math.round(dollars * 100);
-};
+/** Hundredths of an amount (expenses keep every currency in hundredths), without float error. */
+export const centsFromDollars = (dollars: number | string): number => shiftAndRound(dollars, 2);
 
 export const formatDate = (dateString: string | null): string => {
   if (!dateString) return '-';

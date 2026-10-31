@@ -8,6 +8,7 @@ import {
   ADMIN_USERS_QUERY,
 } from '../../src/lib/graphql';
 import { apollo, delayed } from '../fixtures/operations-test-utils';
+import { paged } from '../fixtures/paging';
 
 const users = [
   {
@@ -35,7 +36,7 @@ const users = [
 ];
 
 const userQuery = {
-  request: { query: ADMIN_USERS_QUERY, variables: { companyId: null } },
+  request: { query: ADMIN_USERS_QUERY, variables: paged({ companyId: null }) },
   result: { data: { adminUsers: users } },
 };
 const companiesQuery = {
@@ -56,7 +57,7 @@ test.describe('Users', () => {
 
     const failed = await mount(apollo(<Users onToast={() => {}} />, [
       {
-        request: { query: ADMIN_USERS_QUERY, variables: { companyId: null } },
+        request: { query: ADMIN_USERS_QUERY, variables: paged({ companyId: null }) },
         result: { errors: [{ message: 'users unavailable' }] },
       },
       companiesQuery,
@@ -65,7 +66,7 @@ test.describe('Users', () => {
     await failed.unmount();
 
     const empty = await mount(apollo(<Users onToast={() => {}} />, [{
-      request: { query: ADMIN_USERS_QUERY, variables: { companyId: null } },
+      request: { query: ADMIN_USERS_QUERY, variables: paged({ companyId: null }) },
       result: { data: { adminUsers: [] } },
     }, companiesQuery]));
     await expect(empty.getByText('No users found')).toBeVisible();
@@ -96,7 +97,7 @@ test.describe('Users', () => {
           request: {
             query: ADMIN_UPDATE_USER_MUTATION,
             variables: {
-              userId: '11',
+              userId: 11,
               firstName: 'Augusta',
               lastName: 'Lovelace',
               email: 'ada@example.com',
@@ -123,7 +124,7 @@ test.describe('Users', () => {
       userQuery,
       companiesQuery,
       {
-        request: { query: ADMIN_ACTIVITY_LOG_QUERY, variables: { userId: 11 } },
+        request: { query: ADMIN_ACTIVITY_LOG_QUERY, variables: paged({ userId: 11 }) },
         result: {
           data: {
             adminUserActivityLogs: [

@@ -116,7 +116,7 @@ export const ADMIN_SAVE_MODULE_MUTATION = gql`
     $id: String!
     $name: String!
     $description: String
-    $price: Int!
+    $price: BigInt!
     $currency: String
     $active: Boolean
     $sortOrder: Int
@@ -156,7 +156,7 @@ export const ADMIN_DELETE_MODULE_MUTATION = gql`
 export const ADMIN_SET_MODULE_OFFER_MUTATION = gql`
   mutation AdminSetModuleOffer(
     $id: String!
-    $offerPrice: Int
+    $offerPrice: BigInt
     $offerLabel: String
     $offerStartsAt: DateTime
     $offerEndsAt: DateTime
@@ -182,8 +182,8 @@ export const ADMIN_SET_MODULE_OFFER_MUTATION = gql`
 `;
 
 export const ADMIN_PLANS_QUERY = gql`
-  query AdminPlans($includeInactive: Boolean, $search: String, $active: Boolean) {
-    adminPlans(includeInactive: $includeInactive, search: $search, active: $active) {
+  query AdminPlans($includeInactive: Boolean, $search: String, $active: Boolean, $limit: Int, $offset: Int) {
+    adminPlans(includeInactive: $includeInactive, search: $search, active: $active, limit: $limit, offset: $offset) {
       id
       name
       description
@@ -279,8 +279,22 @@ export const ADMIN_DELETE_PLAN_MUTATION = gql`
 `;
 
 export const ADMIN_PROMO_CODES_QUERY = gql`
-  query AdminPromoCodes($includeInactive: Boolean, $active: Boolean, $search: String, $planId: String) {
-    adminPromoCodes(includeInactive: $includeInactive, active: $active, search: $search, planId: $planId) {
+  query AdminPromoCodes(
+    $includeInactive: Boolean
+    $active: Boolean
+    $search: String
+    $planId: String
+    $limit: Int
+    $offset: Int
+  ) {
+    adminPromoCodes(
+      includeInactive: $includeInactive
+      active: $active
+      search: $search
+      planId: $planId
+      limit: $limit
+      offset: $offset
+    ) {
       id
       code
       name
@@ -331,7 +345,7 @@ export const ADMIN_SAVE_PROMO_CODE_MUTATION = gql`
 `;
 
 export const ADMIN_DEACTIVATE_PROMO_CODE_MUTATION = gql`
-  mutation AdminDeactivatePromoCode($id: ID!, $reason: String) {
+  mutation AdminDeactivatePromoCode($id: ID!, $reason: String!) {
     adminDeactivatePromoCode(id: $id, reason: $reason) {
       success
       message
@@ -357,7 +371,7 @@ export const ADMIN_UPDATE_PAYMENT_STATUS_MUTATION = gql`
 `;
 
 export const ADMIN_REQUEST_REFUND_MUTATION = gql`
-  mutation AdminRequestRefund($paymentIntentId: String!, $amount: Int, $reason: String) {
+  mutation AdminRequestRefund($paymentIntentId: String!, $amount: BigInt, $reason: String!) {
     adminRequestRefund(paymentIntentId: $paymentIntentId, amount: $amount, reason: $reason) {
       success
       message
@@ -403,7 +417,17 @@ export const ADMIN_MANUAL_SUBSCRIPTION_MUTATION = gql`
 `;
 
 export const ADMIN_COMPANIES_QUERY = gql`
-  query AdminCompanies($search: String, $status: String, $subscriptionStatus: String, $dueDateFrom: DateTime, $dueDateTo: DateTime, $recurringDateFrom: DateTime, $recurringDateTo: DateTime) {
+  query AdminCompanies(
+    $search: String
+    $status: String
+    $subscriptionStatus: String
+    $dueDateFrom: DateTime
+    $dueDateTo: DateTime
+    $recurringDateFrom: DateTime
+    $recurringDateTo: DateTime
+    $limit: Int
+    $offset: Int
+  ) {
     adminCompanies(
       search: $search
       status: $status
@@ -412,6 +436,8 @@ export const ADMIN_COMPANIES_QUERY = gql`
       dueDateTo: $dueDateTo
       recurringDateFrom: $recurringDateFrom
       recurringDateTo: $recurringDateTo
+      limit: $limit
+      offset: $offset
     ) {
       id
       company
@@ -434,6 +460,7 @@ export const ADMIN_COMPANIES_QUERY = gql`
       trialEndsAt
       nextBillingDate
       nextBillingAmountCents
+      currency
       subscriptionDueDate
       subscriptionRecurringDate
       paymentHistoryCount
@@ -465,8 +492,22 @@ export const ADMIN_COMPANIES_QUERY = gql`
 `;
 
 export const ADMIN_COMPANY_PAYMENT_HISTORY_QUERY = gql`
-  query AdminCompanyPaymentHistory($companyId: Int!, $dateFrom: DateTime, $dateTo: DateTime, $status: String) {
-    adminCompanyPaymentHistory(companyId: $companyId, dateFrom: $dateFrom, dateTo: $dateTo, status: $status) {
+  query AdminCompanyPaymentHistory(
+    $companyId: Int!
+    $dateFrom: DateTime
+    $dateTo: DateTime
+    $status: String
+    $limit: Int
+    $offset: Int
+  ) {
+    adminCompanyPaymentHistory(
+      companyId: $companyId
+      dateFrom: $dateFrom
+      dateTo: $dateTo
+      status: $status
+      limit: $limit
+      offset: $offset
+    ) {
       paymentIntentId
       email
       planId
@@ -503,8 +544,24 @@ export const ADMIN_COMPANY_PAYMENT_HISTORY_QUERY = gql`
 `;
 
 export const ADMIN_PAYMENTS_QUERY = gql`
-  query AdminPayments($status: String, $companyId: Int, $dateFrom: DateTime, $dateTo: DateTime, $search: String) {
-    adminPayments(status: $status, companyId: $companyId, dateFrom: $dateFrom, dateTo: $dateTo, search: $search) {
+  query AdminPayments(
+    $status: String
+    $companyId: Int
+    $dateFrom: DateTime
+    $dateTo: DateTime
+    $search: String
+    $limit: Int
+    $offset: Int
+  ) {
+    adminPayments(
+      status: $status
+      companyId: $companyId
+      dateFrom: $dateFrom
+      dateTo: $dateTo
+      search: $search
+      limit: $limit
+      offset: $offset
+    ) {
       invoiceNumber
       receiptNumber
       paymentIntentId
@@ -621,8 +678,8 @@ export const ADMIN_ASSIGN_COMPANY_PLAN_MUTATION = gql`
 `;
 
 export const ADMIN_USERS_QUERY = gql`
-  query AdminUsers($companyId: Int, $search: String) {
-    adminUsers(companyId: $companyId, search: $search) {
+  query AdminUsers($companyId: Int, $search: String, $limit: Int, $offset: Int) {
+    adminUsers(companyId: $companyId, search: $search, limit: $limit, offset: $offset) {
       id
       username
       email
@@ -644,7 +701,7 @@ export const ADMIN_USERS_QUERY = gql`
 
 export const ADMIN_UPDATE_USER_MUTATION = gql`
   mutation AdminUpdateUser(
-    $userId: String!
+    $userId: Int!
     $firstName: String
     $lastName: String
     $email: String
@@ -724,8 +781,19 @@ export const ADMIN_ACTIVITY_LOG_QUERY = gql`
     $companyId: Int
     $userId: ID
     $actor: String
+    $limit: Int
+    $offset: Int
   ) {
-    adminUserActivityLogs(from: $from, to: $to, action: $action, companyId: $companyId, userId: $userId, actor: $actor) {
+    adminUserActivityLogs(
+      from: $from
+      to: $to
+      action: $action
+      companyId: $companyId
+      userId: $userId
+      actor: $actor
+      limit: $limit
+      offset: $offset
+    ) {
       id
       actor
       action
@@ -915,6 +983,7 @@ export const ADMIN_PLANS_PACKAGING_QUERY = gql`
       name
       active
       billingInterval
+      perEmployee
       pricingMode
       bundleDiscountPct
       yearlyPriceCents
@@ -967,6 +1036,7 @@ export const ADMIN_APPLY_PLAN_TO_SUBSCRIBERS_MUTATION = gql`
     $onlyOutdated: Boolean
     $includeUnrestricted: Boolean
     $reason: String
+    $expectedVersion: Int
   ) {
     adminApplyPlanToSubscribers(
       planId: $planId
@@ -974,11 +1044,13 @@ export const ADMIN_APPLY_PLAN_TO_SUBSCRIBERS_MUTATION = gql`
       onlyOutdated: $onlyOutdated
       includeUnrestricted: $includeUnrestricted
       reason: $reason
+      expectedVersion: $expectedVersion
     ) {
       success
       message
       dryRun
       appliedCount
+      planVersion
       companies {
         companyId
         companyName

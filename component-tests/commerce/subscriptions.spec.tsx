@@ -2,13 +2,14 @@ import React from 'react';
 import { expect, test } from '@playwright/experimental-ct-react';
 import { type MockedResponse } from '@apollo/client/testing';
 import { SubscriptionsHarness } from '../fixtures/commerce-harnesses';
+import { paged } from '../fixtures/paging';
 import {
   ADMIN_COMPANIES_QUERY,
   ADMIN_PAYMENTS_QUERY,
 } from '../../src/lib/graphql';
 
-const paymentVariables = { status: null, companyId: null, dateFrom: null, dateTo: null, search: null };
-const companyVariables = {
+const paymentVariables = paged({ status: null, companyId: null, dateFrom: null, dateTo: null, search: null });
+const companyVariables = paged({
   search: null,
   status: null,
   subscriptionStatus: null,
@@ -16,7 +17,7 @@ const companyVariables = {
   dueDateTo: null,
   recurringDateFrom: null,
   recurringDateTo: null,
-};
+});
 
 const payment = {
   paymentIntentId: 'pi_42',

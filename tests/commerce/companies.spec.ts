@@ -137,3 +137,57 @@ test('the package dialog reuses the module and package lists instead of download
   expect(countOf('AdminPackageModules')).toBe(modules);
   expect(countOf('AdminPlansPackaging')).toBe(plans);
 });
+
+test('the package dialog shows the price and does not pre-select a package for a company without one', async ({
+  adminPage: page,
+  mockApi,
+}) => {
+  mockApi.companies.push({ ...mockApi.companies[0], id: 13, company: 'Legacy Co', planId: null as any, planName: null as any });
+  await page.getByRole('button', { name: 'Companies' }).click();
+  await page.getByTestId('change-package-13').click();
+  const dialog = page.getByTestId('change-package-dialog');
+  // No silent "first package": the admin has to pick one.
+  await expect(dialog.getByTestId('change-package-plan')).toHaveValue('');
+  await expect(dialog.getByTestId('change-package-diff-pending')).toContainText('Choose a package');
+  await dialog.getByTestId('change-package-reason').fill('Move to a package');
+  await expect(dialog.getByTestId('change-package-submit')).toBeDisabled();
+
+  await dialog.getByTestId('change-package-plan').selectOption('premium');
+  await expect(dialog.getByTestId('change-package-price')).toHaveText('$12.00 / month per employee');
+  await dialog.getByTestId('change-package-plan').selectOption('premium_yearly');
+  await expect(dialog.getByTestId('change-package-price')).toHaveText('$120.00 / year');
+  await expect(dialog.getByTestId('change-package-submit')).toBeEnabled();
+});
+
+test('the package dialog waits for the module list before it previews or submits a change', async ({
+  adminPage: page,
+  mockApi,
+}) => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  mockApi.setOverride('AdminPackageModules', async (_payload, api) => {
+    await gate;
+    return { data: { adminModules: api.modules } };
+  });
+  await page.getByRole('button', { name: 'Companies' }).click();
+  await page.getByTestId('change-package-12').click();
+  const dialog = page.getByTestId('change-package-dialog');
+  await dialog.getByTestId('change-package-plan').selectOption('premium_yearly');
+  await dialog.getByTestId('change-package-reason').fill('Customer upgraded');
+  await expect(dialog.getByTestId('change-package-diff-pending')).toHaveText('Loading the change preview…');
+  await expect(dialog.getByTestId('change-package-submit')).toBeDisabled();
+  release();
+  await expect(dialog.getByTestId('change-package-losses')).toContainText('Core HR & Employee Management');
+  await expect(dialog.getByTestId('change-package-submit')).toBeEnabled();
+});
+
+test('the next billing amount is shown in the company billing currency', async ({ adminPage: page, mockApi }) => {
+  Object.assign(mockApi.companies[0], { currency: 'EUR', nextBillingAmountCents: 50400, latestPaymentCurrency: 'USD' });
+  await page.getByRole('button', { name: 'Companies' }).click();
+  await page.locator('[title="View Company"]').click();
+  await page.getByRole('button', { name: 'Subscription', exact: true }).click();
+  const row = page.locator('dl > div').filter({ hasText: 'Next billing amount' });
+  await expect(row.locator('dd')).toHaveText('€504.00');
+});
