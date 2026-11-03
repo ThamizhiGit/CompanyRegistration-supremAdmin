@@ -17,6 +17,7 @@ import {
   moneyInputError,
   wholeNumberError,
 } from '../../../lib/admin-utils';
+import { isAbortError, startSessionLoop } from '../../../lib/useAllPagesQuery';
 
 /**
  * Packages (dynamic packages): the admin sets the package price; modules carry
@@ -54,6 +55,8 @@ export interface PackageDraft {
   modules: PackageModuleSelection[];
   /** Editing a package that has no modules today (an old plan, Free): it may be saved without. */
   allowEmptyModules?: boolean;
+  /** The price is per employee (the plan form's checkbox): shown in the price preview. */
+  perEmployee?: boolean;
 }
 
 export const yearlyModeOf = (draft: Pick<PackageDraft, 'yearlyMode' | 'yearlyPriceOverride'>): YearlyPriceMode =>
@@ -320,9 +323,11 @@ const adminListEntry = (client: object, query: any, field: string): AdminListEnt
   return entry;
 };
 
-const loadAllAdminPages = async (client: any, query: any, field: string): Promise<unknown[]> => {
+const loadAllAdminPages = async (client: any, query: any, field: string, signal?: AbortSignal): Promise<unknown[]> => {
   const all: unknown[] = [];
   for (let pageIndex = 0; ; pageIndex += 1) {
+    // Signed out meanwhile: stop (the next admin must not get this list).
+    if (signal?.aborted) throw new DOMException('The request was cancelled.', 'AbortError');
     if (pageIndex >= ADMIN_MAX_PAGES) {
       throw new Error(`The list is longer than ${ADMIN_MAX_PAGES * ADMIN_PAGE_LIMIT} rows and could not be loaded in full.`);
     }
@@ -334,7 +339,9 @@ const loadAllAdminPages = async (client: any, query: any, field: string): Promis
       // with no data: that read as "no more rows" and showed an empty or cut
       // list. A failed page is an error.
       errorPolicy: 'none',
+      context: signal ? { fetchOptions: { signal } } : undefined,
     });
+    if (signal?.aborted) throw new DOMException('The request was cancelled.', 'AbortError');
     if (result.error) throw result.error;
     const page = result.data?.[field];
     if (!Array.isArray(page)) throw new Error(`The server returned no ${field} list.`);
@@ -378,14 +385,21 @@ export const useAllAdminPages = <T,>(query: any, field: string) => {
     setLoading(true);
     // One download at a time per list; a refetch waits for it and starts a new one.
     const previous = entry.inFlight;
+    // The download is shared by every component showing this list, so it is
+    // not aborted on unmount -- only on sign-out (abortAdminPageLoops).
     const request = (async () => {
       if (previous && version === 0) return previous;
       if (previous) await previous.catch(() => undefined);
-      const all = await loadAllAdminPages(client, query, field);
-      entry.rows = all;
-      entry.loadedAt = Date.now();
-      entry.listeners.forEach((listener) => listener(all));
-      return all;
+      const loop = startSessionLoop();
+      try {
+        const all = await loadAllAdminPages(client, query, field, loop.controller.signal);
+        entry.rows = all;
+        entry.loadedAt = Date.now();
+        entry.listeners.forEach((listener) => listener(all));
+        return all;
+      } finally {
+        loop.release();
+      }
     })();
     entry.inFlight = request;
     request
@@ -395,7 +409,7 @@ export const useAllAdminPages = <T,>(query: any, field: string) => {
         setError(null);
       })
       .catch((err) => {
-        if (!cancelled) setError(err instanceof Error ? err : new Error(String(err)));
+        if (!cancelled && !isAbortError(err)) setError(err instanceof Error ? err : new Error(String(err)));
       })
       .finally(() => {
         if (entry.inFlight === request) entry.inFlight = undefined;
@@ -575,6 +589,7 @@ export const PackageBuilder: React.FC<{
   const tree = useMemo(() => buildModuleTree(options), [options]);
   const covered = useMemo(() => expandModuleIds(value.modules.map((m) => m.moduleId), options), [value.modules, options]);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const perEmployeeSuffix = value.perEmployee ? ' per employee' : '';
 
   const setCovered = (next: Set<string>) =>
     onChange({ ...value, modules: normalizeModuleIds(next, options).map((moduleId) => ({ moduleId, priceOverride: '' })) });
@@ -729,13 +744,13 @@ export const PackageBuilder: React.FC<{
         <span className="mb-2 block text-[11px] font-black uppercase tracking-wide text-slate-500">Customers will pay</span>
         <div className="flex flex-wrap gap-4 text-sm font-bold text-slate-900">
           {value.billingInterval !== 'yearly' ? (
-            <span data-testid="preview-monthly">{formatPrice(value.basePriceCents, currency)} / month</span>
+            <span data-testid="preview-monthly">{formatPrice(value.basePriceCents, currency)} / month{perEmployeeSuffix}</span>
           ) : (
-            <span data-testid="preview-yearly">{formatPrice(value.basePriceCents, currency)} / year</span>
+            <span data-testid="preview-yearly">{formatPrice(value.basePriceCents, currency)} / year{perEmployeeSuffix}</span>
           )}
           {yearly !== null ? (
             <span data-testid="preview-yearly">
-              {formatPrice(yearly, currency)} / year
+              {formatPrice(yearly, currency)} / year{perEmployeeSuffix}
               {monthlyEquivalent > yearly && monthlyEquivalent > 0 ? (
                 <span className="ml-2 rounded bg-emerald-50 px-1.5 py-0.5 text-xs text-emerald-700">
                   save {Math.round(((monthlyEquivalent - yearly) / monthlyEquivalent) * 100)}%
@@ -1416,10 +1431,11 @@ export const packagePriceLines = (pricing: PlanPackagingInfo['pricing'], fallbac
   }
   const lines: string[] = [];
   if (pricing.monthlyPriceCents !== null && pricing.monthlyPriceCents !== undefined) {
-    lines.push(`${formatPrice(pricing.monthlyPriceCents, pricing.currency)} / mo`);
+    lines.push(`${formatPrice(pricing.monthlyPriceCents, pricing.currency || currency)} / mo`);
   }
   if (pricing.yearlyPriceCents !== null && pricing.yearlyPriceCents !== undefined) {
-    lines.push(`${formatPrice(pricing.yearlyPriceCents, pricing.currency)} / yr${pricing.savingsPct ? ` (save ${pricing.savingsPct}%)` : ''}`);
+    // A pricing row without its currency is in the package's currency (never USD by default).
+    lines.push(`${formatPrice(pricing.yearlyPriceCents, pricing.currency || currency)} / yr${pricing.savingsPct ? ` (save ${pricing.savingsPct}%)` : ''}`);
   }
   return lines.length ? lines : ['Pricing unavailable'];
 };

@@ -101,6 +101,15 @@ export const Currencies: React.FC<{ onToast: (type: 'success' | 'error', msg: st
       `${code} still has a placeholder rate (1 USD = ${ratePerUsd} ${code}) that has not been checked. ` +
         'Customers will be charged at this rate. Switch it on anyway? (Refresh or type the rate first to be safe.)',
     );
+  // A rate typed by hand while the currency was off may be long out of date.
+  const confirmUncheckedRate = (code: string, ratePerUsd: string, source: string) =>
+    source === 'manual'
+      ? window.confirm(
+          `${code}'s rate (1 USD = ${ratePerUsd} ${code}) was typed by hand and may be out of date. ` +
+            'Customers will be charged at this rate. Switch it on anyway?',
+        )
+      : confirmPlaceholderRate(code, ratePerUsd);
+  const needsRateCheck = (source: string) => source === 'seed' || source === 'manual';
 
   const handleRefresh = async () => {
     try {
@@ -129,8 +138,8 @@ export const Currencies: React.FC<{ onToast: (type: 'success' | 'error', msg: st
     ) {
       return;
     }
-    const placeholder = !row.active && row.source === 'seed';
-    if (placeholder && !confirmPlaceholderRate(row.code, row.ratePerUsd)) return;
+    const placeholder = !row.active && needsRateCheck(row.source);
+    if (placeholder && !confirmUncheckedRate(row.code, row.ratePerUsd, row.source)) return;
     try {
       // The server refuses a placeholder rate unless the admin confirmed it.
       // Switching off is confirmed above too (the server asks when companies are billed in it).
@@ -182,6 +191,13 @@ export const Currencies: React.FC<{ onToast: (type: 'success' | 'error', msg: st
       if (!confirmedChange) return;
       confirmed = true;
     }
+    // A new currency switched on: there is no current rate to compare with,
+    // so the admin checks the typed one (3.0 for 300 would price everything
+    // in it 100 times too low). The server asks for this too.
+    if (editing.isNew && editing.active) {
+      if (!window.confirm(`Check the rate before ${code} is switched on:\n\n1 USD = ${editing.ratePerUsd.trim()} ${code}\n\nAdd it?`)) return;
+      confirmed = true;
+    }
     // Switched off from the edit form: same question as the On/Off button.
     if (!editing.isNew && !editing.active && editing.originalActive) {
       if (
@@ -195,8 +211,8 @@ export const Currencies: React.FC<{ onToast: (type: 'success' | 'error', msg: st
       confirmed = true;
     }
     // Switching on a currency whose (unchanged) rate is still a placeholder.
-    if (!editing.isNew && editing.active && !editing.originalActive && editing.source === 'seed' && !rateChanged) {
-      if (!confirmPlaceholderRate(code, editing.originalRate)) return;
+    if (!editing.isNew && editing.active && !editing.originalActive && needsRateCheck(editing.source) && !rateChanged) {
+      if (!confirmUncheckedRate(code, editing.originalRate, editing.source)) return;
       confirmed = true;
     }
     try {

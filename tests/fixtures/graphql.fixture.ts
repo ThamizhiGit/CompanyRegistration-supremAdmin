@@ -33,6 +33,33 @@ type MockOverride =
 
 export type MockGraphQLApi = ReturnType<typeof createMockGraphQLApi>;
 
+/** One page of a `{ totalCount, items, facets }` feed, as the backend answers it. */
+const feedPage = (items: any[], filter: Record<string, any> | undefined, typename: string, facets: any[] = []) => {
+  const limit = Number(filter?.limit ?? 50);
+  const offset = Number(filter?.offset ?? 0);
+  return {
+    totalCount: items.length,
+    items: items.slice(offset, offset + limit),
+    facets: facets.map((facet) => ({ label: null, ...facet, __typename: 'AdminFacetType' })),
+    __typename: typename,
+  };
+};
+
+const countBy = (items: any[], field: string, read: (item: any) => unknown) => {
+  const counts = new Map<string, number>();
+  items.forEach((item) => {
+    const value = read(item);
+    const key = value === null || value === undefined ? '' : String(value);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  });
+  return [...counts.entries()].map(([value, count]) => ({ field, value: value || null, count }));
+};
+
+const matches = (text: unknown[], search: unknown) => {
+  const needle = String(search ?? '').trim().toLowerCase();
+  return !needle || text.filter(Boolean).join(' ').toLowerCase().includes(needle);
+};
+
 const json = (route: Route, data: Record<string, unknown>) =>
   route.fulfill({
     status: 200,
@@ -452,11 +479,20 @@ async function defaultResponse(payload: GraphQLPayload, api: MockGraphQLApi) {
         totalUsers: 7,
         totalPayments: 4,
         grossRevenue: 120000,
+        refundedRevenue: 0,
         totalExpenses: api.legacyRevenue ? null : 500,
         netRevenue: api.legacyRevenue ? null : 119500,
+        approximate: false,
+        unconvertedCurrencies: [],
+        revenueByCurrency: [
+          { currency: 'USD', gross: 120000, refunded: 0, net: 120000, __typename: 'AdminCurrencyTotalType' },
+        ],
+        expensesByCurrency: api.legacyRevenue
+          ? []
+          : [{ currency: 'USD', gross: 500, refunded: 0, net: 500, __typename: 'AdminCurrencyTotalType' }],
         byStatus: [
-          { status: 'succeeded', count: 2, amount: 90000, __typename: 'PaymentStatusSummary' },
-          { status: 'pending', count: 1, amount: 2000, __typename: 'PaymentStatusSummary' },
+          { status: 'succeeded', currency: 'USD', count: 2, amount: 90000, __typename: 'PaymentStatusSummary' },
+          { status: 'pending', currency: 'USD', count: 1, amount: 2000, __typename: 'PaymentStatusSummary' },
         ],
         expenseByCategory: [],
         expenseByVendor: [],
@@ -572,10 +608,38 @@ async function defaultResponse(payload: GraphQLPayload, api: MockGraphQLApi) {
     }
     case 'AdminCompanies':
       return { data: { adminCompanies: api.companies } };
+    case 'AdminCompaniesFeed': {
+      const filter = variables.filter ?? {};
+      const items = api.companies.filter((company: any) =>
+        matches([company.company, company.id, company.latestPaymentEmail, company.latestPaymentIntentId, company.latestPaymentGatewayMethod], filter.search),
+      );
+      return {
+        data: {
+          adminCompaniesFeed: feedPage(items, filter, 'AdminCompaniesFeedType', [
+            ...countBy(items, 'subscriptionStatus', (company) => company.subscriptionStatus),
+            ...countBy(items, 'planId', (company) => company.planId),
+          ]),
+        },
+      };
+    }
     case 'AdminCompanyPaymentHistory':
       return { data: { adminCompanyPaymentHistory: api.payments } };
     case 'AdminPayments':
       return { data: { adminPayments: api.payments } };
+    case 'AdminPaymentsFeed': {
+      const filter = variables.filter ?? {};
+      const statuses: string[] = filter.status ?? [];
+      const items = api.payments.filter((payment: any) =>
+        matches([payment.companyName, payment.email, payment.paymentIntentId, payment.invoiceNumber], filter.search)
+        && (!filter.companyId || payment.companyId === filter.companyId)
+        && (!statuses.length || statuses.includes(payment.status)),
+      );
+      return {
+        data: {
+          adminPaymentsFeed: feedPage(items, filter, 'AdminPaymentsFeedType', countBy(api.payments, 'status', (payment) => payment.status)),
+        },
+      };
+    }
     case 'AdminAssignCompanyPlan': {
       const company = api.companies.find((item) => item.id === variables.companyId);
       if (company) {
@@ -606,6 +670,19 @@ async function defaultResponse(payload: GraphQLPayload, api: MockGraphQLApi) {
       };
     case 'AdminUsers':
       return { data: { adminUsers: api.users } };
+    case 'AdminUsersFeed': {
+      const filter = variables.filter ?? {};
+      const companyIds: number[] = filter.companyId ?? [];
+      const items = api.users.filter((user: any) =>
+        matches([user.username, user.email, user.firstName, user.lastName, user.company?.company], filter.search)
+        && (!companyIds.length || companyIds.includes(user.company?.id)),
+      );
+      return {
+        data: {
+          adminUsersFeed: feedPage(items, filter, 'AdminUsersFeedType', countBy(api.users, 'companyId', (user) => user.company?.id)),
+        },
+      };
+    }
     case 'AdminUpdateUser':
       return {
         data: {
@@ -624,6 +701,15 @@ async function defaultResponse(payload: GraphQLPayload, api: MockGraphQLApi) {
         return true;
       });
       return { data: { adminUserActivityLogs: logs } };
+    }
+    case 'AdminUserActivityLogsFeed': {
+      const filter = variables.filter ?? {};
+      const logs = api.activities.filter((activity: any) => {
+        if (filter.userId && String(activity.userId) !== String(filter.userId)) return false;
+        if (filter.companyId && activity.companyId !== filter.companyId) return false;
+        return matches([activity.actor], filter.actor) && matches([activity.action], filter.action);
+      });
+      return { data: { adminUserActivityLogsFeed: { ...feedPage(logs, filter, 'AdminActivityLogsFeedType'), nextCursor: null } } };
     }
     case 'AdminInfrastructure':
       return {

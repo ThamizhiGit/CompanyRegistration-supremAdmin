@@ -50,11 +50,12 @@ test.describe('GraphQL documents match the backend schema', () => {
     expect(check(refund, { paymentIntentId: 'pi_1', amount: 500, reason: 'Duplicate' })).toEqual([]);
     expect(check(refund, { paymentIntentId: 'pi_1', amount: 500 })).not.toEqual([]);
     expect(check('mutation { adminRequestRefund(paymentIntentId: "pi_1") { success } }')).not.toEqual([]);
-    // A decimal percentage for an Int field is a GraphQL error on the server.
+    // A decimal for an Int field (a redemption limit) is a GraphQL error on the server.
+    // (discountValue is BigInt: a fixed amount in cents can pass Int32, #124.)
     const promo = documents.ADMIN_SAVE_PROMO_CODE_MUTATION;
     const input = { code: 'SAVE', discountType: 'percent', discountValue: 12, appliesToPlanIds: ['premium'] };
     expect(check(promo, { input })).toEqual([]);
-    expect(check(promo, { input: { ...input, discountValue: 12.5 } }).join(' ')).toContain('non-integer');
+    expect(check(promo, { input: { ...input, maxRedemptions: 2.5 } }).join(' ')).toContain('non-integer');
     // User ids are Int on the server.
     expect(check(documents.ADMIN_UPDATE_USER_MUTATION, { userId: 'user-1' })).not.toEqual([]);
     expect(check(documents.ADMIN_UPDATE_USER_MUTATION, { userId: 11 })).toEqual([]);
