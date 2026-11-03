@@ -1,5 +1,14 @@
 import { gql } from '@apollo/client';
 
+// Ends the session on the server too (its token stops working at once).
+export const SUPER_ADMIN_LOGOUT_MUTATION = gql`
+  mutation SuperAdminLogout {
+    superAdminLogout {
+      success
+    }
+  }
+`;
+
 export const TOKEN_AUTH_MUTATION = gql`
   mutation SuperAdminLogin($username: String!, $password: String!) {
     superAdminTokenAuth(username: $username, password: $password) {
@@ -25,10 +34,26 @@ export const ADMIN_REVENUE_SUMMARY_QUERY = gql`
       totalUsers
       totalPayments
       grossRevenue
+      refundedRevenue
       totalExpenses
       netRevenue
+      approximate
+      unconvertedCurrencies
+      revenueByCurrency {
+        currency
+        gross
+        refunded
+        net
+      }
+      expensesByCurrency {
+        currency
+        gross
+        refunded
+        net
+      }
       byStatus {
         status
+        currency
         count
         amount
       }
@@ -371,8 +396,8 @@ export const ADMIN_UPDATE_PAYMENT_STATUS_MUTATION = gql`
 `;
 
 export const ADMIN_REQUEST_REFUND_MUTATION = gql`
-  mutation AdminRequestRefund($paymentIntentId: String!, $amount: BigInt, $reason: String!) {
-    adminRequestRefund(paymentIntentId: $paymentIntentId, amount: $amount, reason: $reason) {
+  mutation AdminRequestRefund($paymentIntentId: String!, $amount: BigInt, $reason: String!, $mode: String) {
+    adminRequestRefund(paymentIntentId: $paymentIntentId, amount: $amount, reason: $reason, mode: $mode) {
       success
       message
       payment {
@@ -491,6 +516,179 @@ export const ADMIN_COMPANIES_QUERY = gql`
   }
 `;
 
+// Paged feeds (one page + totalCount + facets): the list pages read these.
+export const ADMIN_COMPANIES_FEED_QUERY = gql`
+  query AdminCompaniesFeed($filter: AdminCompanyFeedFilterInput, $sort: AdminFeedSortInput) {
+    adminCompaniesFeed(filter: $filter, sort: $sort) {
+      totalCount
+      facets {
+        field
+        value
+        label
+        count
+      }
+      items {
+        id
+        company
+        planId
+        planName
+        employeeCount
+        createdAt
+        isMultiLocationEnabled
+        subscriptionStatus
+        isActive
+        isSuspended
+        suspensionScope
+        suspensionReason
+        suspendedFrom
+        suspendedUntil
+        previousSubscriptionStatus
+        previousIsActive
+        resumedAt
+        resumeReason
+        trialEndsAt
+        nextBillingDate
+        nextBillingAmountCents
+        currency
+        subscriptionDueDate
+        subscriptionRecurringDate
+        paymentHistoryCount
+        latestPaymentStatus
+        latestPaymentIntentId
+        latestPaymentEmail
+        latestPaymentAmount
+        latestPaymentPlanId
+        latestPaymentPlanName
+        latestPaymentEmployeeCountSnapshot
+        latestPaymentFinalAmountCents
+        latestPaymentCurrency
+        latestPaymentSource
+        latestPaymentDeniedReason
+        latestPaymentGatewayMethod
+        latestPaymentGatewayRefReceiverMedium
+        latestPaymentGatewayRefSenderMedium
+        latestPaymentGatewayStatus
+        latestPaymentCreatedAt
+        paymentSummary {
+          latestStatus
+          lastPaymentAt
+          nextDueDate
+          totalPaid
+          outstanding
+        }
+      }
+    }
+  }
+`;
+
+export const ADMIN_PAYMENTS_FEED_QUERY = gql`
+  query AdminPaymentsFeed($filter: AdminPaymentFeedFilterInput, $sort: AdminFeedSortInput) {
+    adminPaymentsFeed(filter: $filter, sort: $sort) {
+      totalCount
+      facets {
+        field
+        value
+        label
+        count
+      }
+      items {
+        invoiceNumber
+        receiptNumber
+        paymentIntentId
+        email
+        planId
+        planName
+        employeeCountSnapshot
+        originalAmountCents
+        discountAmountCents
+        finalAmountCents
+        billingInterval
+        promoCode
+        promoLabel
+        trialStartsAt
+        trialEndsAt
+        nextBillingDate
+        amount
+        currency
+        status
+        companyId
+        companyName
+        source
+        deniedReason
+        createdAt
+        updatedAt
+        dueDate
+        recurringDate
+        gatewayMethod
+        gatewayRefReceiverMedium
+        gatewayRefSenderMedium
+        gatewayPayload
+        paymentGatewayStatus
+      }
+    }
+  }
+`;
+
+export const ADMIN_USERS_FEED_QUERY = gql`
+  query AdminUsersFeed($filter: AdminUserFeedFilterInput, $sort: AdminFeedSortInput) {
+    adminUsersFeed(filter: $filter, sort: $sort) {
+      totalCount
+      facets {
+        field
+        value
+        label
+        count
+      }
+      items {
+        id
+        username
+        email
+        firstName
+        lastName
+        isCompanyAdmin
+        isActive
+        company {
+          id
+          company
+        }
+        location {
+          id
+          location
+        }
+      }
+    }
+  }
+`;
+
+export const ADMIN_USER_ACTIVITY_LOGS_FEED_QUERY = gql`
+  query AdminUserActivityLogsFeed($filter: AdminActivityFeedFilterInput) {
+    adminUserActivityLogsFeed(filter: $filter) {
+      totalCount
+      nextCursor
+      facets {
+        field
+        value
+        label
+        count
+      }
+      items {
+        id
+        actor
+        action
+        targetType
+        targetId
+        companyId
+        userId
+        details
+        createdAt
+        ipAddress
+        userAgent
+        __typename
+      }
+    }
+  }
+`;
+
 export const ADMIN_COMPANY_PAYMENT_HISTORY_QUERY = gql`
   query AdminCompanyPaymentHistory(
     $companyId: Int!
@@ -525,6 +723,7 @@ export const ADMIN_COMPANY_PAYMENT_HISTORY_QUERY = gql`
       invoiceNumber
       status
       amount
+      refundedAmount
       currency
       companyId
       companyName

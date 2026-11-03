@@ -19,7 +19,8 @@ test('company filters, detail edit, and payment history popups', async ({
   await expect(page.getByText('Acme Labs')).toBeVisible();
   await search.fill('no matching tenant');
   await expect(page.getByText('No companies match your filters')).toBeVisible();
-  await page.getByRole('button', { name: 'Clear' }).click();
+  // The toolbar's Clear (the empty table row has its own Clear too).
+  await page.getByRole('button', { name: 'Clear' }).first().click();
   await expect(search).toHaveValue('');
 
   await page.locator('[title="Edit Company"]').click();

@@ -1,9 +1,9 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { useMutation } from '@apollo/client/react';
-import { ADMIN_USERS_QUERY, ADMIN_UPDATE_USER_MUTATION, ADMIN_ACTIVITY_LOG_QUERY } from '../../../lib/graphql';
-import { PartialListWarning, useAllPagesQuery } from '../../../lib/useAllPagesQuery';
+import { ADMIN_USERS_FEED_QUERY, ADMIN_UPDATE_USER_MUTATION, ADMIN_USER_ACTIVITY_LOGS_FEED_QUERY } from '../../../lib/graphql';
+import { facetOptions, InlineSpinner, Pager, usePagedQuery } from '../../../lib/useAllPagesQuery';
 import { Search, Eye, Edit2, Filter } from 'lucide-react';
-import { buildColumnFilterOptions, ColumnFilter, matchesColumnFilter } from '../ColumnFilter';
+import { ColumnFilter } from '../ColumnFilter';
 
 interface UserType {
   /** An Int on the server (AdminUserType.id). */
@@ -42,9 +42,6 @@ interface EditUserType {
 }
 
 export const Users: React.FC<{onToast: (type: 'success'|'error', msg: string) => void}> = ({ onToast }) => {
-  const [nameSelections, setNameSelections] = useState<string[]>([]);
-  const [emailSelections, setEmailSelections] = useState<string[]>([]);
-  const [usernameSelections, setUsernameSelections] = useState<string[]>([]);
   const [companySelections, setCompanySelections] = useState<string[]>([]);
   const [locationSelections, setLocationSelections] = useState<string[]>([]);
   const [roleSelections, setRoleSelections] = useState<string[]>([]);
@@ -52,31 +49,47 @@ export const Users: React.FC<{onToast: (type: 'success'|'error', msg: string) =>
   const [search, setSearch] = useState('');
   const [filtersOpen, setFiltersOpen] = useState(true);
   const [editingUser, setEditingUser] = useState<EditUserType | null>(null);
-  const [activityUserId, setActivityUserId] = useState<string | number | null>(null);
+  // The user whose activity is open (the row itself: it may not be on the current page later).
+  const [activityUser, setActivityUser] = useState<UserType | null>(null);
 
-  // Every user (not the API's first page of 50).
+  // One page of users at a time; the server searches, filters and counts.
+  const singleBoolean = (selections: string[], whenTrue: string) =>
+    selections.length === 1 ? selections[0] === whenTrue : null;
   const {
     rows: userRows,
+    totalCount: usersTotal,
+    facets: userFacets,
+    page: usersPage,
+    setPage: setUsersPage,
+    pageSize: usersPageSize,
     loading: usersLoading,
+    refreshing: usersRefreshing,
     error: usersError,
-    pageError: usersPageError,
-    loadingMore: usersLoadingMore,
     refetch: refetchUsers,
-  } = useAllPagesQuery<UserType, { companyId: number | null }>(ADMIN_USERS_QUERY, 'adminUsers', {
-    variables: {
-      companyId: null,
+  } = usePagedQuery<UserType>(ADMIN_USERS_FEED_QUERY, 'adminUsersFeed', {
+    filter: {
+      companyId: companySelections.map(Number).filter(Number.isFinite),
+      locationId: locationSelections.map(Number).filter(Number.isFinite),
+      isActive: singleBoolean(statusSelections, 'true'),
+      isCompanyAdmin: singleBoolean(roleSelections, 'true'),
     },
+    textFilters: { search },
   });
-  // The selected user's activity, every page of it.
+  // The selected user's activity, one page at a time (the server matches the
+  // user as actor, or as the target of a user record).
   const {
     rows: activityRows,
+    totalCount: activityTotal,
+    page: activityPage,
+    setPage: setActivityPage,
+    pageSize: activityPageSize,
     loading: activityLoading,
+    refreshing: activityRefreshing,
     error: activityError,
-    pageError: activityPageError,
-    loadingMore: activityLoadingMore,
-  } = useAllPagesQuery<UserActivityType, { userId: string | number }>(ADMIN_ACTIVITY_LOG_QUERY, 'adminUserActivityLogs', {
-    variables: { userId: activityUserId ?? '' },
-    skip: activityUserId === null,
+  } = usePagedQuery<UserActivityType>(ADMIN_USER_ACTIVITY_LOGS_FEED_QUERY, 'adminUserActivityLogsFeed', {
+    filter: { userId: activityUser ? String(activityUser.id) : null },
+    sortable: false,
+    skip: activityUser === null,
     fetchPolicy: 'network-only',
   });
 
@@ -93,84 +106,20 @@ export const Users: React.FC<{onToast: (type: 'success'|'error', msg: string) =>
   const [savingUser, setSavingUser] = useState(false);
 
   const users = userRows || [];
-  const companyOptions = useMemo(
-    () => buildColumnFilterOptions(users, (user) => user.company?.company || '-'),
-    [users],
-  );
-  const nameOptions = useMemo(
-    () => buildColumnFilterOptions(users, (user) => `${user.firstName || ''} ${user.lastName || ''}`.trim() || '-'),
-    [users],
-  );
-  const emailOptions = useMemo(
-    () => buildColumnFilterOptions(users, (user) => user.email || '-'),
-    [users],
-  );
-  const usernameOptions = useMemo(
-    () => buildColumnFilterOptions(users, (user) => user.username || '-'),
-    [users],
-  );
-  const locationOptions = useMemo(
-    () => buildColumnFilterOptions(users, (user) => user.location?.location || '-'),
-    [users],
-  );
+  const companyOptions = useMemo(() => facetOptions(userFacets, 'companyId'), [userFacets]);
+  const locationOptions = useMemo(() => facetOptions(userFacets, 'locationId'), [userFacets]);
   const roleOptions = useMemo(
-    () => buildColumnFilterOptions(users, (user) => user.isCompanyAdmin ? 'Company Admin' : 'User'),
-    [users],
+    () => facetOptions(userFacets, 'isCompanyAdmin', (facet) => (facet.value === 'True' ? 'Company Admin' : 'User'))
+      .map((option) => ({ ...option, value: option.value === 'True' ? 'true' : 'false' })),
+    [userFacets],
   );
   const statusOptions = useMemo(
-    () => buildColumnFilterOptions(users, (user) => user.isActive ? 'Active' : 'Inactive'),
-    [users],
+    () => facetOptions(userFacets, 'isActive', (facet) => (facet.value === 'True' ? 'Active' : 'Inactive'))
+      .map((option) => ({ ...option, value: option.value === 'True' ? 'true' : 'false' })),
+    [userFacets],
   );
-  const normalizedSearch = search.trim().toLowerCase();
-  const displayedUsers = useMemo(() => {
-    return users.filter((user) => {
-      const fullName = `${user.firstName || ''} ${user.lastName || ''}`.trim() || '-';
-      if (!matchesColumnFilter(nameSelections, fullName)) return false;
-      if (!matchesColumnFilter(emailSelections, user.email || '-')) return false;
-      if (!matchesColumnFilter(usernameSelections, user.username || '-')) return false;
-      if (!matchesColumnFilter(companySelections, user.company?.company || '-')) return false;
-      if (!matchesColumnFilter(locationSelections, user.location?.location || '-')) return false;
-      if (!matchesColumnFilter(roleSelections, user.isCompanyAdmin ? 'Company Admin' : 'User')) return false;
-      if (!matchesColumnFilter(statusSelections, user.isActive ? 'Active' : 'Inactive')) return false;
-      if (!normalizedSearch) return true;
-      const searchableText = [
-        user.firstName,
-        user.lastName,
-        `${user.firstName} ${user.lastName}`,
-        user.email,
-        user.username,
-        user.company?.company,
-        user.location?.location,
-      ]
-        .filter(Boolean)
-        .join(' ')
-        .toLowerCase();
-
-      return searchableText.includes(normalizedSearch);
-    });
-  }, [users, normalizedSearch, nameSelections, emailSelections, usernameSelections, companySelections, locationSelections, roleSelections, statusSelections]);
-  const activityUser = users.find((user) => String(user.id) === String(activityUserId));
-  const allActivityLogs = activityRows || [];
-  const activityLogs = activityUserId === null
-    ? []
-    : allActivityLogs.filter((activity) => {
-        const selectedUserId = String(activityUserId);
-        const activityUserLogId = activity.userId === null || activity.userId === undefined ? '' : String(activity.userId);
-        const targetId = activity.targetId === null || activity.targetId === undefined ? '' : String(activity.targetId);
-        const targetType = typeof activity.targetType === 'string' ? activity.targetType.toLowerCase() : '';
-        const isDirectUserRecord = targetType === 'customuser' || targetType === 'user';
-
-        return activityUserLogId === selectedUserId || (isDirectUserRecord && targetId === selectedUserId);
-      });
-
-  if (usersLoading) return <div className="text-center py-12 text-slate-500">Loading users...</div>;
-  if (usersError) return <div className="text-center py-12 text-red-600">Error: {usersError.message}</div>;
-
-  const toActivityUserId = (value: string | number) => {
-    if (typeof value === 'number') return value;
-    const asNumber = parseInt(value, 10);
-    return Number.isNaN(asNumber) ? value : asNumber;
-  };
+  const displayedUsers = users;
+  const activityLogs = activityUser === null ? [] : activityRows || [];
 
   const displayValue = (value: unknown) => {
     if (value === null || value === undefined || value === '') return '-';
@@ -340,18 +289,17 @@ export const Users: React.FC<{onToast: (type: 'success'|'error', msg: string) =>
         <h2 className="text-2xl font-bold text-slate-800">Users</h2>
         <p className="text-slate-600">Cross-tenant user management</p>
       </div>
-      <PartialListWarning
-        error={usersPageError}
-        loadingMore={usersLoadingMore}
-        shown={users.length}
-        what="users"
-        onRetry={() => refetchUsers()}
-      />
+      {usersError ? (
+        <p role="alert" className="flex flex-wrap items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          Error: {usersError.message}
+          <button type="button" onClick={() => refetchUsers()} className="font-semibold underline">Try again</button>
+        </p>
+      ) : null}
 
       <div className="bg-white rounded-lg border border-slate-200 p-6 space-y-4">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-2">Search (name/email/username)</label>
+            <label className="block text-sm font-medium text-slate-700 mb-2">Search (name/email/username/company)</label>
             <div className="flex items-center gap-2">
               <div className="relative flex-1">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
@@ -367,9 +315,6 @@ export const Users: React.FC<{onToast: (type: 'success'|'error', msg: string) =>
                 type="button"
                 onClick={() => setFiltersOpen((open) => {
                   if (open) {
-                    setNameSelections([]);
-                    setEmailSelections([]);
-                    setUsernameSelections([]);
                     setCompanySelections([]);
                     setLocationSelections([]);
                     setRoleSelections([]);
@@ -393,9 +338,11 @@ export const Users: React.FC<{onToast: (type: 'success'|'error', msg: string) =>
       </div>
 
       <div className="bg-white rounded-lg border border-slate-200 overflow-hidden">
-        {displayedUsers.length === 0 ? (
+        {usersLoading ? (
+          <InlineSpinner label="Loading users..." />
+        ) : displayedUsers.length === 0 && !filtersOpen ? (
           <div className="text-center py-12 text-slate-500">
-            {search || nameSelections.length > 0 || emailSelections.length > 0 || usernameSelections.length > 0 || companySelections.length > 0 || locationSelections.length > 0 || roleSelections.length > 0 || statusSelections.length > 0
+            {search || companySelections.length > 0 || locationSelections.length > 0 || roleSelections.length > 0 || statusSelections.length > 0
               ? 'No users match your filters'
               : 'No users found'}
           </div>
@@ -415,30 +362,10 @@ export const Users: React.FC<{onToast: (type: 'success'|'error', msg: string) =>
                 </tr>
                 {filtersOpen ? (
                 <tr className="border-t border-slate-200 bg-white">
-                  <th className="px-4 py-2">
-                    <ColumnFilter
-                      label="Name"
-                      options={nameOptions}
-                      selectedValues={nameSelections}
-                      onChange={setNameSelections}
-                    />
-                  </th>
-                  <th className="px-4 py-2">
-                    <ColumnFilter
-                      label="Email"
-                      options={emailOptions}
-                      selectedValues={emailSelections}
-                      onChange={setEmailSelections}
-                    />
-                  </th>
-                  <th className="px-4 py-2">
-                    <ColumnFilter
-                      label="Username"
-                      options={usernameOptions}
-                      selectedValues={usernameSelections}
-                      onChange={setUsernameSelections}
-                    />
-                  </th>
+                  {/* Name, email and username: use the search above (the server searches them). */}
+                  <th className="px-4 py-2" />
+                  <th className="px-4 py-2" />
+                  <th className="px-4 py-2" />
                   <th className="px-4 py-2">
                     <ColumnFilter
                       label="Company"
@@ -476,6 +403,15 @@ export const Users: React.FC<{onToast: (type: 'success'|'error', msg: string) =>
                 ) : null}
               </thead>
               <tbody>
+                {displayedUsers.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} className="py-12 text-center text-slate-500">
+                      {search.trim() || companySelections.length || locationSelections.length || roleSelections.length || statusSelections.length
+                        ? 'No users match your filters'
+                        : 'No users found'}
+                    </td>
+                  </tr>
+                ) : null}
                 {displayedUsers.map((user) => (
                   <tr key={user.id} className="group border-b border-slate-100 hover:bg-slate-50">
                     <td className="py-3 px-4 font-medium text-slate-800 max-w-[150px] truncate" title={`${user.firstName} ${user.lastName}`}>{user.firstName} {user.lastName}</td>
@@ -500,9 +436,7 @@ export const Users: React.FC<{onToast: (type: 'success'|'error', msg: string) =>
                       <td className="sticky right-0 bg-white py-3 px-4 group-hover:bg-slate-50">
                         <div className="flex items-center justify-end gap-1 whitespace-nowrap">
                       <button
-                        onClick={() => {
-                          setActivityUserId(toActivityUserId(user.id));
-                        }}
+                        onClick={() => setActivityUser(user)}
                         title="View Activity"
                         className="p-2 hover:bg-blue-50 text-blue-600 rounded-lg"
                       >
@@ -533,29 +467,31 @@ export const Users: React.FC<{onToast: (type: 'success'|'error', msg: string) =>
             </table>
           </div>
         )}
+        <Pager
+          page={usersPage}
+          pageSize={usersPageSize}
+          totalCount={usersTotal}
+          onPage={setUsersPage}
+          refreshing={usersRefreshing}
+          what="users"
+        />
       </div>
 
-      {activityUserId !== null && (
+      {activityUser !== null && (
         <div className="fixed inset-0 z-50 bg-black/30 flex items-center justify-center p-4">
           <div className="bg-white rounded-xl border border-slate-200 w-full max-w-4xl max-h-[90vh] overflow-hidden">
             <div className="p-4 border-b border-slate-100 flex items-center justify-between gap-3">
               <h3 className="font-bold text-lg text-slate-800 truncate">
-                User Activity - {activityUser ? `${activityUser.firstName} ${activityUser.lastName}` : activityUserId}
+                User Activity - {`${activityUser.firstName || ''} ${activityUser.lastName || ''}`.trim() || activityUser.username}
               </h3>
               <button
-                onClick={() => setActivityUserId(null)}
+                onClick={() => setActivityUser(null)}
                 className="shrink-0 px-2 py-1 rounded border border-slate-200"
               >
                 ×
               </button>
             </div>
             <div className="max-h-[calc(90vh-65px)] overflow-y-auto p-4">
-              <PartialListWarning
-                error={activityPageError}
-                loadingMore={activityLoadingMore}
-                shown={allActivityLogs.length}
-                what="activity entries"
-              />
               {activityLoading ? (
                 <div className="text-center py-6 text-slate-500">Loading activity...</div>
               ) : activityError ? (
@@ -609,6 +545,16 @@ export const Users: React.FC<{onToast: (type: 'success'|'error', msg: string) =>
                   })}
                 </div>
               )}
+              {activityLogs.length ? (
+                <Pager
+                  page={activityPage}
+                  pageSize={activityPageSize}
+                  totalCount={activityTotal}
+                  onPage={setActivityPage}
+                  refreshing={activityRefreshing}
+                  what="activity entries"
+                />
+              ) : null}
             </div>
           </div>
         </div>

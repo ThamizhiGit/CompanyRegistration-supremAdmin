@@ -33,10 +33,12 @@ import {
   currencyDecimals,
   currencyInputStep,
   formatPrice,
+  MAX_INT32,
   moneyInputError,
   wholeNumberError,
 } from '../../../lib/admin-utils';
 import { PartialListWarning, useAllPagesQuery } from '../../../lib/useAllPagesQuery';
+import { useDebouncedValue } from '../../../lib/useDebouncedValue';
 import { buildColumnFilterOptions, ColumnFilter, matchesColumnFilter } from '../ColumnFilter';
 
 type BillingInterval = 'monthly' | 'yearly' | 'both';
@@ -353,6 +355,8 @@ const toEditingPromo = (promo: PromoCodeType): EditingPromo => ({
 // Same rule as the backend (new plan ids only; older ids stay editable).
 const PLAN_ID_PATTERN = /^[a-z0-9][a-z0-9_-]*$/;
 const PLAN_ID_MAX_LENGTH = 50;
+/** As the backend's plan validation (PLAN_MAX_TRIAL_MONTHS in admin_dashboard.py). */
+const PLAN_MAX_TRIAL_MONTHS = 120;
 
 /** `createOnly`: the backend refuses instead of overwriting an existing plan with this id. */
 const planToInput = (plan: EditingPlan, createOnly = false) => ({
@@ -448,6 +452,9 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
   const [editingPromoMode, setEditingPromoMode] = useState<'create' | 'edit'>('create');
   const [applyFor, setApplyFor] = useState<{ planId: string; planName: string } | null>(null);
   const { options: moduleOptions } = usePackageModuleOptions();
+  // Typed searches go to the server once typing pauses: one request per search, not per key.
+  const debouncedSearch = useDebouncedValue(search);
+  const debouncedPromoSearch = useDebouncedValue(promoSearch);
 
   // Every plan, not the API's first page of 50.
   const {
@@ -463,7 +470,7 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
     {
       variables: {
         includeInactive: true,
-        search: search.trim() || null,
+        search: debouncedSearch.trim() || null,
         active: null,
       },
       fetchPolicy: 'cache-and-network',
@@ -499,7 +506,7 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
   >(ADMIN_PROMO_CODES_QUERY, 'adminPromoCodes', {
     variables: {
       includeInactive: true,
-      search: promoSearch.trim() || null,
+      search: debouncedPromoSearch.trim() || null,
       active: null,
       planId: null,
     },
@@ -553,7 +560,9 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
   const [deactivatePromoCode, { loading: deactivatingPromo }] = useMutation<DeactivatePromoCodeMutationData, { id: string; reason: string }, any, any>(ADMIN_DEACTIVATE_PROMO_CODE_MUTATION);
 
   const backendPlans = planRows || [];
-  const sourcePlans = backendPlans.length > 0 ? backendPlans : canonicalPlans;
+  // The built-in plans stand in only while the backend has no plans at all --
+  // never as the answer to a search that matched nothing.
+  const sourcePlans = backendPlans.length > 0 || search.trim() ? backendPlans : canonicalPlans;
   const backendReady = !error && backendPlans.length > 0;
   const promoCodes = promoRows || [];
   // Every active paid plan for the promo form. adminPlans is searched server-side
@@ -683,8 +692,9 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
     // whole units for JPY / ISK / UGX, and refuses the whole save otherwise.
     const fieldProblem =
       moneyInputError(editing.basePriceInput, editing.currency || 'USD', 'Package price') ||
-      wholeNumberError(editing.trialMonths, 'Trial months', 0) ||
-      wholeNumberError(editing.employeeLimit, 'Employee limit', 0);
+      wholeNumberError(editing.trialMonths, 'Trial months', 0, PLAN_MAX_TRIAL_MONTHS) ||
+      // Blank means unlimited; when set, at least one employee (as the server requires).
+      wholeNumberError(editing.employeeLimit, 'Employee limit', 1, MAX_INT32);
     if (fieldProblem) {
       onToast('error', fieldProblem);
       return;
@@ -763,9 +773,10 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
     }
     const limitProblem =
       moneyInputError(editingPromo.minimumAmountDollars, currency, 'Minimum amount') ||
-      wholeNumberError(editingPromo.maxRedemptions, 'Max redemptions', 0) ||
-      wholeNumberError(editingPromo.perEmailLimit, 'Per email limit', 0) ||
-      wholeNumberError(editingPromo.perCompanyLimit, 'Per company limit', 0);
+      // Blank = unlimited; a limit of 0 could never be used (the server refuses it).
+      wholeNumberError(editingPromo.maxRedemptions, 'Max redemptions', 1, MAX_INT32) ||
+      wholeNumberError(editingPromo.perEmailLimit, 'Per email limit', 1, MAX_INT32) ||
+      wholeNumberError(editingPromo.perCompanyLimit, 'Per company limit', 1, MAX_INT32);
     if (limitProblem) {
       onToast('error', limitProblem);
       return;
@@ -1558,6 +1569,7 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
                   <input
                     type="number"
                     min="0"
+                    max={PLAN_MAX_TRIAL_MONTHS}
                     step="1"
                     value={editing.trialMonths}
                     onChange={(event) => setEditing({ ...editing, trialMonths: Number(event.target.value) || 0 })}
@@ -1771,7 +1783,7 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
                   <span className="mb-1 block text-sm font-medium text-slate-700">Max redemptions</span>
                   <input
                     type="number"
-                    min="0"
+                    min="1"
                     step="1"
                     value={editingPromo.maxRedemptions}
                     onChange={(event) => setEditingPromo({ ...editingPromo, maxRedemptions: event.target.value })}
@@ -1783,7 +1795,7 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
                   <span className="mb-1 block text-sm font-medium text-slate-700">Per email</span>
                   <input
                     type="number"
-                    min="0"
+                    min="1"
                     step="1"
                     value={editingPromo.perEmailLimit}
                     onChange={(event) => setEditingPromo({ ...editingPromo, perEmailLimit: event.target.value })}
@@ -1795,7 +1807,7 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
                   <span className="mb-1 block text-sm font-medium text-slate-700">Per company</span>
                   <input
                     type="number"
-                    min="0"
+                    min="1"
                     step="1"
                     value={editingPromo.perCompanyLimit}
                     onChange={(event) => setEditingPromo({ ...editingPromo, perCompanyLimit: event.target.value })}
