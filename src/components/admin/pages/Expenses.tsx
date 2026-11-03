@@ -657,22 +657,35 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
     try {
       if (editing.id) {
         const originalExpense = expenses.find((expense) => expense.id === editing.id) || selectedExpense;
-        await updateExpense({ variables: { input: buildUpdateInput() } });
+        const updated: any = await updateExpense({ variables: { input: buildUpdateInput() } });
+        // success: false is a refusal (validation): say so and keep the form.
+        if (updated?.data?.adminUpdateExpense?.success === false) {
+          onToast('error', updated.data.adminUpdateExpense.message || 'Expense could not be updated');
+          return;
+        }
         if (originalExpense && originalExpense.status !== editing.status) {
-          await setExpenseStatus({
+          const statusResult: any = await setExpenseStatus({
             variables: {
               input: {
                 id: editing.id,
                 status: editing.status,
                 reason: '',
-                actor: originalExpense.createdBy || 'admin',
               },
             },
           });
+          if (statusResult?.data?.adminSetExpenseStatus?.success === false) {
+            onToast('error', statusResult.data.adminSetExpenseStatus.message || 'The status could not be changed');
+            await refetch();
+            return;
+          }
         }
         onToast('success', 'Expense updated');
       } else {
-        await createExpense({ variables: { input: buildCreateInput() } });
+        const created: any = await createExpense({ variables: { input: buildCreateInput() } });
+        if (created?.data?.adminCreateExpense?.success === false) {
+          onToast('error', created.data.adminCreateExpense.message || 'Expense could not be created');
+          return;
+        }
         onToast('success', 'Expense created');
       }
       await refetch();
@@ -695,16 +708,19 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
   const handleStatusChange = async (expense: Expense, nextStatus: ExpenseStatus) => {
     if (expense.status === nextStatus) return;
     try {
-      await setExpenseStatus({
+      const result: any = await setExpenseStatus({
         variables: {
           input: {
             id: expense.id,
             status: nextStatus,
             reason: '',
-            actor: expense.createdBy || 'admin',
           },
         },
       });
+      if (result?.data?.adminSetExpenseStatus?.success === false) {
+        onToast('error', result.data.adminSetExpenseStatus.message || 'The status could not be changed');
+        return;
+      }
       onToast('success', `Status updated to ${statusLabel(nextStatus)}`);
       await refetch();
     } catch (err: any) {

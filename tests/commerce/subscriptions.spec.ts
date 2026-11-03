@@ -46,20 +46,37 @@ test('a manual payment the server refuses (success: false) is reported as an err
   expect(mockApi.lastVariables('AdminManualSubscriptionAction')).toMatchObject({ companyId: 12, reason: 'Paid by cheque' });
 });
 
-test('every page of payments is loaded (not only the first 50)', async ({ adminPage: page, mockApi }) => {
+test('payments are read one page at a time, searched and counted by the server', async ({ adminPage: page, mockApi }) => {
   const many = Array.from({ length: 205 }, (_, index) => ({
     ...mockApi.payments[0],
     paymentIntentId: `pi_bulk_${index + 1}`,
     email: `payer${index + 1}@bulk.test`,
   }));
-  mockApi.setOverride('AdminPayments', (payload) => {
-    const offset = payload.variables?.offset ?? 0;
-    return { data: { adminPayments: many.slice(offset, offset + (payload.variables?.limit ?? 50)) } };
+  mockApi.setOverride('AdminPaymentsFeed', (payload) => {
+    const filter = payload.variables?.filter ?? {};
+    const rows = filter.search ? many.filter((payment) => payment.email.includes(filter.search)) : many;
+    const offset = filter.offset ?? 0;
+    return {
+      data: {
+        adminPaymentsFeed: {
+          totalCount: rows.length,
+          items: rows.slice(offset, offset + (filter.limit ?? 50)),
+          facets: [],
+          __typename: 'AdminPaymentsFeedType',
+        },
+      },
+    };
   });
   await page.getByRole('button', { name: 'Subscriptions' }).click();
-  await page.getByPlaceholder('Search company, plan, email...').fill('payer205@bulk.test');
+  await expect(page.getByTestId('pager-summary')).toContainText('1–50 of 205 payments');
+  await page.getByRole('button', { name: 'Next page' }).click();
+  await expect(page.getByTestId('pager-summary')).toContainText('51–100 of 205 payments');
+  expect(mockApi.lastVariables('AdminPaymentsFeed')?.filter).toMatchObject({ limit: 50, offset: 50 });
+
+  await page.getByPlaceholder('Search company, plan, email...').pressSequentially('payer205@bulk.test', { delay: 15 });
   await expect(page.getByText('payer205@bulk.test')).toBeVisible();
-  expect((mockApi.requests.get('AdminPayments') ?? []).map((v) => [v.limit, v.offset])).toEqual(
-    expect.arrayContaining([[200, 0], [200, 200]]),
-  );
+  // Typed text is sent once typing pauses: one request for the search, back on page 1.
+  const searches = (mockApi.requests.get('AdminPaymentsFeed') ?? []).map((v) => v.filter?.search).filter(Boolean);
+  expect(searches).toEqual(['payer205@bulk.test']);
+  expect(mockApi.lastVariables('AdminPaymentsFeed')?.filter).toMatchObject({ offset: 0 });
 });

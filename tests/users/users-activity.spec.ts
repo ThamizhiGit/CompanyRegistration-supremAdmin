@@ -31,7 +31,7 @@ test('user activity modal is scoped to clicked user', async ({ adminPage: page }
   await expect(page.getByRole('heading', { name: 'User Activity - John Doe' })).toHaveCount(0);
 });
 
-test('users: every page is loaded and a failed later page is reported, not hidden', async ({ adminPage: page, mockApi }) => {
+test('users: one page at a time; a failed page is reported with a retry, not hidden', async ({ adminPage: page, mockApi }) => {
   const many = Array.from({ length: 201 }, (_, index) => ({
     ...mockApi.users[1],
     id: 100 + index,
@@ -40,19 +40,28 @@ test('users: every page is loaded and a failed later page is reported, not hidde
     firstName: 'Bulk',
     lastName: `User ${index + 1}`,
   }));
-  let failSecondPage = true;
-  mockApi.setOverride('AdminUsers', (payload) => {
-    const offset = payload.variables?.offset ?? 0;
-    if (offset > 0 && failSecondPage) return { errors: [{ message: 'users page 2 unavailable' }] };
-    return { data: { adminUsers: many.slice(offset, offset + 200) } };
+  let failLaterPages = false;
+  mockApi.setOverride('AdminUsersFeed', (payload) => {
+    const filter = payload.variables?.filter ?? {};
+    const offset = filter.offset ?? 0;
+    if (offset > 0 && failLaterPages) return { errors: [{ message: 'users page 2 unavailable' }] };
+    return {
+      data: {
+        adminUsersFeed: { totalCount: many.length, items: many.slice(offset, offset + (filter.limit ?? 50)), facets: [], __typename: 'AdminUsersFeedType' },
+      },
+    };
   });
   await page.getByRole('button', { name: 'Users' }).click();
-  await expect(page.getByTestId('partial-list-warning')).toContainText('Only the first 200 users could be loaded: users page 2 unavailable');
-  await expect(page.getByText('bulk201@acme.com')).toHaveCount(0);
+  await expect(page.getByTestId('pager-summary')).toContainText('1–50 of 201 users');
+  await expect(page.getByText('bulk1@acme.com', { exact: true })).toBeVisible();
 
-  failSecondPage = false;
-  await page.getByTestId('partial-list-warning').getByRole('button', { name: 'Try again' }).click();
-  await expect(page.getByText('bulk201@acme.com')).toBeVisible();
+  failLaterPages = true;
+  await page.getByRole('button', { name: 'Next page' }).click();
+  await expect(page.getByRole('alert')).toContainText('users page 2 unavailable');
+
+  failLaterPages = false;
+  await page.getByRole('alert').getByRole('button', { name: 'Try again' }).click();
+  await expect(page.getByText('bulk51@acme.com')).toBeVisible();
 });
 
 test('a user edit is sent with the numeric user id the API expects', async ({ adminPage: page, mockApi }) => {

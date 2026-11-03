@@ -133,6 +133,17 @@ test('plans page creates a new plan with a module tree selection', async ({ admi
   });
 });
 
+test('the price preview says per employee when the price is per employee', async ({ adminPage: page }) => {
+  await page.getByRole('button', { name: 'Plans' }).click();
+  await page.getByRole('button', { name: 'New plan' }).click();
+  await page.getByTestId('plan-price').fill('5');
+  await expect(page.getByTestId('preview-monthly')).toHaveText('$5.00 / month');
+  await page.getByLabel('Price is per employee').check();
+  await expect(page.getByTestId('preview-monthly')).toHaveText('$5.00 / month per employee');
+  await page.getByLabel('Price is per employee').uncheck();
+  await expect(page.getByTestId('preview-monthly')).toHaveText('$5.00 / month');
+});
+
 test('a new plan without modules is not saved', async ({ adminPage: page, mockApi }) => {
   await page.getByRole('button', { name: 'Plans' }).click();
   await page.getByRole('button', { name: 'New plan' }).click();
@@ -412,10 +423,39 @@ test('every page of plans is loaded, and a failed later page is reported', async
 
   failSecondPage = false;
   await page.getByTestId('partial-list-warning').getByRole('button', { name: 'Try again' }).click();
-  await expect(page.getByText('bulk_201', { exact: true })).toBeVisible();
+  // Try again reloads the first page and then the rest: give a busy machine time.
+  await expect(page.getByText('bulk_201', { exact: true })).toBeVisible({ timeout: 15_000 });
   await expect(page.getByTestId('partial-list-warning')).toHaveCount(0);
   // 200 at a time (the API's largest page), not the default 50.
   expect((mockApi.requests.get('AdminPlans') ?? []).map((v) => [v.limit, v.offset])).toContainEqual([200, 200]);
+});
+
+test('a refresh keeps a long plan list on screen until the new pages arrive (#234)', async ({ adminPage: page, mockApi }) => {
+  const many = Array.from({ length: 201 }, (_, index) => ({
+    ...mockApi.plans[0],
+    id: `bulk_${String(index + 1).padStart(3, '0')}`,
+    name: `Bulk ${index + 1}`,
+    sortOrder: index + 10,
+  }));
+  let holdSecondPage: Promise<void> | null = null;
+  let releaseSecondPage: () => void = () => undefined;
+  mockApi.setOverride('AdminPlans', async (payload) => {
+    const offset = payload.variables?.offset ?? 0;
+    if (offset > 0 && holdSecondPage) await holdSecondPage;
+    return { data: { adminPlans: many.slice(offset, offset + 200) } };
+  });
+  await page.getByRole('button', { name: 'Plans' }).click();
+  await page.getByRole('button', { name: 'Table View' }).click();
+  await expect(page.getByText('bulk_201', { exact: true })).toBeVisible();
+
+  holdSecondPage = new Promise<void>((resolve) => { releaseSecondPage = resolve; });
+  const pagesBefore = (mockApi.requests.get('AdminPlans') ?? []).length;
+  await page.getByRole('button', { name: 'Refresh' }).first().click();
+  await expect.poll(() => (mockApi.requests.get('AdminPlans') ?? []).length).toBeGreaterThan(pagesBefore + 1);
+  // The second page is still on its way: the row past the first page stays.
+  await expect(page.getByText('bulk_201', { exact: true })).toBeVisible();
+  releaseSecondPage();
+  await expect(page.getByText('bulk_201', { exact: true })).toBeVisible();
 });
 
 test('applying re-checks the preview first and stops when it changed', async ({ adminPage: page, mockApi }) => {

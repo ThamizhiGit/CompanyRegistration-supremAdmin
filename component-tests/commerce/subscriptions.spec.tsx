@@ -2,22 +2,9 @@ import React from 'react';
 import { expect, test } from '@playwright/experimental-ct-react';
 import { type MockedResponse } from '@apollo/client/testing';
 import { SubscriptionsHarness } from '../fixtures/commerce-harnesses';
-import { paged } from '../fixtures/paging';
-import {
-  ADMIN_COMPANIES_QUERY,
-  ADMIN_PAYMENTS_QUERY,
-} from '../../src/lib/graphql';
-
-const paymentVariables = paged({ status: null, companyId: null, dateFrom: null, dateTo: null, search: null });
-const companyVariables = paged({
-  search: null,
-  status: null,
-  subscriptionStatus: null,
-  dueDateFrom: null,
-  dueDateTo: null,
-  recurringDateFrom: null,
-  recurringDateTo: null,
-});
+import { feedResult, paymentFeedVariables } from '../fixtures/paging';
+import { ADMIN_PAYMENTS_FEED_QUERY } from '../../src/lib/graphql';
+import { ADMIN_LIST_PAGE_SIZE } from '../../src/lib/useAllPagesQuery';
 
 const payment = {
   paymentIntentId: 'pi_42',
@@ -45,16 +32,20 @@ const payment = {
   paymentGatewayStatus: 'pending',
 };
 
-const paymentsMock = (items: unknown[], delay?: number): MockedResponse => ({
-  request: { query: ADMIN_PAYMENTS_QUERY, variables: paymentVariables },
+const paymentsMock = (items: unknown[], delay?: number, extra: { totalCount?: number; facets?: unknown[] } = {}): MockedResponse => ({
+  request: { query: ADMIN_PAYMENTS_FEED_QUERY, variables: paymentFeedVariables() },
   ...(delay ? { delay } : {}),
-  result: { data: { adminPayments: items } },
+  result: feedResult('adminPaymentsFeed', items, extra),
 });
 
-const companiesMock: MockedResponse = {
-  request: { query: ADMIN_COMPANIES_QUERY, variables: companyVariables },
-  result: { data: { adminCompanies: [{ id: 42, company: 'Orbit Works' }] } },
-};
+/** One "Export all" page (200 rows at a time). */
+const exportPage = (page: number, items: unknown[], totalCount: number, delay?: number): MockedResponse => ({
+  request: { query: ADMIN_PAYMENTS_FEED_QUERY, variables: paymentFeedVariables({}, page, ADMIN_LIST_PAGE_SIZE) },
+  ...(delay ? { delay } : {}),
+  result: feedResult('adminPaymentsFeed', items, { totalCount }),
+});
+const manyPayments = (count: number, from = 0) =>
+  Array.from({ length: count }, (_, index) => ({ ...payment, paymentIntentId: `pi_bulk_${from + index}` }));
 
 test.describe('commerce / subscriptions', () => {
   test('covers loading, render, search filtering, and empty data', async ({ mount }) => {
@@ -88,6 +79,68 @@ test.describe('commerce / subscriptions', () => {
     await expect(component.getByRole('heading', { name: 'Billing schedule' })).toBeVisible();
     await expect(component.getByRole('heading', { name: 'Gateway information' })).toBeVisible();
     await expect(component.getByRole('button', { name: 'Edit Payment' })).toBeVisible();
+  });
+
+  test('status, plan and gateway filter options come from the server facets and filter there', async ({ mount, page }) => {
+    const facets = [
+      { field: 'status', value: 'pending', label: null, count: 3 },
+      { field: 'status', value: 'failed', label: null, count: 1 },
+    ];
+    const component = await mount(
+      <SubscriptionsHarness
+        mocks={[
+          paymentsMock([payment], undefined, { totalCount: 4, facets }),
+          {
+            request: { query: ADMIN_PAYMENTS_FEED_QUERY, variables: paymentFeedVariables({ status: ['failed'] }) },
+            result: feedResult('adminPaymentsFeed', [{ ...payment, paymentIntentId: 'pi_failed', status: 'failed' }], { totalCount: 1, facets }),
+          },
+        ]}
+      />,
+    );
+    await component.getByTitle('Status filter').click();
+    await expect(page.getByLabel('pending')).toBeVisible();
+    await page.getByLabel('failed').check();
+    await page.getByRole('button', { name: 'Done' }).click();
+    await expect(component.getByTestId('pager-summary')).toHaveText(/1–1 of 1 payments/);
+  });
+
+  test('"Export all" reads every page of the filter, 200 at a time', async ({ mount }) => {
+    const component = await mount(
+      <SubscriptionsHarness
+        mocks={[
+          paymentsMock([payment], undefined, { totalCount: 250 }),
+          exportPage(0, manyPayments(200), 250),
+          exportPage(1, manyPayments(50, 200), 250),
+        ]}
+      />,
+    );
+    await component.getByRole('button', { name: 'Export all' }).click();
+    await expect(component.getByLabel('toast')).toHaveText('success: Excel file downloaded successfully!');
+  });
+
+  test('"Export all" can be cancelled and then reports nothing', async ({ mount, page }) => {
+    const component = await mount(
+      <SubscriptionsHarness
+        mocks={[
+          paymentsMock([payment], undefined, { totalCount: 250 }),
+          exportPage(0, manyPayments(200), 250, 1200),
+          exportPage(1, manyPayments(50, 200), 250),
+        ]}
+      />,
+    );
+    await component.getByRole('button', { name: 'Export all' }).click();
+    await component.getByRole('button', { name: 'Cancel export' }).click();
+    await expect(component.getByRole('button', { name: 'Export all' })).toBeVisible({ timeout: 5000 });
+    await page.waitForTimeout(300);
+    await expect(component.getByLabel('toast')).toHaveText('');
+  });
+
+  test('a card payment cannot be marked refunded by hand', async ({ mount }) => {
+    const card = { ...payment, paymentIntentId: 'pi_card', source: 'stripe', status: 'succeeded' };
+    const component = await mount(<SubscriptionsHarness mocks={[paymentsMock([card])]} />);
+    await component.getByTitle('Edit subscription').click();
+    await expect(component.getByRole('heading', { name: 'Edit Subscription Payment' })).toBeVisible();
+    await expect(component.locator('option[value="refunded"]')).toHaveCount(0);
   });
 
   test('opens all subscription administration actions and validates their required reasons', async ({ mount }) => {

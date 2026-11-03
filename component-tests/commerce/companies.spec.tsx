@@ -2,23 +2,15 @@ import React from 'react';
 import { expect, test } from '@playwright/experimental-ct-react';
 import { type MockedResponse } from '@apollo/client/testing';
 import { CompaniesHarness } from '../fixtures/commerce-harnesses';
-import { paged } from '../fixtures/paging';
+import { companyFeedVariables, feedResult, paged } from '../fixtures/paging';
 import {
-  ADMIN_COMPANIES_QUERY,
+  ADMIN_COMPANIES_FEED_QUERY,
   ADMIN_COMPANY_PAYMENT_HISTORY_QUERY,
   ADMIN_MANUAL_SUBSCRIPTION_MUTATION,
   ADMIN_REQUEST_REFUND_MUTATION,
+  ADMIN_UPDATE_COMPANY_DETAIL_MUTATION,
+  ADMIN_UPDATE_PAYMENT_STATUS_MUTATION,
 } from '../../src/lib/graphql';
-
-const companyVariables = paged({
-  search: null,
-  status: null,
-  subscriptionStatus: null,
-  dueDateFrom: null,
-  dueDateTo: null,
-  recurringDateFrom: null,
-  recurringDateTo: null,
-});
 
 const company = {
   id: 7,
@@ -63,12 +55,14 @@ const payment = {
   gatewayRefSenderMedium: 'customer-7',
   gatewayPayload: '{}',
   paymentGatewayStatus: 'settled',
+  refundedAmount: 0,
 };
 
-const companiesMock = (items: unknown[], delay?: number): MockedResponse => ({
-  request: { query: ADMIN_COMPANIES_QUERY, variables: companyVariables },
+const companiesMock = (items: unknown[], delay?: number, extra: { totalCount?: number } = {}): MockedResponse => ({
+  request: { query: ADMIN_COMPANIES_FEED_QUERY, variables: companyFeedVariables() },
+  maxUsageCount: 3,
   ...(delay ? { delay } : {}),
-  result: { data: { adminCompanies: items } },
+  result: feedResult('adminCompaniesFeed', items, extra),
 });
 
 const historyMock: MockedResponse = {
@@ -126,7 +120,7 @@ test.describe('commerce / companies', () => {
       {
         request: {
           query: ADMIN_REQUEST_REFUND_MUTATION,
-          variables: { paymentIntentId: 'pi_acme', reason: 'Duplicate charge', amount: 1000 },
+          variables: { paymentIntentId: 'pi_acme', reason: 'Duplicate charge', amount: 1000, mode: 'refund_and_rebill' },
         },
         result: { data: { adminRequestRefund: { success: true, message: 'queued' } } },
       },
@@ -200,7 +194,7 @@ test.describe('commerce / companies', () => {
       void dialog.dismiss();
     });
     await component.getByRole('button', { name: /Apply refund/ }).click();
-    await expect.poll(() => dialogs).toEqual(['No amount entered: refund the full payment?']);
+    await expect.poll(() => dialogs).toEqual(['No amount entered: refund everything still paid on this payment?']);
     await expect(component.getByPlaceholder('Amount')).toBeVisible(); // still open: nothing requested
 
     page.once('dialog', (dialog) => void dialog.accept());
@@ -216,6 +210,122 @@ test.describe('commerce / companies', () => {
     await component.getByPlaceholder('Amount').fill('5.5');
     await component.getByRole('button', { name: /Apply refund/ }).click();
     await expect(component.getByLabel('toast')).toHaveText('error: ISK refunds must be in whole units.');
+  });
+
+  test('Company 360 totals are per currency and net of refunds', async ({ mount }) => {
+    const history: MockedResponse = {
+      ...historyMock,
+      result: {
+        data: {
+          adminCompanyPaymentHistory: [
+            { ...payment, paymentIntentId: 'pi_usd', amount: 2500, currency: 'USD', refundedAmount: 500 },
+            { ...payment, paymentIntentId: 'pi_eur', amount: 4000, currency: 'EUR', refundedAmount: 0 },
+            { ...payment, paymentIntentId: 'pi_back', amount: 1000, currency: 'USD', status: 'refunded', refundedAmount: 0 },
+          ],
+        },
+      },
+    };
+    const component = await mount(<CompaniesHarness mocks={[companiesMock([company]), history]} />);
+    await component.getByTitle('View Company').click();
+    // The totals sit on the Company 360 Subscription tab.
+    await component.getByRole('button', { name: 'Subscription', exact: true }).click();
+    const totals = component.getByTestId('company-total-paid');
+    await expect(totals).toHaveCount(2);
+    // One line per currency (in the order the payments came), net of refunds.
+    await expect(totals.filter({ hasText: '€40.00' })).toHaveCount(1);
+    const usd = totals.filter({ hasText: '$20.00' });
+    await expect(usd).toHaveCount(1);
+    await expect(usd).toContainText('$15.00 refunded');
+  });
+
+  test('payment history never offers "refunded" (refunds go through Refund) and sends one status change at a time', async ({ mount }) => {
+    const pending = { ...payment, status: 'pending' };
+    const component = await mount(
+      <CompaniesHarness
+        mocks={[
+          companiesMock([company]),
+          { ...historyMock, maxUsageCount: 3, result: { data: { adminCompanyPaymentHistory: [pending] } } },
+          {
+            request: { query: ADMIN_UPDATE_PAYMENT_STATUS_MUTATION, variables: { paymentIntentId: 'pi_acme', status: 'failed', reason: 'manual_update_failed' } },
+            delay: 800,
+            result: { data: { adminUpdatePaymentStatus: { success: true, message: 'ok', payment: { paymentIntentId: 'pi_acme', status: 'failed' } } } },
+          },
+        ]}
+      />,
+    );
+    await component.getByTitle('View Company').click();
+    await component.getByRole('button', { name: 'Payment History' }).click();
+    const select = component.getByLabel('Update status for pi_acme');
+    await expect(select.locator('option[value="refunded"]')).toHaveCount(0);
+    await select.selectOption('failed');
+    // In flight: the control is disabled, a second change cannot be sent.
+    await expect(select).toBeDisabled();
+    await expect(select).toBeEnabled();
+  });
+
+  test('a status change is saved with its reason and only the changed fields', async ({ mount }) => {
+    const component = await mount(
+      <CompaniesHarness
+        mocks={[
+          companiesMock([company]),
+          {
+            request: {
+              query: ADMIN_UPDATE_COMPANY_DETAIL_MUTATION,
+              variables: { input: { id: 7, company: 'Acme Labs', subscriptionStatus: 'past_due', isMultiLocationEnabled: false, reason: 'Card declined twice' } },
+            },
+            delay: 500,
+            result: { data: { adminUpdateCompanyDetail: { success: true, message: 'ok', company: null } } },
+          },
+        ]}
+      />,
+    );
+    await component.getByTitle('Edit Company').click();
+    // Suspension is not set here (it has its own action).
+    await expect(component.getByLabel('Subscription Status').locator('option[value="suspended"]')).toHaveCount(0);
+    await component.getByLabel('Subscription Status').selectOption('past_due');
+    const save = component.getByRole('button', { name: /Save changes/ });
+    await expect(save).toBeDisabled(); // a reason is required
+    await component.getByLabel('Reason for change').fill('Card declined twice');
+    await save.dblclick();
+    await expect(save).toBeDisabled(); // in flight
+    await expect(component.getByLabel('toast')).toHaveText('success: Company detail updated');
+  });
+
+  test('editing a company on another package keeps it and accepts equal trial dates', async ({ mount }) => {
+    // A registration sets both dates to the end of the trial.
+    const shiftsCompany = {
+      ...company,
+      planId: 'shifts-only',
+      planName: 'Shifts Only',
+      subscriptionDueDate: '2026-12-03T16:41:00.000Z',
+      subscriptionRecurringDate: '2026-12-03T16:41:00.000Z',
+    };
+    const component = await mount(<CompaniesHarness mocks={[companiesMock([shiftsCompany])]} />);
+    await component.getByTitle('Edit Company').click();
+    const plan = component.getByLabel('Subscription Plan');
+    await expect(plan).toHaveValue('shifts-only');
+    await expect(plan.locator('option[value="shifts-only"]')).toHaveText('Shifts Only');
+    await component.getByLabel('Subscription Status').selectOption('trial');
+    await expect(plan).toHaveValue('shifts-only');
+    await expect(component.getByText(/Recurring date must/)).toHaveCount(0);
+  });
+
+  test('pages through companies by the server total', async ({ mount }) => {
+    const component = await mount(
+      <CompaniesHarness
+        mocks={[
+          companiesMock([company], undefined, { totalCount: 75 }),
+          {
+            request: { query: ADMIN_COMPANIES_FEED_QUERY, variables: companyFeedVariables({}, 1) },
+            result: feedResult('adminCompaniesFeed', [{ ...company, id: 8, company: 'Beta Works' }], { totalCount: 75 }),
+          },
+        ]}
+      />,
+    );
+    await expect(component.getByTestId('pager-summary')).toHaveText(/1–50 of 75 companies/);
+    await component.getByRole('button', { name: 'Next page' }).click();
+    await expect(component.getByText('Beta Works', { exact: true })).toBeVisible();
+    await expect(component.getByTestId('pager-summary')).toHaveText(/51–75 of 75 companies/);
   });
 
   test('a double click sends one refund and one manual action', async ({ mount, page }) => {

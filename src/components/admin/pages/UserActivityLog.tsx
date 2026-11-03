@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { ADMIN_ACTIVITY_LOG_QUERY } from '../../../lib/graphql';
-import { PartialListWarning, useAllPagesQuery } from '../../../lib/useAllPagesQuery';
+import { ADMIN_USER_ACTIVITY_LOGS_FEED_QUERY } from '../../../lib/graphql';
+import { InlineSpinner, Pager, usePagedQuery } from '../../../lib/useAllPagesQuery';
 import { toDateTimeLocalValue, formatDateTime } from '../../../lib/admin-utils';
 import { useDebouncedValue } from '../../../lib/useDebouncedValue';
 
@@ -26,18 +26,10 @@ export const UserActivityLog: React.FC = () => {
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
   const [selected, setSelected] = useState<ActivityType | null>(null);
-  const debouncedActor = useDebouncedValue(actor);
-  const debouncedAction = useDebouncedValue(action);
   const debouncedCompanyId = useDebouncedValue(companyId);
-  const debouncedUserId = useDebouncedValue(userId);
-  const debouncedFromDate = useDebouncedValue(fromDate);
-  const debouncedToDate = useDebouncedValue(toDate);
-  const toActivityUserId = (value: string) => {
-    const trimmed = value.trim();
-    if (!trimmed) return null;
-    const parsed = parseInt(trimmed, 10);
-    return Number.isNaN(parsed) ? trimmed : parsed;
-  };
+  // Keyset paging: cursors[n] reads page n (page 0 has none). New rows written
+  // while paging never shift the next page.
+  const [cursors, setCursors] = useState<string[]>([]);
   const displayValue = (value: unknown) => {
     if (value === null || value === undefined || value === '') return '-';
     if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
@@ -50,32 +42,36 @@ export const UserActivityLog: React.FC = () => {
     }
   };
 
-  // Every matching entry (not the API's first page of 50).
-  const { rows, loading, error, pageError, loadingMore, refetch } = useAllPagesQuery<ActivityType, {
-    actor: string;
-    action: string;
-    companyId: number | null;
-    userId: string | number | null;
-    from: string | null;
-    to: string | null;
-  }>(ADMIN_ACTIVITY_LOG_QUERY, 'adminUserActivityLogs', {
-    variables: {
-      actor: debouncedActor || '',
-      action: debouncedAction || '',
-      companyId: debouncedCompanyId || null,
-      userId: toActivityUserId(debouncedUserId),
-      from: debouncedFromDate || null,
-      to: debouncedToDate || null,
+  const filtersKey = JSON.stringify([actor, action, debouncedCompanyId, userId, fromDate, toDate]);
+  const [cursorKey, setCursorKey] = useState(filtersKey);
+  const cursorPages = cursorKey === filtersKey ? cursors : [];
+  const cursor = cursorPages.length ? cursorPages[cursorPages.length - 1] : null;
+
+  // One page at a time, newest first; the server filters.
+  const { rows, totalCount, pageSize, loading, refreshing, error, refetch, nextCursor } = usePagedQuery<ActivityType>(
+    ADMIN_USER_ACTIVITY_LOGS_FEED_QUERY,
+    'adminUserActivityLogsFeed',
+    {
+      sortable: false,
+      filter: {
+        companyId: debouncedCompanyId || null,
+        from: fromDate || null,
+        to: toDate || null,
+        cursor,
+      },
+      textFilters: { actor, action, userId },
+    },
+  );
+  const page = cursorPages.length;
+  const goToPage = (target: number) => {
+    if (target > page && nextCursor) {
+      setCursorKey(filtersKey);
+      setCursors([...cursorPages, nextCursor]);
+    } else if (target < page) {
+      setCursorKey(filtersKey);
+      setCursors(cursorPages.slice(0, Math.max(0, target)));
     }
-  });
-
-  if (loading && !rows) {
-    return <div className="text-center py-12 text-slate-500">Loading activity logs...</div>;
-  }
-
-  if (error) {
-    return <div className="text-center py-12 text-red-600">Error: {error.message}</div>;
-  }
+  };
 
   const logs = rows || [];
 
@@ -85,7 +81,12 @@ export const UserActivityLog: React.FC = () => {
         <h2 className="text-2xl font-bold text-slate-800">User Activity Log</h2>
         <p className="text-slate-600">Audit logs across user and company activity</p>
       </div>
-      <PartialListWarning error={pageError} loadingMore={loadingMore} shown={logs.length} what="entries" onRetry={() => refetch()} />
+      {error ? (
+        <p role="alert" className="flex flex-wrap items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          Error: {error.message}
+          <button type="button" onClick={() => refetch()} className="font-semibold underline">Try again</button>
+        </p>
+      ) : null}
 
       <div className="bg-white rounded-lg border border-slate-200 p-6">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -118,15 +119,18 @@ export const UserActivityLog: React.FC = () => {
             />
           </div>
           <div className="grid grid-cols-2 gap-2 md:col-span-2">
+            {/* The state holds ISO strings; the input needs local "YYYY-MM-DDTHH:mm". */}
             <input
               type="datetime-local"
-              value={fromDate}
+              aria-label="From"
+              value={toDateTimeLocalValue(fromDate || null)}
               onChange={(event) => setFromDate(event.target.value ? new Date(event.target.value).toISOString() : '')}
               className="px-3 py-2 border border-slate-300 rounded-lg"
             />
             <input
               type="datetime-local"
-              value={toDate}
+              aria-label="To"
+              value={toDateTimeLocalValue(toDate || null)}
               onChange={(event) => setToDate(event.target.value ? new Date(event.target.value).toISOString() : '')}
               className="px-3 py-2 border border-slate-300 rounded-lg"
             />
@@ -135,7 +139,9 @@ export const UserActivityLog: React.FC = () => {
       </div>
 
       <div className="bg-white rounded-lg border border-slate-200 overflow-hidden">
-        {logs.length === 0 ? (
+        {loading ? (
+          <InlineSpinner label="Loading activity logs..." />
+        ) : logs.length === 0 ? (
           <div className="text-center py-12 text-slate-500">No activity in selected filters</div>
         ) : (
           <div className="overflow-x-auto">
@@ -170,6 +176,14 @@ export const UserActivityLog: React.FC = () => {
             </table>
           </div>
         )}
+        <Pager
+          page={page}
+          pageSize={pageSize}
+          totalCount={totalCount}
+          onPage={goToPage}
+          refreshing={refreshing}
+          what="entries"
+        />
       </div>
 
       {selected && (

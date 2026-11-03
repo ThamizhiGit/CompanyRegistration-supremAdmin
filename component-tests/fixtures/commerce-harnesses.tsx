@@ -2,16 +2,16 @@ import React, { useState } from 'react';
 // Shared Apollo harnesses for commerce component scenarios.
 import { type MockedResponse } from '@apollo/client/testing';
 import { SchemaMockedProvider } from './schema-mocks';
-import { paged } from './paging';
+import { companyFeedVariables, feedResult, paged, paymentFeedVariables } from './paging';
 import { Companies } from '../../src/components/admin/pages/Companies';
 import { Plans } from '../../src/components/admin/pages/Plans';
 import { Subscriptions } from '../../src/components/admin/pages/Subscriptions';
 import {
-  ADMIN_COMPANIES_QUERY,
+  ADMIN_COMPANIES_FEED_QUERY,
   ADMIN_COMPANY_PAYMENT_HISTORY_QUERY,
   ADMIN_DELETE_PLAN_MUTATION,
   ADMIN_MANUAL_SUBSCRIPTION_MUTATION,
-  ADMIN_PAYMENTS_QUERY,
+  ADMIN_PAYMENTS_FEED_QUERY,
   ADMIN_PLANS_QUERY,
   ADMIN_PROMO_CODES_QUERY,
   ADMIN_REQUEST_REFUND_MUTATION,
@@ -26,11 +26,6 @@ type HarnessProps = {
   /** Currency of the company's payment (default USD). */
   paymentCurrency?: string;
 };
-
-const companyVariables = paged({
-  search: null, status: null, subscriptionStatus: null, dueDateFrom: null,
-  dueDateTo: null, recurringDateFrom: null, recurringDateTo: null,
-});
 
 export function PlansHarness({ mocks = [], scenario }: HarnessProps) {
   const [toast, setToast] = useState('');
@@ -103,21 +98,22 @@ export function CompaniesHarness({ mocks = [], scenario, paymentCurrency = 'USD'
     createdAt: '2026-01-02T00:00:00.000Z', dueDate: '2026-08-01T12:00:00.000Z',
     recurringDate: '2026-09-01T12:00:00.000Z', deniedReason: null, gatewayMethod: 'card',
     gatewayRefReceiverMedium: 'merchant-7', gatewayRefSenderMedium: 'customer-7',
-    gatewayPayload: '{}', paymentGatewayStatus: 'settled',
+    gatewayPayload: '{}', paymentGatewayStatus: 'settled', refundedAmount: 0,
   };
   const actions = scenario === 'actions' || scenario === 'slow-actions';
   const actionDelay = scenario === 'slow-actions' ? { delay: 800 } : {};
   const scenarioMocks: MockedResponse[] = scenario ? [
     {
-      request: { query: ADMIN_COMPANIES_QUERY, variables: companyVariables },
+      request: { query: ADMIN_COMPANIES_FEED_QUERY, variables: companyFeedVariables() },
       maxUsageCount: actions ? 3 : 1,
-      ...(scenario === 'loading' ? { delay: 60_000, result: { data: { adminCompanies: [] } } } :
+      ...(scenario === 'loading' ? { delay: 60_000, result: feedResult('adminCompaniesFeed', []) } :
         scenario === 'error' ? { error: new Error('company service unavailable') } :
-        { result: { data: { adminCompanies: scenario === 'empty' ? [] : [company] } } }),
+        { result: feedResult('adminCompaniesFeed', scenario === 'empty' ? [] : [company]) }),
     },
     ...(scenario === 'data' ? [{
-      request: { query: ADMIN_COMPANIES_QUERY, variables: { ...companyVariables, search: 'missing' } },
-      result: { data: { adminCompanies: [company] } },
+      // The server searched: nothing matches.
+      request: { query: ADMIN_COMPANIES_FEED_QUERY, variables: companyFeedVariables({ search: 'missing' }) },
+      result: feedResult('adminCompaniesFeed', []),
     }] : []),
     ...(actions ? [
       {
@@ -126,12 +122,12 @@ export function CompaniesHarness({ mocks = [], scenario, paymentCurrency = 'USD'
         result: { data: { adminCompanyPaymentHistory: [payment] } },
       },
       {
-        request: { query: ADMIN_REQUEST_REFUND_MUTATION, variables: { paymentIntentId: 'pi_acme', reason: 'Duplicate charge', amount: 1000 } },
+        request: { query: ADMIN_REQUEST_REFUND_MUTATION, variables: { paymentIntentId: 'pi_acme', reason: 'Duplicate charge', amount: 1000, mode: 'refund_and_rebill' } },
         ...actionDelay,
         result: { data: { adminRequestRefund: { success: true, message: 'queued' } } },
       },
       {
-        request: { query: ADMIN_REQUEST_REFUND_MUTATION, variables: { paymentIntentId: 'pi_acme', reason: 'Admin requested refund', amount: null } },
+        request: { query: ADMIN_REQUEST_REFUND_MUTATION, variables: { paymentIntentId: 'pi_acme', reason: 'Admin requested refund', amount: null, mode: 'refund_and_rebill' } },
         result: { data: { adminRequestRefund: { success: true, message: 'queued' } } },
       },
       {
@@ -171,18 +167,18 @@ export function SubscriptionsHarness({ mocks = [], scenario }: HarnessProps) {
     gatewayMethod: 'paypal', gatewayRefReceiverMedium: 'merchant@orbit.test',
     gatewayRefSenderMedium: 'payer@orbit.test', paymentGatewayStatus: 'pending',
   };
+  // No adminCompanies request any more: the payment row carries its company's name.
   const scenarioMocks: MockedResponse[] = scenario ? [
     {
-      request: { query: ADMIN_PAYMENTS_QUERY, variables: paged({ status: null, companyId: null, dateFrom: null, dateTo: null, search: null }) },
-      ...(scenario === 'loading' ? { delay: 60_000, result: { data: { adminPayments: [] } } } :
+      request: { query: ADMIN_PAYMENTS_FEED_QUERY, variables: paymentFeedVariables() },
+      ...(scenario === 'loading' ? { delay: 60_000, result: feedResult('adminPaymentsFeed', []) } :
         scenario === 'error' ? { error: new Error('payments unavailable') } :
-        { result: { data: { adminPayments: scenario === 'empty' ? [] : [payment] } } }),
+        { result: feedResult('adminPaymentsFeed', scenario === 'empty' ? [] : [payment]) }),
     },
     ...(scenario === 'data' ? [{
-      request: { query: ADMIN_PAYMENTS_QUERY, variables: paged({ status: null, companyId: null, dateFrom: null, dateTo: null, search: 'unknown' }) },
-      result: { data: { adminPayments: [payment] } },
+      request: { query: ADMIN_PAYMENTS_FEED_QUERY, variables: paymentFeedVariables({ search: 'unknown' }) },
+      result: feedResult('adminPaymentsFeed', []),
     }] : []),
-    { request: { query: ADMIN_COMPANIES_QUERY, variables: companyVariables }, result: { data: { adminCompanies: scenario === 'empty' ? [] : [{ id: 42, company: 'Orbit Works' }] } } },
   ] : mocks;
   return (
     <SchemaMockedProvider mocks={scenarioMocks}>

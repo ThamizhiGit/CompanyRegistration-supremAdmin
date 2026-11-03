@@ -11,7 +11,8 @@ import {
   EyeOff,
 } from 'lucide-react';
 import { AdminDashboard } from './components/admin';
-import { TOKEN_AUTH_MUTATION } from './lib/graphql';
+import { SUPER_ADMIN_LOGOUT_MUTATION, TOKEN_AUTH_MUTATION } from './lib/graphql';
+import { abortAdminPageLoops } from './lib/useAllPagesQuery';
 
 const STORAGE = window.sessionStorage;
 const TOKEN_KEY = 'token';
@@ -53,6 +54,8 @@ export default function App() {
   // Signing out (or an expired session) must not leave the previous admin's
   // data in the Apollo cache for whoever signs in next in this tab.
   const endSession = (message = '') => {
+    // Stop page loops (lists still loading, exports) before the token goes.
+    abortAdminPageLoops();
     clearAdminSession();
     setAdminUsername('');
     setError(message);
@@ -166,6 +169,14 @@ export default function App() {
   };
 
   const handleLogout = () => {
+    // The server ends the token too (it would stay valid until it expires);
+    // sent with the token explicitly, as the session is cleared right away.
+    const token = STORAGE.getItem(TOKEN_KEY);
+    if (token) {
+      client
+        .mutate({ mutation: SUPER_ADMIN_LOGOUT_MUTATION, context: { headers: { 'X-SuperAdmin-Authorization': token } } })
+        .catch(() => undefined);
+    }
     endSession();
   };
 

@@ -1,7 +1,7 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation } from '@apollo/client/react';
 import {
-  ADMIN_COMPANIES_QUERY,
+  ADMIN_COMPANIES_FEED_QUERY,
   ADMIN_ASSIGN_COMPANY_PLAN_MUTATION,
   ADMIN_UPDATE_COMPANY_DETAIL_MUTATION,
   ADMIN_COMPANY_PAYMENT_HISTORY_QUERY,
@@ -10,7 +10,17 @@ import {
   ADMIN_MANUAL_SUBSCRIPTION_MUTATION,
 } from '../../../lib/graphql';
 import { buildPayload, centsFromAmount, currencyInputStep, formatDate, formatDateTime, formatPrice, isWholeUnitCurrency, toDateTimeLocalValue } from '../../../lib/admin-utils';
-import { PartialListWarning, useAllPagesQuery } from '../../../lib/useAllPagesQuery';
+import {
+  EXPORT_ROW_CAP,
+  facetOptions,
+  InlineSpinner,
+  isAbortError,
+  Pager,
+  PartialListWarning,
+  useAllPagesQuery,
+  useFeedExport,
+  usePagedQuery,
+} from '../../../lib/useAllPagesQuery';
 import {
   ArrowLeft,
   Building2,
@@ -33,7 +43,7 @@ import {
   Users,
   X,
 } from 'lucide-react';
-import { buildColumnFilterOptions, ColumnFilter, matchesColumnFilter } from '../ColumnFilter';
+import { ColumnFilter } from '../ColumnFilter';
 import { ChangePackageDialog, PackageCell, useCompanyPackages } from './PackageBuilder';
 import { DateRangePicker, DateRangeValue } from '../DateRangePicker';
 
@@ -42,8 +52,13 @@ interface EditingCompanyDetail {
   company: string;
   planId: string;
   originalPlanId: string;
+  /** Name of the package the company is on (shown when it is not Free/Premium). */
+  originalPlanName?: string;
   originalSubscriptionStatus: string;
   subscriptionStatus: string;
+  /** As loaded: a change of either date also needs a reason. */
+  originalSubscriptionDueDate: string;
+  originalSubscriptionRecurringDate: string;
   isActive?: boolean | null;
   isSuspended?: boolean | null;
   suspensionScope?: string | null;
@@ -89,6 +104,7 @@ interface CompanyType {
   latestPaymentGatewayRefSenderMedium?: string | null;
   latestPaymentGatewayStatus?: string | null;
   latestPaymentCreatedAt?: string | null;
+  effectiveSubscriptionStatus?: string | null;
   paymentSummary?: {
     latestStatus?: string | null;
     lastPaymentAt?: string | null;
@@ -125,6 +141,7 @@ interface CompanyPaymentType {
   dueDate: string | null;
   recurringDate: string | null;
   deniedReason: string | null;
+  refundedAmount?: number | null;
   gatewayMethod?: string | null;
   gatewayRefReceiverMedium?: string | null;
   gatewayRefSenderMedium?: string | null;
@@ -175,9 +192,11 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
   const [statusSelections, setStatusSelections] = useState<string[]>([]);
   const [planSelections, setPlanSelections] = useState<string[]>([]);
-  const [emailSelections, setEmailSelections] = useState<string[]>([]);
-  const [dueDateSelections, setDueDateSelections] = useState<string[]>([]);
-  const [recurringDateSelections, setRecurringDateSelections] = useState<string[]>([]);
+  // Due / recurring date ranges (YYYY-MM-DD), filtered by the server.
+  const [dueFrom, setDueFrom] = useState('');
+  const [dueTo, setDueTo] = useState('');
+  const [recurringFrom, setRecurringFrom] = useState('');
+  const [recurringTo, setRecurringTo] = useState('');
   const [gatewaySelections, setGatewaySelections] = useState<string[]>([]);
   const [filtersOpen, setFiltersOpen] = useState(true);
 
@@ -191,6 +210,9 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
   const [selectedPayment, setSelectedPayment] = useState<CompanyPaymentType | null>(null);
   const [refundReason, setRefundReason] = useState('');
   const [refundAmount, setRefundAmount] = useState('');
+  // refund_and_rebill: the refunded period is billed again; refund_keep_period:
+  // a goodwill refund, the period stays paid and nothing is re-charged.
+  const [refundMode, setRefundMode] = useState<'refund_and_rebill' | 'refund_keep_period'>('refund_and_rebill');
   const [manualSource, setManualSource] = useState('portal');
   const [manualMethod, setManualMethod] = useState('card');
   const [manualReceiver, setManualReceiver] = useState('');
@@ -199,35 +221,62 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
   const subscriptionStatusOptions = [
     { value: 'trial', label: 'Trial', description: 'Temporary access before paid activation' },
     { value: 'active', label: 'Active', description: 'Paid or approved subscription access' },
-    { value: 'pending', label: 'Pending', description: 'Payment or approval is still in progress' },
+    { value: 'pending', label: 'Pending', description: 'Payment or approval is still in progress', readOnly: true },
     { value: 'past_due', label: 'Past due', description: 'Payment is overdue or needs attention' },
-    { value: 'suspended', label: 'Suspended', description: 'Temporarily blocked or limited by superadmin' },
-    { value: 'failed', label: 'Failed', description: 'Latest subscription payment failed' },
-    { value: 'refunded', label: 'Refunded', description: 'Subscription payment was refunded' },
-    { value: 'canceled', label: 'Canceled', description: 'Subscription access is canceled' },
+    { value: 'cancelled', label: 'Cancelled', description: 'Subscription access is cancelled' },
+    // Shown, not set here: suspension has its own action (Subscriptions > Suspend),
+    // and these follow the latest payment.
+    { value: 'suspended', label: 'Suspended', description: 'Suspend or resume from the Subscriptions page', readOnly: true },
+    { value: 'failed', label: 'Failed', description: 'Latest subscription payment failed', readOnly: true },
+    { value: 'refunded', label: 'Refunded', description: 'Subscription payment was refunded', readOnly: true },
+    { value: 'inactive', label: 'Inactive', description: 'Latest payment was refunded', readOnly: true },
   ];
-  const companyQueryVariables = useMemo(() => ({
-    search: search.trim() || null,
-    status: null,
-    subscriptionStatus: null,
-    dueDateFrom: null,
-    dueDateTo: null,
-    recurringDateFrom: null,
-    recurringDateTo: null,
-  }), [search]);
+  // The statuses the server accepts in adminUpdateCompanyDetail.
+  const editableStatuses = new Set(['trial', 'active', 'past_due', 'cancelled']);
+  const toIsoDay = (value: string, endOfDay = false) => {
+    if (!value) return null;
+    const date = new Date(`${value}T${endOfDay ? '23:59:59.999' : '00:00:00'}`);
+    return Number.isNaN(date.getTime()) ? null : date.toISOString();
+  };
 
-  // Every company and payment (not the API's first page of 50).
+  // One page of companies at a time: the server searches (name, id, latest
+  // payment email / intent id / gateway), filters, sorts and counts.
   const {
     rows: companyRows,
+    totalCount: companiesTotal,
+    facets: companyFacets,
+    page: companiesPage,
+    setPage: setCompaniesPage,
+    pageSize: companiesPageSize,
     loading: companiesLoading,
+    refreshing: companiesRefreshing,
     error: companiesError,
-    pageError: companiesPageError,
-    loadingMore: companiesLoadingMore,
     refetch: refetchCompanies,
-  } = useAllPagesQuery<CompanyType, typeof companyQueryVariables>(ADMIN_COMPANIES_QUERY, 'adminCompanies', {
+    setSort: setServerSort,
+    variables: companyFeedVariables,
+  } = usePagedQuery<CompanyType>(ADMIN_COMPANIES_FEED_QUERY, 'adminCompaniesFeed', {
     fetchPolicy: 'cache-and-network',
-    variables: companyQueryVariables,
+    filter: {
+      subscriptionStatus: statusSelections,
+      planId: planSelections,
+      gateway: gatewaySelections,
+      dueDateFrom: toIsoDay(dueFrom),
+      dueDateTo: toIsoDay(dueTo, true),
+      recurringDateFrom: toIsoDay(recurringFrom),
+      recurringDateTo: toIsoDay(recurringTo, true),
+    },
+    textFilters: { search },
+    initialSort: { field: 'createdAt', direction: 'desc' },
   });
+  const companyExport = useFeedExport<CompanyType>(ADMIN_COMPANIES_FEED_QUERY, 'adminCompaniesFeed', companyFeedVariables);
+  // The open Company 360 shows the company as the list has it now: after a
+  // refund, a status change or a payment, its status, dates and totals are
+  // the refreshed ones, not those of when it was opened.
+  useEffect(() => {
+    if (!viewingCompany || !companyRows) return;
+    const fresh = companyRows.find((row) => row.id === viewingCompany.id);
+    if (fresh && fresh !== viewingCompany) setViewingCompany(fresh);
+  }, [companyRows, viewingCompany]);
 
   const {
     rows: historyRows,
@@ -259,6 +308,21 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
   const [refundInFlight, setRefundInFlight] = useState(false);
   const manualInFlightRef = useRef(false);
   const [manualInFlight, setManualInFlight] = useState(false);
+  const savingCompanyRef = useRef(false);
+  const [savingCompany, setSavingCompany] = useState(false);
+  const paymentStatusInFlightRef = useRef(false);
+  const [paymentStatusInFlight, setPaymentStatusInFlight] = useState<string | null>(null);
+  const sameInstant = (left?: string | null, right?: string | null) => {
+    if (!left || !right) return !left && !right;
+    return new Date(left).getTime() === new Date(right).getTime();
+  };
+  // Status or billing dates changed: the server wants a reason (kept in the audit log).
+  const billingChanged = (detail: EditingCompanyDetail) =>
+    normalizeStatus(detail.subscriptionStatus) !== normalizeStatus(detail.originalSubscriptionStatus)
+    || (detail.planId !== 'free' && (
+      !sameInstant(detail.subscriptionDueDate, detail.originalSubscriptionDueDate)
+      || !sameInstant(detail.subscriptionRecurringDate, detail.originalSubscriptionRecurringDate)
+    ));
 
   const rawCompanies = companyRows || [];
   // Package / modules per company (batched: the list is not paginated).
@@ -266,6 +330,30 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
   const { packages, failedIds: packageFailedIds, refetch: refetchPackages } = useCompanyPackages(companyIds);
   const [changingPackageFor, setChangingPackageFor] = useState<{ id: number; name: string } | null>(null);
   const historyItems = historyRows || [];
+  // Company 360 totals per currency, net of refunds (partial ones included),
+  // from the full history; null while it is filtered or loading (the server's
+  // single total is shown then).
+  const companyTotals = useMemo(() => {
+    // An incomplete list (a later page failed) is not totalled: the server's summary is shown instead.
+    if (!historyRows || historyStatus !== 'all' || historyDateFrom || historyDateTo || historyLoadingMore || historyPageError) return null;
+    const byCurrency = new Map<string, { currency: string; paid: number; refunded: number; outstanding: number }>();
+    historyRows.forEach((payment) => {
+      const currency = (payment.currency || 'USD').toUpperCase();
+      const row = byCurrency.get(currency) || { currency, paid: 0, refunded: 0, outstanding: 0 };
+      const status = (payment.status || '').toLowerCase();
+      const amount = Number(payment.amount || 0);
+      if (status === 'succeeded' || status === 'refunded') {
+        const given = Number(payment.refundedAmount || 0);
+        const refunded = Math.min(amount, status === 'refunded' && given <= 0 ? amount : given);
+        row.paid += amount - refunded;
+        row.refunded += refunded;
+      } else if (status === 'pending') {
+        row.outstanding += amount;
+      }
+      byCurrency.set(currency, row);
+    });
+    return [...byCurrency.values()].filter((row) => row.paid || row.refunded || row.outstanding);
+  }, [historyRows, historyStatus, historyDateFrom, historyDateTo, historyLoadingMore, historyPageError]);
   const paymentStatuses = ['pending', 'succeeded', 'failed', 'refunded'] as const;
   const normalizeStatus = (status?: string | null) => (status || '').trim().toLowerCase();
   const getEffectiveSubscriptionStatus = (company: CompanyType) => {
@@ -296,9 +384,16 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
     return {
       ...detail,
       subscriptionStatus: nextStatus,
-      planId: paidSubscriptionStatuses.has(normalizedStatus) ? 'premium' : detail.planId,
+      // Only a Free company moves to Premium with a paid status: a company on
+      // any other package keeps it (packages change in "Change package").
+      planId: paidSubscriptionStatuses.has(normalizedStatus) && detail.planId === 'free' ? 'premium' : detail.planId,
     };
   };
+  /** Free/Premium, plus the company's own package when it is another one. */
+  const editPlanOptions = (detail: EditingCompanyDetail) =>
+    planOptions.some((plan) => plan.id === detail.originalPlanId)
+      ? planOptions
+      : [...planOptions, { id: detail.originalPlanId, name: detail.originalPlanName || detail.originalPlanId }];
   const syncEditingPlan = (detail: EditingCompanyDetail, nextPlanId: string): EditingCompanyDetail => {
     if (nextPlanId === 'free') {
       return {
@@ -316,6 +411,13 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
       subscriptionStatus: detail.planId === 'free' ? 'trial' : detail.subscriptionStatus,
     };
   };
+  // The server keeps the due, recurring and next billing dates as one date
+  // (a reschedule moves all three), so the two inputs always move together.
+  const setBillingDate = (value: string) => {
+    if (!editingDetail) return;
+    const iso = value ? new Date(value).toISOString() : '';
+    setEditingDetail({ ...editingDetail, subscriptionDueDate: iso, subscriptionRecurringDate: iso });
+  };
   const getEditValidationError = (detail: EditingCompanyDetail): string => {
     const normalizedStatus = normalizeStatus(detail.subscriptionStatus);
     if (detail.planId === 'free') return '';
@@ -330,8 +432,9 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
     if (Number.isNaN(dueTime) || Number.isNaN(recurringTime)) {
       return 'Enter valid due and recurring dates.';
     }
-    if (recurringTime <= dueTime) {
-      return 'Recurring date must be after the due date.';
+    // Equal is fine: a registration sets both to the end of the trial.
+    if (recurringTime < dueTime) {
+      return 'Recurring date must not be before the due date.';
     }
 
     return '';
@@ -341,7 +444,9 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
       return 'Free plan uses Active status and does not carry billing dates.';
     }
     if (paidSubscriptionStatuses.has(normalizeStatus(detail.subscriptionStatus))) {
-      return `${getStatusLabel(detail.subscriptionStatus)} status uses the Premium plan and requires billing dates.`;
+      return detail.planId === 'premium'
+        ? `${getStatusLabel(detail.subscriptionStatus)} status uses the Premium plan and requires billing dates.`
+        : `${getStatusLabel(detail.subscriptionStatus)} status requires billing dates. Use Change package to move to another package.`;
     }
     return 'Plan drives billing and subscription pricing.';
   };
@@ -349,136 +454,49 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
     setSearch('');
     setStatusSelections([]);
     setPlanSelections([]);
-    setEmailSelections([]);
-    setDueDateSelections([]);
-    setRecurringDateSelections([]);
+    setDueFrom('');
+    setDueTo('');
+    setRecurringFrom('');
+    setRecurringTo('');
     setGatewaySelections([]);
   };
-  const normalizedSearch = search.trim().toLowerCase();
+  // Filter options with counts over every matching company (server facets).
   const companyStatusOptions = useMemo(
-    () => buildColumnFilterOptions(rawCompanies, (company) => getEffectiveSubscriptionStatus(company)),
-    [rawCompanies],
+    () => facetOptions(companyFacets, 'subscriptionStatus', (facet) => getStatusLabel(facet.value || '') || '-'),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [companyFacets],
   );
   const companyPlanOptions = useMemo(
-    () => buildColumnFilterOptions(rawCompanies, (company) => getCompanyPlanName(company)),
-    [rawCompanies],
-  );
-  const companyEmailOptions = useMemo(
-    () => buildColumnFilterOptions(rawCompanies, (company) => company.latestPaymentEmail || '-'),
-    [rawCompanies],
-  );
-  const companyDueOptions = useMemo(
-    () => buildColumnFilterOptions(rawCompanies, (company) => formatDate(company.subscriptionDueDate)),
-    [rawCompanies],
-  );
-  const companyRecurringOptions = useMemo(
-    () => buildColumnFilterOptions(rawCompanies, (company) => formatDate(company.subscriptionRecurringDate)),
-    [rawCompanies],
+    () => facetOptions(companyFacets, 'planId', (facet) => facet.label || facet.value || 'No package'),
+    [companyFacets],
   );
   const companyGatewayOptions = useMemo(
-    () => buildColumnFilterOptions(rawCompanies, (company) => getCompanyGatewayLabel(company)),
-    [rawCompanies],
+    () => facetOptions(companyFacets, 'gateway', (facet) => facet.value || 'No payment'),
+    [companyFacets],
   );
-  const companies = useMemo(() => (
-    rawCompanies.filter((company) => {
-      const planText = [getCompanyPlanId(company), getCompanyPlanName(company)]
-        .filter(Boolean)
-        .join(' ')
-        .toLowerCase();
-      const gatewayText = [
-        company.latestPaymentGatewayMethod,
-        company.latestPaymentSource,
-        company.latestPaymentGatewayStatus,
-        company.latestPaymentGatewayRefReceiverMedium,
-        company.latestPaymentGatewayRefSenderMedium,
-      ]
-        .filter(Boolean)
-        .join(' ')
-        .toLowerCase();
-      const searchableText = [
-        company.company,
-        company.id,
-        company.latestPaymentEmail,
-        company.latestPaymentIntentId,
-        getEffectiveSubscriptionStatus(company),
-        planText,
-        gatewayText,
-      ]
-        .filter(Boolean)
-        .join(' ')
-        .toLowerCase();
+  // The server already searched, filtered and sorted this page.
+  const companies = rawCompanies;
+  const filtersActive = Boolean(
+    search.trim() || statusSelections.length || planSelections.length || gatewaySelections.length
+      || dueFrom || dueTo || recurringFrom || recurringTo,
+  );
+  const SERVER_SORT: Record<CompanySortKey, string> = {
+    company: 'company',
+    subscriptionStatus: 'subscriptionStatus',
+    planName: 'planName',
+    latestPaymentEmail: 'latestPaymentEmail',
+    subscriptionDueDate: 'subscriptionDueDate',
+    subscriptionRecurringDate: 'subscriptionRecurringDate',
+    latestPaymentGatewayMethod: 'latestPaymentGatewayMethod',
+    createdAt: 'createdAt',
+  };
 
-      if (normalizedSearch && !searchableText.includes(normalizedSearch)) return false;
-      if (!matchesColumnFilter(statusSelections, getEffectiveSubscriptionStatus(company))) return false;
-      if (!matchesColumnFilter(planSelections, getCompanyPlanName(company))) return false;
-      if (!matchesColumnFilter(emailSelections, company.latestPaymentEmail || '-')) return false;
-      if (!matchesColumnFilter(dueDateSelections, formatDate(company.subscriptionDueDate))) return false;
-      if (!matchesColumnFilter(recurringDateSelections, formatDate(company.subscriptionRecurringDate))) return false;
-      if (!matchesColumnFilter(gatewaySelections, getCompanyGatewayLabel(company))) return false;
-      return true;
-    }).sort((left, right) => {
-      if (!sortKey || !sortDirection) return 0;
-
-      const readValue = (company: CompanyType): string | number => {
-        switch (sortKey) {
-          case 'company':
-            return company.company || '';
-          case 'subscriptionStatus':
-            return getEffectiveSubscriptionStatus(company);
-          case 'planName':
-            return getCompanyPlanName(company);
-          case 'latestPaymentEmail':
-            return company.latestPaymentEmail || '';
-          case 'subscriptionDueDate':
-            return company.subscriptionDueDate ? new Date(company.subscriptionDueDate).getTime() : 0;
-          case 'subscriptionRecurringDate':
-            return company.subscriptionRecurringDate ? new Date(company.subscriptionRecurringDate).getTime() : 0;
-          case 'latestPaymentGatewayMethod':
-            return getCompanyGatewayLabel(company);
-          case 'createdAt':
-            return company.createdAt ? new Date(company.createdAt).getTime() : 0;
-          default:
-            return '';
-        }
-      };
-
-      const leftValue = readValue(left);
-      const rightValue = readValue(right);
-      const comparison =
-        typeof leftValue === 'number' && typeof rightValue === 'number'
-          ? leftValue - rightValue
-          : String(leftValue).localeCompare(String(rightValue), undefined, { sensitivity: 'base' });
-
-      return sortDirection === 'asc' ? comparison : -comparison;
-    })
-  ), [
-    rawCompanies,
-    normalizedSearch,
-    statusSelections,
-    planSelections,
-    emailSelections,
-    dueDateSelections,
-    recurringDateSelections,
-    gatewaySelections,
-    sortKey,
-    sortDirection,
-  ]);
-
+  // The server sorts every page; no direction = newest first.
   const cycleSort = (key: CompanySortKey) => {
-    if (sortKey !== key) {
-      setSortKey(key);
-      setSortDirection('asc');
-      return;
-    }
-    if (sortDirection === 'asc') {
-      setSortDirection('desc');
-      return;
-    }
-    if (sortDirection === 'desc') {
-      setSortDirection(null);
-      return;
-    }
-    setSortDirection('asc');
+    const direction: SortDirection = sortKey !== key ? 'asc' : sortDirection === 'asc' ? 'desc' : sortDirection === 'desc' ? null : 'asc';
+    setSortKey(key);
+    setSortDirection(direction);
+    setServerSort(direction ? { field: SERVER_SORT[key], direction } : { field: 'createdAt', direction: 'desc' });
   };
 
   const SortHeader = ({ label, sort }: { label: string; sort: CompanySortKey }) => {
@@ -497,8 +515,16 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
     );
   };
 
-  const exportCompanies = () => {
-    const rows = companies.map((company) => [
+  // Every company of the current filter (not only this page), up to EXPORT_ROW_CAP.
+  const exportCompanies = async () => {
+    let exported: Awaited<ReturnType<typeof companyExport.exportAll>>;
+    try {
+      exported = await companyExport.exportAll();
+    } catch (err) {
+      if (!isAbortError(err)) onToast('error', (err as Error)?.message || 'Export failed');
+      return;
+    }
+    const rows = exported.rows.map((company) => [
       company.company,
       getEffectiveSubscriptionStatus(company),
       getCompanyPlanName(company),
@@ -517,6 +543,9 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
       'application/vnd.ms-excel',
       `<table>${table}</table>`
     );
+    if (exported.truncated) {
+      onToast('success', `Downloaded the first ${EXPORT_ROW_CAP} of ${exported.totalCount} companies; narrow the filters for the rest.`);
+    }
   };
 
   const printCompanies = () => {
@@ -571,46 +600,34 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
     printWindow.print();
   };
 
-  if (companiesLoading) {
-    return <div className="text-center py-12 text-slate-500">Loading companies...</div>;
-  }
-
-  if (companiesError) {
-    return <div className="text-center py-12 text-red-600">Error: {companiesError.message}</div>;
-  }
-
   const handleSaveCompany = async () => {
-    if (!editingDetail) return;
+    if (!editingDetail || savingCompanyRef.current) return;
     const statusChanged = normalizeStatus(editingDetail.subscriptionStatus) !== normalizeStatus(editingDetail.originalSubscriptionStatus);
     const validationError = getEditValidationError(editingDetail);
     if (validationError) {
       onToast('error', validationError);
       return;
     }
-    if (statusChanged && !editingDetail.subscriptionStatusReason.trim()) {
-      onToast('error', 'Please add a reason for changing subscription status');
+    const reason = editingDetail.subscriptionStatusReason.trim();
+    if (billingChanged(editingDetail) && !reason) {
+      onToast('error', 'Please add a reason for changing the subscription status or billing dates');
+      return;
+    }
+    const name = editingDetail.company.trim();
+    if (!name) {
+      onToast('error', 'Company name cannot be blank');
       return;
     }
     const shouldClearBillingDates = editingDetail.planId === 'free';
+    const dueChanged = !sameInstant(editingDetail.subscriptionDueDate, editingDetail.originalSubscriptionDueDate);
+    const recurringChanged = !sameInstant(editingDetail.subscriptionRecurringDate, editingDetail.originalSubscriptionRecurringDate);
+    // One save at a time: the ref blocks a second click before React re-renders.
+    savingCompanyRef.current = true;
+    setSavingCompany(true);
     try {
-      const detailResult: any = await updateCompanyDetail({
-        variables: {
-          input: {
-            id: editingDetail.id,
-            company: editingDetail.company,
-            subscriptionStatus: editingDetail.subscriptionStatus,
-            subscriptionDueDate: shouldClearBillingDates ? null : editingDetail.subscriptionDueDate || null,
-            subscriptionRecurringDate: shouldClearBillingDates ? null : editingDetail.subscriptionRecurringDate || null,
-            isMultiLocationEnabled: editingDetail.isMultiLocationEnabled,
-          },
-        },
-      });
-      // success: false (e.g. a refused status change) is not an update.
-      const detailPayload = detailResult?.data?.adminUpdateCompanyDetail;
-      if (detailPayload && detailPayload.success === false) {
-        onToast('error', detailPayload.message || 'Company details could not be updated');
-        return;
-      }
+      // The plan first: assigning a package sets its billing dates, so dates
+      // the admin typed in the same save are applied after it, never
+      // overwritten by it.
       if (editingDetail.planId !== editingDetail.originalPlanId) {
         const planResult: any = await assignCompanyPlan({
           variables: {
@@ -621,10 +638,34 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
         });
         const planPayload = planResult?.data?.adminAssignCompanyPlan;
         if (planPayload && planPayload.success === false) {
-          onToast('error', planPayload.message || 'Company details were saved, but the plan could not be changed');
-          refetchCompanies();
+          onToast('error', planPayload.message || 'The plan could not be changed; nothing was saved');
           return;
         }
+      }
+      // Only what changed: an unchanged status derived from payments (e.g.
+      // "failed") is not a status the server accepts to set.
+      const detailResult: any = await updateCompanyDetail({
+        variables: {
+          input: {
+            id: editingDetail.id,
+            company: name,
+            ...(statusChanged ? { subscriptionStatus: editingDetail.subscriptionStatus } : {}),
+            ...(dueChanged && !shouldClearBillingDates ? { subscriptionDueDate: editingDetail.subscriptionDueDate || null } : {}),
+            ...(recurringChanged && !shouldClearBillingDates
+              ? { subscriptionRecurringDate: editingDetail.subscriptionRecurringDate || null }
+              : {}),
+            isMultiLocationEnabled: editingDetail.isMultiLocationEnabled,
+            reason: reason || null,
+          },
+        },
+      });
+      // success: false (e.g. a refused status change) is not an update.
+      const detailPayload = detailResult?.data?.adminUpdateCompanyDetail;
+      if (detailPayload && detailPayload.success === false) {
+        onToast('error', detailPayload.message || 'Company details could not be updated');
+        // The plan may already have changed above.
+        refetchCompanies();
+        return;
       }
       onToast('success', 'Company detail updated');
       setEditingDetail(null);
@@ -633,6 +674,9 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
       refetchPackages();
     } catch (err: any) {
       onToast('error', err.message || 'Failed to update company details');
+    } finally {
+      savingCompanyRef.current = false;
+      setSavingCompany(false);
     }
   };
 
@@ -644,6 +688,7 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
     setSelectedPayment(null);
     setRefundReason('');
     setRefundAmount('');
+    setRefundMode('refund_and_rebill');
     setManualReason('');
     setManualReceiver('');
     setManualSender('');
@@ -667,6 +712,10 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
   };
 
   const handlePaymentStatusChange = async (paymentIntentId: string, status: string) => {
+    // One status change at a time (a second pick before the answer is ignored).
+    if (paymentStatusInFlightRef.current) return;
+    paymentStatusInFlightRef.current = true;
+    setPaymentStatusInFlight(paymentIntentId);
     try {
       const result: any = await updatePaymentStatus({
         variables: {
@@ -685,6 +734,9 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
       refetchCompanies();
     } catch (err: any) {
       onToast('error', err.message || 'Failed to update payment status');
+    } finally {
+      paymentStatusInFlightRef.current = false;
+      setPaymentStatusInFlight(null);
     }
   };
 
@@ -706,7 +758,7 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
         return;
       }
       if (!window.confirm(`Refund ${formatPrice(amount, currency)} (${currency}) of this payment?`)) return;
-    } else if (!window.confirm('No amount entered: refund the full payment?')) {
+    } else if (!window.confirm('No amount entered: refund everything still paid on this payment?')) {
       return;
     }
     refundInFlightRef.current = true;
@@ -717,6 +769,7 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
           paymentIntentId: selectedPayment.paymentIntentId,
           reason: refundReason || 'Admin requested refund',
           amount,
+          mode: refundMode,
         },
       });
       const payload = result?.data?.adminRequestRefund;
@@ -729,6 +782,7 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
       setSelectedPayment(null);
       setRefundReason('');
       setRefundAmount('');
+      setRefundMode('refund_and_rebill');
       refetchHistory();
       refetchCompanies();
     } catch (err: any) {
@@ -783,11 +837,9 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
 
   const editValidationError = editingDetail ? getEditValidationError(editingDetail) : '';
   const editStatusReasonMissing = Boolean(
-    editingDetail &&
-      normalizeStatus(editingDetail.subscriptionStatus) !== normalizeStatus(editingDetail.originalSubscriptionStatus) &&
-      !editingDetail.subscriptionStatusReason.trim(),
+    editingDetail && billingChanged(editingDetail) && !editingDetail.subscriptionStatusReason.trim(),
   );
-  const companySaveDisabled = Boolean(editValidationError) || editStatusReasonMissing;
+  const companySaveDisabled = Boolean(editValidationError) || editStatusReasonMissing || savingCompany;
   const editingFreePlan = editingDetail?.planId === 'free';
 
   return (
@@ -798,13 +850,12 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
         <h2 className="text-2xl font-bold text-slate-800">Companies</h2>
         <p className="text-slate-600">Manage tenants, plan assignments, subscriptions, and payment history</p>
       </div>
-      <PartialListWarning
-        error={companiesPageError}
-        loadingMore={companiesLoadingMore}
-        shown={rawCompanies.length}
-        what="companies"
-        onRetry={() => refetchCompanies()}
-      />
+      {companiesError ? (
+        <p role="alert" className="flex flex-wrap items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          Error: {companiesError.message}
+          <button type="button" onClick={() => refetchCompanies()} className="font-semibold underline">Try again</button>
+        </p>
+      ) : null}
 
       <div className="bg-white rounded-lg border border-slate-200 p-4 space-y-3">
         <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
@@ -827,9 +878,10 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                 if (open) {
                   setStatusSelections([]);
                   setPlanSelections([]);
-                  setEmailSelections([]);
-                  setDueDateSelections([]);
-                  setRecurringDateSelections([]);
+                  setDueFrom('');
+                  setDueTo('');
+                  setRecurringFrom('');
+                  setRecurringTo('');
                   setGatewaySelections([]);
                 }
                 return !open;
@@ -853,14 +905,26 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
             >
               Clear
             </button>
-            <button
-              type="button"
-              onClick={exportCompanies}
-              className="inline-flex items-center gap-2 rounded-lg border border-emerald-200 px-3 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-50"
-            >
-              <Download className="h-4 w-4" />
-              Excel
-            </button>
+            {companyExport.exporting ? (
+              <button
+                type="button"
+                onClick={companyExport.cancel}
+                className="inline-flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-800"
+              >
+                <X className="h-4 w-4" />
+                Cancel export
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={exportCompanies}
+                title="Export every matching company"
+                className="inline-flex items-center gap-2 rounded-lg border border-emerald-200 px-3 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-50"
+              >
+                <Download className="h-4 w-4" />
+                Export all
+              </button>
+            )}
             <button
               type="button"
               onClick={printCompanies}
@@ -874,12 +938,10 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
       </div>
 
       <div className="bg-white rounded-lg border border-slate-200 overflow-hidden">
-        {companies.length === 0 ? (
-          <div className="text-center py-12 text-slate-500">
-            {search || statusSelections.length > 0 || planSelections.length > 0 || emailSelections.length > 0 || dueDateSelections.length > 0 || recurringDateSelections.length > 0 || gatewaySelections.length > 0
-              ? 'No companies match your filters'
-              : 'No companies found'}
-          </div>
+        {companiesLoading ? (
+          <InlineSpinner label="Loading companies..." />
+        ) : companies.length === 0 && !filtersActive ? (
+          <div className="text-center py-12 text-slate-500">No companies found</div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[1160px]">
@@ -915,29 +977,19 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                     />
                   </th>
                   <th className="px-4 py-2"></th>
+                  {/* Email: the search box (the server searches it). */}
+                  <th className="px-4 py-2"></th>
                   <th className="px-4 py-2">
-                    <ColumnFilter
-                      label="Email"
-                      options={companyEmailOptions}
-                      selectedValues={emailSelections}
-                      onChange={setEmailSelections}
-                    />
+                    <div className="flex flex-col gap-1">
+                      <input type="date" value={dueFrom} onChange={(event) => setDueFrom(event.target.value)} aria-label="Due from" className="h-8 w-full rounded-lg border border-slate-200 bg-slate-50 px-2 text-xs outline-none focus:border-cyan-400 focus:bg-white" />
+                      <input type="date" value={dueTo} onChange={(event) => setDueTo(event.target.value)} aria-label="Due to" className="h-8 w-full rounded-lg border border-slate-200 bg-slate-50 px-2 text-xs outline-none focus:border-cyan-400 focus:bg-white" />
+                    </div>
                   </th>
                   <th className="px-4 py-2">
-                    <ColumnFilter
-                      label="Due Date"
-                      options={companyDueOptions}
-                      selectedValues={dueDateSelections}
-                      onChange={setDueDateSelections}
-                    />
-                  </th>
-                  <th className="px-4 py-2">
-                    <ColumnFilter
-                      label="Recurring Date"
-                      options={companyRecurringOptions}
-                      selectedValues={recurringDateSelections}
-                      onChange={setRecurringDateSelections}
-                    />
+                    <div className="flex flex-col gap-1">
+                      <input type="date" value={recurringFrom} onChange={(event) => setRecurringFrom(event.target.value)} aria-label="Recurring from" className="h-8 w-full rounded-lg border border-slate-200 bg-slate-50 px-2 text-xs outline-none focus:border-cyan-400 focus:bg-white" />
+                      <input type="date" value={recurringTo} onChange={(event) => setRecurringTo(event.target.value)} aria-label="Recurring to" className="h-8 w-full rounded-lg border border-slate-200 bg-slate-50 px-2 text-xs outline-none focus:border-cyan-400 focus:bg-white" />
+                    </div>
                   </th>
                   <th className="px-4 py-2">
                     <ColumnFilter
@@ -960,6 +1012,13 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                 ) : null}
               </thead>
               <tbody>
+                {companies.length === 0 ? (
+                  <tr>
+                    <td colSpan={9} className="py-12 text-center text-slate-500">
+                      {filtersActive ? 'No companies match your filters' : 'No companies found'}
+                    </td>
+                  </tr>
+                ) : null}
                 {companies.map((company) => {
                   const effectiveSubscriptionStatus = getEffectiveSubscriptionStatus(company);
                   const planName = getCompanyPlanName(company);
@@ -1009,11 +1068,14 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                                 company: company.company,
                                 planId: getCompanyPlanId(company),
                                 originalPlanId: getCompanyPlanId(company),
+                                originalPlanName: getCompanyPlanName(company),
                                 originalSubscriptionStatus: getEffectiveSubscriptionStatus(company),
                                 subscriptionStatus: getEffectiveSubscriptionStatus(company),
                                 subscriptionStatusReason: '',
                                 subscriptionDueDate: company.subscriptionDueDate || '',
                                 subscriptionRecurringDate: company.subscriptionRecurringDate || '',
+                                originalSubscriptionDueDate: company.subscriptionDueDate || '',
+                                originalSubscriptionRecurringDate: company.subscriptionRecurringDate || '',
                                 isMultiLocationEnabled: company.isMultiLocationEnabled,
                               })
                             }
@@ -1038,6 +1100,14 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
             </table>
           </div>
         )}
+        <Pager
+          page={companiesPage}
+          pageSize={companiesPageSize}
+          totalCount={companiesTotal}
+          onPage={setCompaniesPage}
+          refreshing={companiesRefreshing}
+          what="companies"
+        />
       </div>
 
       {changingPackageFor ? (
@@ -1091,11 +1161,13 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
 	                  }
 	                  className="w-full border border-slate-300 rounded-lg px-3 py-2 bg-white"
 	                >
-                  {subscriptionStatusOptions.map((status) => (
-                    <option key={status.value} value={status.value}>
-                      {status.label}
-                    </option>
-                  ))}
+                  {subscriptionStatusOptions
+                    .filter((status) => editableStatuses.has(status.value) || status.value === editingDetail.originalSubscriptionStatus)
+                    .map((status) => (
+                      <option key={status.value} value={status.value} disabled={!editableStatuses.has(status.value)}>
+                        {status.label}
+                      </option>
+                    ))}
                 </select>
                 <p className="mt-1 text-xs text-slate-500">
                   {subscriptionStatusOptions.find((status) => status.value === editingDetail.subscriptionStatus)?.description}
@@ -1111,7 +1183,7 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
 	                  }
 	                  className="w-full border border-slate-300 rounded-lg px-3 py-2 bg-white"
 	                >
-                  {planOptions.map((plan) => (
+                  {editPlanOptions(editingDetail).map((plan) => (
                     <option key={plan.id} value={plan.id}>
                       {plan.name}
                     </option>
@@ -1126,7 +1198,7 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
 	                  {editValidationError}
 	                </div>
 	              )}
-              {normalizeStatus(editingDetail.subscriptionStatus) !== normalizeStatus(editingDetail.originalSubscriptionStatus) && (
+              {billingChanged(editingDetail) && (
                 <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 space-y-3">
                   <div className="flex flex-wrap items-center gap-2 text-sm">
                     <span className="font-semibold text-slate-800">Status change</span>
@@ -1152,7 +1224,7 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                     />
                   </label>
                   <p className="text-xs text-amber-700">
-                    This reason is required before saving. Backend audit storage needs support to persist it.
+                    Required for a status or billing date change; it is kept in the company's audit log.
                   </p>
                 </div>
               )}
@@ -1164,10 +1236,7 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
 	                    type="datetime-local"
 	                    value={editingFreePlan ? '' : toDateTimeLocalValue(editingDetail.subscriptionDueDate)}
 	                    onChange={(event) =>
-	                      setEditingDetail({
-	                        ...editingDetail,
-	                        subscriptionDueDate: event.target.value ? new Date(event.target.value).toISOString() : '',
-	                      })
+	                      setBillingDate(event.target.value)
 	                    }
 	                    disabled={editingFreePlan}
 	                    className={`w-full border border-slate-300 rounded-lg px-3 py-2 ${editingFreePlan ? 'bg-slate-100 text-slate-400 cursor-not-allowed' : ''}`}
@@ -1183,16 +1252,15 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
 	                    type="datetime-local"
 	                    value={editingFreePlan ? '' : toDateTimeLocalValue(editingDetail.subscriptionRecurringDate)}
 	                    onChange={(event) =>
-	                      setEditingDetail({
-	                        ...editingDetail,
-	                        subscriptionRecurringDate: event.target.value ? new Date(event.target.value).toISOString() : '',
-	                      })
+	                      setBillingDate(event.target.value)
 	                    }
 	                    disabled={editingFreePlan}
 	                    className={`w-full border border-slate-300 rounded-lg px-3 py-2 ${editingFreePlan ? 'bg-slate-100 text-slate-400 cursor-not-allowed' : ''}`}
 	                  />
-	                  {editingFreePlan && (
+	                  {editingFreePlan ? (
 	                    <p className="mt-1 text-xs text-slate-500">Free plan has no recurring billing date.</p>
+	                  ) : (
+	                    <p className="mt-1 text-xs text-slate-500">Due and recurring are one billing date: changing either moves both.</p>
 	                  )}
 	                </div>
                 <label className="flex items-center gap-2 md:col-span-2">
@@ -1466,12 +1534,27 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                             <p className="font-semibold text-slate-800">{viewingCompany.latestPaymentPlanName || getCompanyPlanName(viewingCompany)}</p>
                           </div>
                           <div>
-                            <p className="text-xs text-slate-400">Total paid</p>
-                            <p className="font-semibold text-slate-800">{formatPrice(viewingCompany.paymentSummary?.totalPaid ?? 0, viewingCompany.latestPaymentCurrency || 'USD')}</p>
+                            <p className="text-xs text-slate-400">Total paid (net of refunds)</p>
+                            {companyTotals ? (
+                              companyTotals.length ? companyTotals.map((row) => (
+                                <p key={row.currency} className="font-semibold text-slate-800" data-testid="company-total-paid">
+                                  {formatPrice(row.paid, row.currency)}
+                                  {row.refunded ? <span className="ml-1 text-xs font-normal text-slate-500">({formatPrice(row.refunded, row.currency)} refunded)</span> : null}
+                                </p>
+                              )) : <p className="font-semibold text-slate-800">-</p>
+                            ) : (
+                              <p className="font-semibold text-slate-800">{formatPrice(viewingCompany.paymentSummary?.totalPaid ?? 0, viewingCompany.currency || viewingCompany.latestPaymentCurrency || 'USD')}</p>
+                            )}
                           </div>
                           <div>
                             <p className="text-xs text-slate-400">Outstanding</p>
-                            <p className="font-semibold text-slate-800">{formatPrice(viewingCompany.paymentSummary?.outstanding ?? 0, viewingCompany.latestPaymentCurrency || 'USD')}</p>
+                            {companyTotals ? (
+                              companyTotals.some((row) => row.outstanding) ? companyTotals.filter((row) => row.outstanding).map((row) => (
+                                <p key={row.currency} className="font-semibold text-slate-800">{formatPrice(row.outstanding, row.currency)}</p>
+                              )) : <p className="font-semibold text-slate-800">-</p>
+                            ) : (
+                              <p className="font-semibold text-slate-800">{formatPrice(viewingCompany.paymentSummary?.outstanding ?? 0, viewingCompany.currency || viewingCompany.latestPaymentCurrency || 'USD')}</p>
+                            )}
                           </div>
                         </div>
                       </section>
@@ -1607,11 +1690,16 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                                   aria-label={`Update status for ${payment.paymentIntentId}`}
                                   value={payment.status}
                                   onChange={(event) => handlePaymentStatusChange(payment.paymentIntentId, event.target.value)}
-                                  className="h-9 min-w-[120px] shrink-0 px-3 border border-slate-300 rounded-lg text-sm bg-white"
+                                  disabled={paymentStatusInFlight !== null}
+                                  className="h-9 min-w-[120px] shrink-0 px-3 border border-slate-300 rounded-lg text-sm bg-white disabled:opacity-60"
                                 >
-                                  {paymentStatuses.map((status) => (
-                                    <option key={status} value={status}>{status}</option>
-                                  ))}
+                                  {/* Refunds go through Refund (payment detail), which gives the money back;
+                                      "refunded" only shows as the current status. */}
+                                  {paymentStatuses
+                                    .filter((status) => status !== 'refunded' || payment.status === 'refunded')
+                                    .map((status) => (
+                                      <option key={status} value={status} disabled={status === 'refunded'}>{status}</option>
+                                    ))}
                                 </select>
                               </div>
                             </td>
@@ -1705,6 +1793,7 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                       ['Employees', String(selectedPayment.employeeCountSnapshot ?? '-')],
                       ['Original amount', selectedPayment.originalAmountCents !== null && selectedPayment.originalAmountCents !== undefined ? formatPrice(selectedPayment.originalAmountCents, selectedPayment.currency) : '-'],
                       ['Discount', selectedPayment.discountAmountCents ? formatPrice(selectedPayment.discountAmountCents, selectedPayment.currency) : '-'],
+                      ['Refunded', selectedPayment.refundedAmount ? formatPrice(Number(selectedPayment.refundedAmount), selectedPayment.currency) : '-'],
                       ['Promo code', selectedPayment.promoCode ? `${selectedPayment.promoCode}${selectedPayment.promoLabel && selectedPayment.promoLabel !== selectedPayment.promoCode ? ` (${selectedPayment.promoLabel})` : ''}` : '-'],
                       ['Trial starts', formatDateTime(selectedPayment.trialStartsAt || '')],
                       ['Trial ends', formatDateTime(selectedPayment.trialEndsAt || '')],
@@ -1757,6 +1846,17 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                       step={currencyInputStep(selectedPayment.currency || 'USD')}
                       min="0"
                     />
+                  </label>
+                  <label className="block">
+                      <span className="block text-xs font-semibold text-slate-600 mb-1.5">After the refund</span>
+                    <select
+                      value={refundMode}
+                      onChange={(event) => setRefundMode(event.target.value as 'refund_and_rebill' | 'refund_keep_period')}
+                      className="w-full h-10 border border-slate-300 bg-white rounded-lg px-3 text-sm focus:outline-none focus:ring-2 focus:ring-pink-100 focus:border-pink-400"
+                    >
+                      <option value="refund_and_rebill">Bill the period again</option>
+                      <option value="refund_keep_period">Keep the period paid (goodwill)</option>
+                    </select>
                   </label>
                   <button
                       type="button"

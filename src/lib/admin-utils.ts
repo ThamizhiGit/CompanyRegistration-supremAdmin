@@ -52,6 +52,11 @@ export const isWholeUnitCurrency = (currency: string = 'USD'): boolean => {
  * (blank is allowed -- the caller decides whether a value is required).
  * Whole-unit currencies refuse decimals instead of silently rounding them.
  */
+/** The largest amount the backend takes, in minor units (registration.currency.MAX_AMOUNT_MINOR). */
+export const MAX_AMOUNT_MINOR = 999_999_999_999;
+/** The largest value of a GraphQL Int (promo limits, trial months). */
+export const MAX_INT32 = 2_147_483_647;
+
 export const moneyInputError = (input: string, currency: string = 'USD', label = 'Amount'): string | null => {
   const text = (input || '').trim();
   if (!text) return null;
@@ -62,6 +67,7 @@ export const moneyInputError = (input: string, currency: string = 'USD', label =
   if (isWholeUnitCurrency(code) && !Number.isInteger(value)) return `${label} must be a whole number of ${code} (no decimals).`;
   const minor = value * 10 ** currencyDecimals(code);
   if (Math.abs(minor - Math.round(minor)) > 1e-6) return `${label} can have at most ${currencyDecimals(code)} decimals.`;
+  if (Math.round(minor) > MAX_AMOUNT_MINOR) return `${label} is too large.`;
   return null;
 };
 

@@ -53,5 +53,10 @@ test.describe('money helpers', () => {
     expect(wholeNumberError('15', 'Discount (%)', 0, 100)).toBeNull();
     expect(wholeNumberError('2.5', 'Round to', 0)).toBe('Round to must be a whole number (0 or more).');
     expect(wholeNumberError('', 'Employee limit', 0)).toBeNull();
+    // A package's employee limit as Plans checks it: blank, or 1..MAX_INT32 (as the server).
+    expect(wholeNumberError('', 'Employee limit', 1, 2147483647)).toBeNull();
+    expect(wholeNumberError('0', 'Employee limit', 1, 2147483647)).not.toBeNull();
+    expect(wholeNumberError('2147483648', 'Employee limit', 1, 2147483647)).not.toBeNull();
+    expect(wholeNumberError('121', 'Trial months', 0, 120)).not.toBeNull();
   });
 });

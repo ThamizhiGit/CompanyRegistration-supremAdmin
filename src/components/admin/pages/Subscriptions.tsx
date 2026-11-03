@@ -1,9 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation } from '@apollo/client/react';
 import {
-  ADMIN_PAYMENTS_QUERY,
+  ADMIN_PAYMENTS_FEED_QUERY,
   ADMIN_UPDATE_PAYMENT_STATUS_MUTATION,
-  ADMIN_COMPANIES_QUERY,
   ADMIN_UPDATE_COMPANY_SUBSCRIPTION_MUTATION,
   ADMIN_SUSPEND_COMPANY_MUTATION,
   ADMIN_RESUME_COMPANY_MUTATION,
@@ -26,24 +25,14 @@ import {
   Search,
   X,
 } from 'lucide-react';
-import { buildColumnFilterOptions, ColumnFilter, matchesColumnFilter } from '../ColumnFilter';
+import { ColumnFilter } from '../ColumnFilter';
 import { ChangePackageDialog, PackageCell, useCompanyPackages } from './PackageBuilder';
-import { PartialListWarning, useAllPagesQuery } from '../../../lib/useAllPagesQuery';
+import { EXPORT_ROW_CAP, facetOptions, InlineSpinner, isAbortError, Pager, useFeedExport, usePagedQuery } from '../../../lib/useAllPagesQuery';
 
 /** The payload of an admin mutation: `success: false` is a refusal, not a success. */
 type ActionPayload = { success?: boolean | null; message?: string | null } | null | undefined;
 const refusal = (payload: ActionPayload, fallback: string) =>
   payload && payload.success === false ? payload.message || fallback : null;
-
-const companyListVariables = {
-  search: null,
-  status: null,
-  subscriptionStatus: null,
-  dueDateFrom: null,
-  dueDateTo: null,
-  recurringDateFrom: null,
-  recurringDateTo: null,
-};
 
 type PaymentStatus = 'pending' | 'succeeded' | 'failed' | 'refunded' | null;
 type SortDirection = 'asc' | 'desc' | null;
@@ -169,15 +158,14 @@ export const Subscriptions: React.FC<{
   initialCompanyId?: number | null;
   initialCompanySearch?: string;
 }> = ({ onToast, initialCompanyId = null, initialCompanySearch = '' }) => {
-  const [companySelections, setCompanySelections] = useState<string[]>([]);
-  const [emailSelections, setEmailSelections] = useState<string[]>([]);
   const [planSelections, setPlanSelections] = useState<string[]>([]);
-  const [amountSelections, setAmountSelections] = useState<string[]>([]);
-  const [dueDateSelections, setDueDateSelections] = useState<string[]>([]);
-  const [trialEndSelections, setTrialEndSelections] = useState<string[]>([]);
   const [statusSelections, setStatusSelections] = useState<string[]>([]);
   const [gatewaySelections, setGatewaySelections] = useState<string[]>([]);
-  const [createdSelections, setCreatedSelections] = useState<string[]>([]);
+  // Amount (in major units, as typed) and created-date ranges, filtered by the server.
+  const [amountMin, setAmountMin] = useState('');
+  const [amountMax, setAmountMax] = useState('');
+  const [createdFrom, setCreatedFrom] = useState('');
+  const [createdTo, setCreatedTo] = useState('');
   const [companyIdFilter, setCompanyIdFilter] = useState<number | null>(initialCompanyId);
   const [companySearch, setCompanySearch] = useState(initialCompanySearch);
   const [statusOverrides, setStatusOverrides] = useState<Record<string, string>>({});
@@ -209,34 +197,57 @@ export const Subscriptions: React.FC<{
     setCompanySearch(initialCompanySearch || '');
   }, [initialCompanySearch]);
 
-  const paymentQueryVariables = {
-    status: null,
-    companyId: companyIdFilter,
-    dateFrom: null,
-    dateTo: null,
-    search: companySearch.trim() || null,
+  const toIsoDay = (value: string, endOfDay = false) => {
+    if (!value) return null;
+    const date = new Date(`${value}T${endOfDay ? '23:59:59.999' : '00:00:00'}`);
+    return Number.isNaN(date.getTime()) ? null : date.toISOString();
+  };
+  const toMinor = (value: string) => {
+    const amount = Number(value);
+    return value.trim() && Number.isFinite(amount) && amount >= 0 ? Math.round(amount * 100) : null;
+  };
+  const SERVER_SORT: Record<PaymentSortKey, string> = {
+    displayCompanyName: 'companyName',
+    email: 'email',
+    planName: 'planName',
+    amount: 'amount',
+    dueDate: 'dueDate',
+    trialEndsAt: 'trialEndsAt',
+    status: 'status',
+    createdAt: 'createdAt',
   };
 
-  // Every payment and company (not the API's first page of 50).
+  // One page of payments at a time: the server searches (company, email,
+  // intent id, invoice number), filters, sorts and counts.
   const {
     rows: paymentRows,
+    totalCount: paymentsTotal,
+    facets: paymentFacets,
+    page: paymentsPage,
+    setPage: setPaymentsPage,
+    pageSize: paymentsPageSize,
     loading,
+    refreshing: paymentsRefreshing,
     error,
-    pageError: paymentsPageError,
-    loadingMore: paymentsLoadingMore,
     refetch,
-  } = useAllPagesQuery<
-    PaymentType,
-    { status: PaymentStatus; companyId: number | null; dateFrom: string | null; dateTo: string | null; search: string | null }
-  >(ADMIN_PAYMENTS_QUERY, 'adminPayments', {
-    variables: paymentQueryVariables,
+    setSort: setServerSort,
+    variables: paymentFeedVariables,
+  } = usePagedQuery<PaymentType>(ADMIN_PAYMENTS_FEED_QUERY, 'adminPaymentsFeed', {
+    filter: {
+      companyId: companyIdFilter,
+      status: statusSelections,
+      planId: planSelections,
+      gateway: gatewaySelections,
+      amountMin: toMinor(amountMin),
+      amountMax: toMinor(amountMax),
+      dueOnly: dueOnly || null,
+      dateFrom: toIsoDay(createdFrom),
+      dateTo: toIsoDay(createdTo, true),
+    },
+    textFilters: { search: companySearch },
+    initialSort: { field: 'createdAt', direction: 'desc' },
   });
-
-  const { rows: companyRows, refetch: refetchCompanies } = useAllPagesQuery<CompanyType, typeof companyListVariables>(
-    ADMIN_COMPANIES_QUERY,
-    'adminCompanies',
-    { variables: companyListVariables },
-  );
+  const paymentExport = useFeedExport<PaymentType>(ADMIN_PAYMENTS_FEED_QUERY, 'adminPaymentsFeed', paymentFeedVariables);
 
   const [updatePaymentStatus] = useMutation<{ adminUpdatePaymentStatus: ActionPayload }, Record<string, unknown>, any, any>(ADMIN_UPDATE_PAYMENT_STATUS_MUTATION);
   const [updateCompanySubscription] = useMutation<{ adminUpdateCompanySubscription: ActionPayload }, Record<string, unknown>, any, any>(
@@ -313,7 +324,7 @@ export const Subscriptions: React.FC<{
         return false;
       }
       onToast('success', 'Payment status updated');
-      await Promise.all([refetch(paymentQueryVariables), refetchCompanies()]);
+      await refetch();
       dropOverride();
       return true;
     } catch (err: any) {
@@ -353,7 +364,7 @@ export const Subscriptions: React.FC<{
         return;
       }
       onToast('success', 'Due date updated');
-      await refetch(paymentQueryVariables);
+      await refetch();
       closeEditPayment();
     } catch (err: any) {
       onToast('error', err.message || 'Failed to update due date');
@@ -393,7 +404,7 @@ export const Subscriptions: React.FC<{
         return;
       }
       onToast('success', 'Company suspended');
-      await refetch(paymentQueryVariables);
+      await refetch();
       closeEditPayment();
     } catch (err: any) {
       onToast('error', err.message || 'Failed to suspend company');
@@ -422,7 +433,7 @@ export const Subscriptions: React.FC<{
         return;
       }
       onToast('success', 'Company resumed');
-      await refetch(paymentQueryVariables);
+      await refetch();
       closeEditPayment();
     } catch (err: any) {
       onToast('error', err.message || 'Failed to resume company');
@@ -498,7 +509,7 @@ export const Subscriptions: React.FC<{
         return;
       }
       onToast('success', 'Manual payment recorded');
-      await Promise.all([refetch(paymentQueryVariables), refetchCompanies()]);
+      await refetch();
       closeEditPayment();
     } catch (err: any) {
       onToast('error', err.message || 'Failed to record manual payment');
@@ -513,134 +524,54 @@ export const Subscriptions: React.FC<{
   );
   const { packages, failedIds: packageFailedIds, refetch: refetchPackages } = useCompanyPackages(paymentCompanyIds);
   const [changingPackageFor, setChangingPackageFor] = useState<{ id: number; name: string } | null>(null);
-  const companyNameById = useMemo(() => new Map(
-    (companyRows || [])
-      .filter((company) => company.company?.trim())
-      .map((company) => [company.id, company.company.trim()] as const)
-  ), [companyRows]);
   const getGatewayLabel = (payment: PaymentType) =>
     paymentMethodLabel(payment.gatewayMethod) || paymentMethodLabel(payment.source) || '-';
-  const getAmountFilterValue = (payment: PaymentType) =>
-    formatPrice(payment.finalAmountCents ?? payment.amount ?? 0, payment.currency || 'USD');
   const getPaymentStatus = (payment: PaymentType) => statusOverrides[payment.paymentIntentId] || payment.status;
+  // The payment row carries its company's name (no second list of every company).
   const getCompanyName = (payment: PaymentType) => {
     const paymentCompanyName = payment.companyName?.trim();
     if (paymentCompanyName && paymentCompanyName !== '-') return paymentCompanyName;
-    if (payment.companyId !== undefined && payment.companyId !== null) {
-      return companyNameById.get(payment.companyId) || `Company #${payment.companyId}`;
-    }
+    if (payment.companyId !== undefined && payment.companyId !== null) return `Company #${payment.companyId}`;
     return 'Unknown company';
   };
-  const normalizedCompanySearch = companySearch.trim().toLowerCase();
-  const indexedPayments = useMemo<IndexedPaymentType[]>(() => payments.map((payment) => {
+  const indexPayment = (payment: PaymentType): IndexedPaymentType => {
     const displayCompanyName = getCompanyName(payment);
     const effectiveStatus = getPaymentStatus(payment);
-    const planText = [payment.planId, payment.planName, payment.employeeCountSnapshot]
-      .filter(Boolean)
-      .join(' ');
-    const searchableText = [
-      displayCompanyName,
-      payment.email,
-      payment.paymentIntentId,
-      effectiveStatus,
-      planText,
-      payment.gatewayMethod,
-      payment.source,
-      payment.paymentGatewayStatus,
-    ]
-      .filter(Boolean)
-      .join(' ')
-      .toLowerCase();
-
     return {
       ...payment,
       status: effectiveStatus,
       displayCompanyName,
-      searchableText,
+      searchableText: [displayCompanyName, payment.email, payment.paymentIntentId].filter(Boolean).join(' ').toLowerCase(),
     };
-  }), [payments, companyNameById, statusOverrides]);
-  const companyOptions = useMemo(
-    () => buildColumnFilterOptions(indexedPayments, (payment) => payment.displayCompanyName),
-    [indexedPayments],
+  };
+  const indexedPayments = useMemo<IndexedPaymentType[]>(
+    () => payments.map(indexPayment),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [payments, statusOverrides],
   );
-  const emailOptions = useMemo(
-    () => buildColumnFilterOptions(indexedPayments, (payment) => payment.email || '-'),
-    [indexedPayments],
-  );
-  const planOptions = useMemo(
-    () => buildColumnFilterOptions(indexedPayments, (payment) => payment.planName || payment.planId || '-'),
-    [indexedPayments],
-  );
-  const amountOptions = useMemo(
-    () => buildColumnFilterOptions(indexedPayments, (payment) => getAmountFilterValue(payment)),
-    [indexedPayments],
-  );
-  const dueDateOptions = useMemo(
-    () => buildColumnFilterOptions(indexedPayments, (payment) => formatDate(payment.dueDate)),
-    [indexedPayments],
-  );
-  const trialEndOptions = useMemo(
-    () => buildColumnFilterOptions(indexedPayments, (payment) => formatDate(payment.trialEndsAt)),
-    [indexedPayments],
-  );
-  const statusOptions = useMemo(
-    () => buildColumnFilterOptions(indexedPayments, (payment) => payment.status),
-    [indexedPayments],
-  );
+  // Filter options come from the server (counts over every matching payment).
+  const planOptions = useMemo(() => facetOptions(paymentFacets, 'planId'), [paymentFacets]);
+  const statusOptions = useMemo(() => facetOptions(paymentFacets, 'status'), [paymentFacets]);
   const gatewayOptions = useMemo(
-    () => buildColumnFilterOptions(indexedPayments, (payment) => getGatewayLabel(payment)),
-    [indexedPayments],
-  );
-  const createdOptions = useMemo(
-    () => buildColumnFilterOptions(indexedPayments, (payment) => formatDate(payment.createdAt)),
-    [indexedPayments],
+    () => facetOptions(paymentFacets, 'gateway', (facet) => paymentMethodLabel(facet.value) || '-'),
+    [paymentFacets],
   );
 
   const filteredPayments = useMemo(() => {
     const seen = new Set<string>();
-    const dedupedPayments = indexedPayments.filter((payment) => {
+    return indexedPayments.filter((payment) => {
       if (seen.has(payment.paymentIntentId)) return false;
       seen.add(payment.paymentIntentId);
       return true;
     });
+  }, [indexedPayments]);
 
-    const searched = normalizedCompanySearch
-      ? dedupedPayments.filter((payment) => payment.searchableText.includes(normalizedCompanySearch))
-      : dedupedPayments;
-    const statusFiltered = searched.filter((payment) => (
-      matchesColumnFilter(companySelections, payment.displayCompanyName) &&
-      matchesColumnFilter(emailSelections, payment.email || '-') &&
-      matchesColumnFilter(planSelections, payment.planName || payment.planId || '-') &&
-      matchesColumnFilter(amountSelections, getAmountFilterValue(payment)) &&
-      matchesColumnFilter(dueDateSelections, formatDate(payment.dueDate)) &&
-      matchesColumnFilter(trialEndSelections, formatDate(payment.trialEndsAt)) &&
-      matchesColumnFilter(statusSelections, payment.status) &&
-      matchesColumnFilter(gatewaySelections, getGatewayLabel(payment)) &&
-      matchesColumnFilter(createdSelections, formatDate(payment.createdAt))
-    ));
-    const dueFiltered = !dueOnly ? statusFiltered : statusFiltered.filter((payment) => {
-      if (!payment.dueDate) return false;
-      return new Date(payment.dueDate).getTime() <= Date.now() && payment.status !== 'succeeded';
-    });
-    if (!sortDirection) return dueFiltered;
-    return [...dueFiltered].sort((a, b) => {
-      const left = sortKey === 'amount' ? (a.finalAmountCents ?? a.amount ?? 0) : a[sortKey];
-      const right = sortKey === 'amount' ? (b.finalAmountCents ?? b.amount ?? 0) : b[sortKey];
-      const leftValue = typeof left === 'string' ? left.toLowerCase() : Number(left ?? 0);
-      const rightValue = typeof right === 'string' ? right.toLowerCase() : Number(right ?? 0);
-      if (leftValue < rightValue) return sortDirection === 'asc' ? -1 : 1;
-      if (leftValue > rightValue) return sortDirection === 'asc' ? 1 : -1;
-      return 0;
-    });
-  }, [indexedPayments, normalizedCompanySearch, companySelections, emailSelections, planSelections, amountSelections, dueDateSelections, trialEndSelections, statusSelections, gatewaySelections, createdSelections, dueOnly, sortKey, sortDirection]);
-
+  // The server sorts (every page); no direction = newest first.
   const cycleSort = (key: PaymentSortKey) => {
-    if (sortKey !== key) {
-      setSortKey(key);
-      setSortDirection('asc');
-      return;
-    }
-    setSortDirection((current) => current === 'asc' ? 'desc' : current === 'desc' ? null : 'asc');
+    const direction: SortDirection = sortKey !== key ? 'asc' : sortDirection === 'asc' ? 'desc' : sortDirection === 'desc' ? null : 'asc';
+    setSortKey(key);
+    setSortDirection(direction);
+    setServerSort(direction ? { field: SERVER_SORT[key], direction } : { field: 'createdAt', direction: 'desc' });
   };
 
   const SortHeader = ({ label, column }: { label: string; column: PaymentSortKey }) => (
@@ -656,12 +587,20 @@ export const Subscriptions: React.FC<{
     </button>
   );
 
-  const exportPayments = () => {
-    if (!filteredPayments.length) {
+  // Every payment of the current filter (not only this page), up to EXPORT_ROW_CAP.
+  const exportPayments = async () => {
+    let exported: Awaited<ReturnType<typeof paymentExport.exportAll>>;
+    try {
+      exported = await paymentExport.exportAll();
+    } catch (err) {
+      if (!isAbortError(err)) onToast('error', (err as Error)?.message || 'Export failed');
+      return;
+    }
+    if (!exported.rows.length) {
       onToast('error', 'No data available to download');
       return;
     }
-    const rows = filteredPayments.map((payment) => (
+    const rows = exported.rows.map(indexPayment).map((payment) => (
       `<tr><td>${escapeHtml(payment.displayCompanyName)}</td><td>${escapeHtml(payment.email)}</td><td>${escapeHtml(payment.planName || payment.planId || '-')}</td><td>${escapeHtml(formatPrice(payment.finalAmountCents ?? payment.amount, payment.currency))}</td><td>${escapeHtml(payment.status)}</td><td>${escapeHtml(formatDate(payment.dueDate || null))}</td><td>${escapeHtml(formatDate(payment.createdAt))}</td></tr>`
     )).join('');
     downloadTextFile(
@@ -669,9 +608,15 @@ export const Subscriptions: React.FC<{
       `<!doctype html><html><head><meta charset="utf-8" /></head><body><table><thead><tr><th>Company</th><th>Email</th><th>Plan</th><th>Amount</th><th>Status</th><th>Due Date</th><th>Created</th></tr></thead><tbody>${rows}</tbody></table></body></html>`,
       'application/vnd.ms-excel;charset=utf-8',
     );
-    onToast('success', 'Excel file downloaded successfully!');
+    onToast(
+      'success',
+      exported.truncated
+        ? `Downloaded the first ${EXPORT_ROW_CAP} of ${exported.totalCount} payments; narrow the filters for the rest.`
+        : 'Excel file downloaded successfully!',
+    );
   };
 
+  // Prints the page on screen.
   const printPayments = () => {
     if (!filteredPayments.length) {
       onToast('error', 'No data available to print');
@@ -688,9 +633,6 @@ export const Subscriptions: React.FC<{
     printWindow.print();
   };
 
-  if (loading) return <div className="text-center py-12 text-slate-500">Loading subscriptions...</div>;
-  if (error) return <div className="text-center py-12 text-red-600">Error: {error.message}</div>;
-
   return (
     <div className="space-y-8">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -706,13 +648,12 @@ export const Subscriptions: React.FC<{
           Refresh
         </button>
       </div>
-      <PartialListWarning
-        error={paymentsPageError}
-        loadingMore={paymentsLoadingMore}
-        shown={payments.length}
-        what="payments"
-        onRetry={() => refetch()}
-      />
+      {error ? (
+        <p role="alert" className="flex flex-wrap items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          Error: {error.message}
+          <button type="button" onClick={() => refetch()} className="font-semibold underline">Try again</button>
+        </p>
+      ) : null}
 
       <div className="rounded-xl border border-slate-200 bg-white p-3 space-y-3">
         {companyIdFilter !== null && (
@@ -745,15 +686,13 @@ export const Subscriptions: React.FC<{
             type="button"
             onClick={() => setFiltersOpen((open) => {
               if (open) {
-                setCompanySelections([]);
-                setEmailSelections([]);
                 setPlanSelections([]);
-                setAmountSelections([]);
-                setDueDateSelections([]);
-                setTrialEndSelections([]);
+                setAmountMin('');
+                setAmountMax('');
                 setStatusSelections([]);
                 setGatewaySelections([]);
-                setCreatedSelections([]);
+                setCreatedFrom('');
+                setCreatedTo('');
                 setDueOnly(false);
               }
               return !open;
@@ -768,9 +707,15 @@ export const Subscriptions: React.FC<{
           >
             <Filter className="h-4 w-4" />
           </button>
-          <button onClick={exportPayments} className="inline-flex h-9 items-center gap-2 rounded-lg border border-slate-200 px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">
-            <Download className="h-4 w-4" /> Excel
-          </button>
+          {paymentExport.exporting ? (
+            <button type="button" onClick={paymentExport.cancel} className="inline-flex h-9 items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 text-sm font-semibold text-amber-800">
+              <X className="h-4 w-4" /> Cancel export
+            </button>
+          ) : (
+            <button onClick={exportPayments} title="Export every matching payment" className="inline-flex h-9 items-center gap-2 rounded-lg border border-slate-200 px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+              <Download className="h-4 w-4" /> Export all
+            </button>
+          )}
           <button onClick={printPayments} className="inline-flex h-9 items-center gap-2 rounded-lg border border-slate-200 px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">
             <Printer className="h-4 w-4" /> Print
           </button>
@@ -796,22 +741,9 @@ export const Subscriptions: React.FC<{
                 </tr>
                 {filtersOpen ? (
                 <tr className="border-t border-slate-200 bg-white">
-                  <th className="px-3 py-2">
-                    <ColumnFilter
-                      label="Company"
-                      options={companyOptions}
-                      selectedValues={companySelections}
-                      onChange={setCompanySelections}
-                    />
-                  </th>
-                  <th className="px-3 py-2">
-                    <ColumnFilter
-                      label="Email"
-                      options={emailOptions}
-                      selectedValues={emailSelections}
-                      onChange={setEmailSelections}
-                    />
-                  </th>
+                  {/* Company and email: the search box (the server searches both). */}
+                  <th className="px-3 py-2"></th>
+                  <th className="px-3 py-2"></th>
                   <th className="px-3 py-2">
                     <ColumnFilter
                       label="Plan"
@@ -822,21 +754,13 @@ export const Subscriptions: React.FC<{
                   </th>
                   <th className="px-3 py-2"></th>
                   <th className="px-3 py-2">
-                    <ColumnFilter
-                      label="Amount"
-                      options={amountOptions}
-                      selectedValues={amountSelections}
-                      onChange={setAmountSelections}
-                    />
+                    <div className="flex gap-1">
+                      <input type="number" min={0} step="0.01" value={amountMin} onChange={(event) => setAmountMin(event.target.value)} placeholder="Min" aria-label="Minimum amount" className="h-8 w-full rounded-lg border border-slate-200 bg-slate-50 px-2 text-xs outline-none focus:border-cyan-400 focus:bg-white" />
+                      <input type="number" min={0} step="0.01" value={amountMax} onChange={(event) => setAmountMax(event.target.value)} placeholder="Max" aria-label="Maximum amount" className="h-8 w-full rounded-lg border border-slate-200 bg-slate-50 px-2 text-xs outline-none focus:border-cyan-400 focus:bg-white" />
+                    </div>
                   </th>
                   <th className="px-3 py-2">
                     <div className="space-y-2">
-                      <ColumnFilter
-                        label="Due Date"
-                        options={dueDateOptions}
-                        selectedValues={dueDateSelections}
-                        onChange={setDueDateSelections}
-                      />
                       <label className="inline-flex items-center gap-2 text-xs font-semibold text-slate-700">
                         <input
                           type="checkbox"
@@ -847,14 +771,7 @@ export const Subscriptions: React.FC<{
                       </label>
                     </div>
                   </th>
-                  <th className="px-3 py-2">
-                    <ColumnFilter
-                      label="Trial End"
-                      options={trialEndOptions}
-                      selectedValues={trialEndSelections}
-                      onChange={setTrialEndSelections}
-                    />
-                  </th>
+                  <th className="px-3 py-2"></th>
                   <th className="px-3 py-2">
                     <ColumnFilter
                       label="Status"
@@ -872,22 +789,28 @@ export const Subscriptions: React.FC<{
                     />
                   </th>
                   <th className="px-3 py-2">
-                    <ColumnFilter
-                      label="Created"
-                      options={createdOptions}
-                      selectedValues={createdSelections}
-                      onChange={setCreatedSelections}
-                    />
+                    <div className="flex flex-col gap-1">
+                      <input type="date" value={createdFrom} onChange={(event) => setCreatedFrom(event.target.value)} aria-label="Created from" className="h-8 w-full rounded-lg border border-slate-200 bg-slate-50 px-2 text-xs outline-none focus:border-cyan-400 focus:bg-white" />
+                      <input type="date" value={createdTo} onChange={(event) => setCreatedTo(event.target.value)} aria-label="Created to" className="h-8 w-full rounded-lg border border-slate-200 bg-slate-50 px-2 text-xs outline-none focus:border-cyan-400 focus:bg-white" />
+                    </div>
                   </th>
                   <th className="px-3 py-2"></th>
                 </tr>
                 ) : null}
               </thead>
               <tbody>
-                {filteredPayments.length === 0 ? (
+                {loading ? (
+                  <tr>
+                    <td colSpan={11} className="px-4">
+                      <InlineSpinner label="Loading subscriptions..." />
+                    </td>
+                  </tr>
+                ) : filteredPayments.length === 0 ? (
                   <tr>
                     <td colSpan={11} className="px-4 py-12 text-center text-slate-500">
-                      {payments.length === 0 ? 'No payments found' : 'No payments match your filters'}
+                      {companySearch.trim() || planSelections.length || statusSelections.length || gatewaySelections.length || amountMin || amountMax || createdFrom || createdTo || dueOnly
+                        ? 'No payments match your filters'
+                        : 'No payments found'}
                     </td>
                   </tr>
                 ) : filteredPayments.map((payment) => (
@@ -978,6 +901,14 @@ export const Subscriptions: React.FC<{
               </tbody>
             </table>
           </div>
+          <Pager
+            page={paymentsPage}
+            pageSize={paymentsPageSize}
+            totalCount={paymentsTotal}
+            onPage={setPaymentsPage}
+            refreshing={paymentsRefreshing}
+            what="payments"
+          />
       </div>
 
       {changingPackageFor ? (
@@ -1190,9 +1121,12 @@ export const Subscriptions: React.FC<{
                     onChange={(event) => setEditStatus(event.target.value)}
                     className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-100"
                   >
-                    {paymentStatusOptions.map((status) => (
-                      <option key={status} value={status}>{status}</option>
-                    ))}
+                    {paymentStatusOptions
+                      // A card payment is refunded through Stripe (Refund), never marked by hand.
+                      .filter((status) => status !== 'refunded' || (editingPayment.source || '').toLowerCase() !== 'stripe' || editStatus === 'refunded')
+                      .map((status) => (
+                        <option key={status} value={status}>{status}</option>
+                      ))}
                   </select>
                 </label>
                 <button

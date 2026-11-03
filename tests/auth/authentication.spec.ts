@@ -105,7 +105,7 @@ test.describe('Session lifecycle', () => {
     await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible();
   });
 
-  test('should clear session on logout', async ({ page }) => {
+  test('should clear session on logout', async ({ page, mockApi }) => {
     await seedAdminSession(page, { username: 'testadmin' });
     await page.goto('/');
     // Sign out lives in the account menu (the header Logout button was removed).
@@ -121,6 +121,8 @@ test.describe('Session lifecycle', () => {
         })),
       )
       .toEqual({ token: null, username: null });
+    // The token is ended on the server too, not only forgotten here.
+    await expect.poll(() => mockApi.lastVariables('SuperAdminLogout')).toBeDefined();
   });
 
   test('should auto expire session when token expires', async ({ page }) => {
@@ -132,6 +134,25 @@ test.describe('Session lifecycle', () => {
 
     await expect(page.getByRole('heading', { name: 'Welcome back', exact: true })).toBeVisible();
     await expect(page.getByText('Your session has expired. Please sign in again.')).toBeVisible();
+  });
+});
+
+test.describe('Session errors', () => {
+  test('only the UNAUTHENTICATED code (or 401/403) signs the admin out', async ({ adminPage: page, mockApi }) => {
+    // An unrelated error that mentions "expired" keeps the session.
+    mockApi.setOverride('AdminUsersFeed', { errors: [{ message: 'Promo code expired', path: ['adminUsersFeed'] }], data: null });
+    await page.getByRole('button', { name: 'Users' }).click();
+    await expect(page.getByRole('alert')).toContainText('Promo code expired');
+    await expect(page.getByRole('heading', { name: 'Welcome back', exact: true })).toHaveCount(0);
+
+    mockApi.setOverride('AdminCompaniesFeed', {
+      errors: [{ message: 'Token expired', path: ['adminCompaniesFeed'], extensions: { code: 'UNAUTHENTICATED' } }],
+      data: null,
+    });
+    await page.getByRole('button', { name: 'Companies' }).click();
+    await expect(page.getByRole('heading', { name: 'Welcome back', exact: true })).toBeVisible();
+    await expect(page.getByText('Your session has expired. Please sign in again.')).toBeVisible();
+    await expect.poll(() => page.evaluate(() => sessionStorage.getItem('token'))).toBeNull();
   });
 });
 
