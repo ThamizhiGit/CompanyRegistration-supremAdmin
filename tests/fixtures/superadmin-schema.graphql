@@ -11,6 +11,9 @@ type Query {
   """All SaaS tenant companies, optionally filtered."""
   adminCompanies(search: String, status: String, subscriptionStatus: String, dueDateFrom: DateTime, dueDateTo: DateTime, recurringDateFrom: DateTime, recurringDateTo: DateTime, limit: Int, offset: Int): [AdminCompanyType]
 
+  """One page of companies with the total and filter options."""
+  adminCompaniesFeed(filter: AdminCompanyFeedFilterInput, sort: AdminFeedSortInput): AdminCompaniesFeedType
+
   """
   Package, interval, version and modules per company (at most 500 ids per call).
   """
@@ -31,6 +34,9 @@ type Query {
 
   """All subscription payments, optionally filtered."""
   adminPayments(status: String, companyId: Int, dateFrom: DateTime, dateTo: DateTime, search: String, limit: Int, offset: Int): [AdminPaymentType]
+
+  """One page of payments with the total and filter options."""
+  adminPaymentsFeed(filter: AdminPaymentFeedFilterInput, sort: AdminFeedSortInput): AdminPaymentsFeedType
   adminPlanDetail(id: String!): AdminPlan
 
   """Subscription plans used as billing source of truth."""
@@ -43,8 +49,16 @@ type Query {
   adminRevenueSummary: AdminRevenueSummaryType
   adminUserActivityLogs(input: ActivityFilterInput, from: DateTime, to: DateTime, actor: String, action: String, companyId: Int, userId: ID, targetType: String, limit: Int, offset: Int): [AdminActivityLogType]
 
+  """
+  One page of activity (newest first, keyset cursor) with the total and filter options.
+  """
+  adminUserActivityLogsFeed(filter: AdminActivityFeedFilterInput): AdminActivityLogsFeedType
+
   """All users across tenants, optionally scoped/searched."""
   adminUsers(companyId: Int, search: String, limit: Int, offset: Int): [AdminUserType]
+
+  """One page of users with the total and filter options."""
+  adminUsersFeed(filter: AdminUserFeedFilterInput, sort: AdminFeedSortInput): AdminUsersFeedType
   companyPlan(companyId: Int!): AdminPlan
 
   """The SuperAdmin resolved from the X-SuperAdmin-Authorization header."""
@@ -60,8 +74,16 @@ type AdminAccountsReportType {
   expense: BigInt
   net: BigInt
   pendingBalance: BigInt
-  failedRefunds: Int
+  failedRefunds: BigInt
   rows: [AdminAccountsReportRowType]
+
+  """Exact income per currency, net of refunds."""
+  incomeByCurrency: [AdminCurrencyTotalType]
+  expenseByCurrency: [AdminCurrencyTotalType]
+
+  """True when income/expense/rows are converted to approximate USD."""
+  approximate: Boolean
+  unconvertedCurrencies: [String]
 }
 
 """
@@ -75,6 +97,14 @@ type AdminAccountsReportRowType {
   label: String
   income: BigInt
   expense: BigInt
+  net: BigInt
+}
+
+"""Exact money in one currency (minor units): taken, given back, kept."""
+type AdminCurrencyTotalType {
+  currency: String
+  gross: BigInt
+  refunded: BigInt
   net: BigInt
 }
 
@@ -148,6 +178,51 @@ type CompanyPaymentSummaryType {
   nextDueDate: DateTime
   totalPaid: BigInt
   outstanding: BigInt
+}
+
+type AdminCompaniesFeedType {
+  totalCount: Int
+  items: [AdminCompanyType]
+  facets: [AdminFacetType]
+}
+
+type AdminFacetType {
+  field: String
+
+  """Filter value; null = not set."""
+  value: String
+  label: String
+  count: Int
+}
+
+input AdminCompanyFeedFilterInput {
+  """Name, id, latest payment email, intent id or gateway."""
+  search: String
+
+  """active | inactive (the company switch)."""
+  status: String
+  subscriptionStatus: [String]
+
+  """An empty value selects companies without a package."""
+  planId: [String]
+  gateway: [String]
+  dueDateFrom: DateTime
+  dueDateTo: DateTime
+  recurringDateFrom: DateTime
+  recurringDateTo: DateTime
+  nextBillingFrom: DateTime
+  nextBillingTo: DateTime
+  createdFrom: DateTime
+  createdTo: DateTime
+  limit: Int
+  offset: Int
+}
+
+input AdminFeedSortInput {
+  field: String
+
+  """asc or desc (default desc)."""
+  direction: String
 }
 
 type AdminCompanyPackage {
@@ -322,10 +397,18 @@ type AdminInfrastructureType {
   net: BigInt
   period: String
   pendingBalance: BigInt
-  failedRefunds: Int
+  failedRefunds: BigInt
   byDay: [AdminInfrastructureDayType]
   byCategory: [InfrastructureCategoryExpenseType]
   byVendor: [InfrastructureVendorExpenseType]
+
+  """Exact income per currency, net of refunds."""
+  incomeByCurrency: [AdminCurrencyTotalType]
+  expenseByCurrency: [AdminCurrencyTotalType]
+
+  """True when the single figures are converted to approximate USD."""
+  approximate: Boolean
+  unconvertedCurrencies: [String]
 }
 
 type AdminInfrastructureDayType {
@@ -500,6 +583,29 @@ type AdminPaymentType {
   receiptNumber: String
 }
 
+type AdminPaymentsFeedType {
+  totalCount: Int
+  items: [AdminPaymentType]
+  facets: [AdminFacetType]
+}
+
+input AdminPaymentFeedFilterInput {
+  """Company, email, intent id, invoice number or gateway."""
+  search: String
+  companyId: Int
+  status: [String]
+  planId: [String]
+  gateway: [String]
+  currency: [String]
+  amountMin: BigInt
+  amountMax: BigInt
+  dueOnly: Boolean
+  dateFrom: DateTime
+  dateTo: DateTime
+  limit: Int
+  offset: Int
+}
+
 type AdminPlan {
   id: String!
   name: String!
@@ -586,7 +692,7 @@ type AdminPromoCode {
   code: String!
   name: String
   discountType: String!
-  discountValue: Int!
+  discountValue: BigInt!
   currency: String
   active: Boolean!
   startsAt: DateTime
@@ -610,9 +716,34 @@ type AdminRevenueSummaryType {
   totalCompanies: Int
   totalUsers: Int
   totalPayments: Int
+
+  """
+  Approximate USD cents: money taken in every currency, net of refunds. See revenueByCurrency.
+  """
   grossRevenue: BigInt
+
+  """Approximate USD cents given back (refunds)."""
+  refundedRevenue: BigInt
+
+  """Approximate USD cents."""
   totalExpenses: BigInt
+
+  """Approximate USD cents: grossRevenue - totalExpenses."""
   netRevenue: BigInt
+
+  """Exact revenue per currency."""
+  revenueByCurrency: [AdminCurrencyTotalType]
+
+  """Exact expenses per currency."""
+  expensesByCurrency: [AdminCurrencyTotalType]
+
+  """
+  True when the USD figures include amounts converted at stored exchange rates.
+  """
+  approximate: Boolean
+
+  """Currencies without any rate: left out of the USD figures."""
+  unconvertedCurrencies: [String]
   expenseByCategory: [ExpenseBreakdownItem]
   expenseByVendor: [ExpenseBreakdownItem]
   byStatus: [RevenueByStatusType]
@@ -629,6 +760,7 @@ type RevenueByStatusType {
   status: String
   count: Int
   amount: BigInt
+  currency: String
 }
 
 input ActivityFilterInput {
@@ -639,6 +771,48 @@ input ActivityFilterInput {
   companyId: Int
   userId: ID
   targetType: String
+  limit: Int
+  offset: Int
+}
+
+type AdminActivityLogsFeedType {
+  totalCount: Int
+  items: [AdminActivityLogType]
+  facets: [AdminFacetType]
+
+  """Pass as filter.cursor for the next page; null on the last page."""
+  nextCursor: String
+}
+
+input AdminActivityFeedFilterInput {
+  from: DateTime
+  to: DateTime
+  actor: String
+  action: String
+  companyId: Int
+  userId: ID
+  targetType: String
+  limit: Int
+  offset: Int
+
+  """
+  nextCursor of the previous page (keyset paging; offset is then ignored).
+  """
+  cursor: String
+}
+
+type AdminUsersFeedType {
+  totalCount: Int
+  items: [AdminUserType]
+  facets: [AdminFacetType]
+}
+
+input AdminUserFeedFilterInput {
+  search: String
+  companyId: [Int]
+  locationId: [Int]
+  isActive: Boolean
+  isCompanyAdmin: Boolean
   limit: Int
   offset: Int
 }
@@ -699,7 +873,7 @@ type Mutation {
   """Refresh every non-pinned currency now from the rate source."""
   adminRefreshCurrencyRates: AdminRefreshCurrencyRates
   adminRefundPayment(input: PaymentRefundInput!): AdminRefundPayment
-  adminRequestRefund(amount: BigInt, paymentIntentId: String!, reason: String!): AdminRequestRefund
+  adminRequestRefund(amount: BigInt, mode: String, paymentIntentId: String!, reason: String!): AdminRequestRefund
   adminResumeCompany(companyId: Int!, reason: String!): AdminResumeCompany
 
   """
@@ -868,6 +1042,19 @@ type CompanyType {
   billingInterval: String!
   planVersion: Int!
   scheduledPlanId: String!
+  nextBillingPlanId: String!
+  nextBillingInterval: String!
+  nextBillingCurrency: String!
+
+  """"""
+  nextBillingOverrideCents: BigInt
+
+  """"""
+  nextBillingDiscountCents: BigInt!
+  nextBillingDiscountPct: Int
+
+  """"""
+  nextBillingCarryCents: BigInt!
 
   """
   Pre-package company: has every module until it is moved onto a package with modules.
@@ -1041,116 +1228,7 @@ type LocationType {
   taxPercentage: Decimal
   hasTds: Boolean!
   statuses: CompanyLocationStatusesChoices
-  currencyLocations: [CurrencyType!]!
-  currencyHistoryLocations: [CurrencyHistoryType!]!
-  multiLocations: [MultiLocationType!]!
   invoiceTemplateConfig: InvoiceTemplateConfigType
-  departmentLocations: [DepartmentType!]!
-  jobPositionLocations: [JobPositionType!]!
-  jobRoleLocations: [JobRoleType!]!
-  emailSettings: [EmailSettingsType!]!
-  emailTemplates: [EmailTemplateType!]!
-  mailTemplates: [MailTemplateType!]!
-  mailAutomations: [MailAutomationType!]!
-  defaultUsers: [UserLocationAccessType!]!
-
-  """All locations this user can access"""
-  accessibleUsers: [UserLocationAccessType!]!
-  locationUsers: [UpdateResponseUserType!]!
-  locationCustomGroup: [CustomGroupType!]!
-  locationGroupmemberships: [GroupMembershipType!]!
-  locationInvitations: [InvitationType!]!
-  assetSet: [AssetType!]!
-  specialpermissionSet: [SpecialPermissionType!]!
-  employeespecialpermissionSet: [EmployeeSpecialPermissionType!]!
-  employeeSet: [EmployeeType!]!
-  employeeskillSet: [EmployeeSkillType!]!
-  educationSet: [EducationType!]!
-  workexperienceSet: [WorkExperienceType!]!
-  referenceSet: [ReferenceType!]!
-  identificationSet: [IdentificationType!]!
-  visaSet: [VisaType!]!
-  compensationSet: [CompensationType!]!
-  bankdetailSet: [BankDetailType!]!
-  locationMetrics: [MetricsType!]!
-  locationPeriods: [PeriodType!]!
-  locationBaselines: [BaseLineType!]!
-  locationKeyResults: [KeyResultType!]!
-  locationObjectives: [ObjectiveType!]!
-  locationAuditEmployeeObjectives: [AuditEmployeeObjectiveType!]!
-  locationEmployeeObjectives: [EmployeeObjectiveType!]!
-  locationEmployeeKeyResults: [EmployeeKeyResultType!]!
-  scopeSet: [ScopeType!]!
-  scopelistSet: [ScopeListType!]!
-  quotationSet: [QuotationType!]!
-  notesSet: [NotesType!]!
-  moddetailsSet: [ModDetailsType!]!
-  enquirySet: [EnquiryType!]!
-  ipcSet: [IpcType!]!
-  leaveLocations: [LeaveType!]!
-  allleaverequestRecords: [AllLeaveRequestType!]!
-  allleaveRecords: [AllLeaveType!]!
-  shifts: [ShiftType!]!
-  attendances: [AttendanceType!]!
-  allAttendances: [AllAttendanceType!]!
-  attendanceReminderConfig: AttendanceReminderConfigType
-  holidaySet: [HolidayType!]!
-
-  """Location determines whether VAT or GST applies"""
-  divisions: [DivisionType!]!
-  projects: [ActiveProjectsType!]!
-  tasks: [TaskType!]!
-  taskAssignments: [TaskAssignmentType!]!
-  timesheetReports: [V2TimeSheetReportType!]!
-  timesheets: [TimesheetType!]!
-  allTimesheets: [AllTimesheetType!]!
-  timesheetLogs: [TimeSheetLogType!]!
-  leaveattachmentSet: [LeaveAttachmentType!]!
-  taskattachmentSet: [TaskAttachmentType!]!
-  dynamicformtemplateSet: [UpdateResponseFormTemplateType!]!
-  dynamicformquestionSet: [UpdateResponseFormQuestionType!]!
-  dynamicformquestionvalidationSet: [UpdateResponseFormQuestionValidationType!]!
-  dynamicformresponseSet: [UpdateResponseFormResponseType!]!
-  genericformtemplateSet: [UpdateGFTTemplateType!]!
-  genericformassignmentSet: [GFAByTemplateAssignmentType!]!
-  accountSet: [AccountType!]!
-  creditsSet: [CreditsType!]!
-  expenceinvoiceSet: [ExpenseInvoiceType!]!
-  sectorSet: [SectorType!]!
-  expensemainSet: [ExpenceMainType!]!
-  balancehistorySet: [BalanceHistoryType!]!
-  invoiceSet: [InvoiceType!]!
-  invoiceitemSet: [InvoiceItemType!]!
-  partialinvoicehistorySet: [PartialInvoiceHistoryType!]!
-  invoicehistorySet: [InvoiceHistoryType!]!
-  invoicetrackerSet: [InvoiceTrackerType!]!
-  possSet: [PurchaseOrderType!]!
-  mainSet: [MainType!]!
-  bankSet: [BankType!]!
-  scheduledreportSet: [ScheduledReportType!]!
-  daybookattachmentSet: [DaybookAttachmentType!]!
-  invoiceattachmentSet: [InvoiceAttachmentType!]!
-  clientSet: [ClientType!]!
-  commuSet: [CommunicationType!]!
-  contactdetailsSet: [UpdateContactDetailsType!]!
-  workAllocations: [UpdateWorkAllocationType!]!
-  allWorkAllocations: [WorkAllocationsByProjectType!]!
-  employeeExpenses: [RejectEmployeeExpenseType!]!
-  payslips: [UpdatePaySlipType!]!
-  employeeexpenseattachmentSet: [EmployeeExpenseAttachmentType!]!
-  regionaltargetSet: [RegionalTargetType!]!
-  annualtargetSet: [AnnualTargetType!]!
-  leadAccountLocations: [CrmAccountType!]!
-  leadSet: [LeadType!]!
-  opportunitySet: [OpportunityType!]!
-  leadattachmentSet: [LeadAttachmentType!]!
-  opportunityattachmentSet: [OpportunityAttachmentType!]!
-  accountattachmentSet: [AccountAttachmentType!]!
-  scheduledReports: [ReportScheduleType!]!
-
-  """Location this connector serves. Its time zone is used for punch times."""
-  biometricAgents: [BiometricAgentType!]!
-  biometricDevices: [BiometricDeviceType!]!
   currentLocalTime: String
   timezoneOffset: String
 }
@@ -4843,155 +4921,6 @@ type TimeSheetReportType {
   allEntries: [AllTimesheetType!]!
 }
 
-type EmailSettingsType {
-  id: ID!
-  createdAt: DateTime
-  updatedAt: DateTime
-  createdBy: UpdateResponseUserType
-  updatedBy: UpdateResponseUserType
-  emailHost: String!
-  emailPort: Int!
-  emailUseSsl: Boolean!
-  emailHostUser: String!
-  emailHostPassword: String!
-  defaultFromEmail: String!
-  company: CompanyType
-  location: LocationType
-}
-
-type MailTemplateType {
-  id: UUID!
-  name: String!
-  htmlContent: String
-  isActive: Boolean!
-  lastModified: DateTime
-}
-
-"""
-Leverages the internal Python implementation of UUID (uuid.UUID) to provide native UUID objects
-in fields, resolvers and input.
-"""
-scalar UUID
-
-type MailAutomationType {
-  updatedAt: DateTime
-  id: UUID!
-  title: String!
-  template: MailTemplateType
-  isActive: Boolean!
-  modelName: String
-  triggerCondition: String
-  deliveryChannel: String
-  mailTo: String
-  conditions: [ConditionType]
-}
-
-type ConditionType {
-  code: String
-  field: String
-  conditionOperator: String
-  value: String
-  logic: String
-}
-
-type AssetType {
-  id: ID!
-  createdAt: DateTime
-  updatedAt: DateTime
-  createdBy: UpdateResponseUserType
-  updatedBy: UpdateResponseUserType
-  url: String
-  code: String
-  attachmentId: Int
-  attachedToId: Int!
-  attachmentType: String!
-  fileName: String!
-
-  """"""
-  fileSize: BigInt!
-  mimeType: String!
-  uploadedById: Int
-  uploadTimestamp: DateTime!
-  storagePath: String!
-  isPublic: Boolean!
-  thumbnailUrl: String
-  company: CompanyType
-  location: LocationType
-}
-
-type QuotationType {
-  id: ID!
-  createdAt: DateTime
-  updatedAt: DateTime
-  createdBy: UpdateResponseUserType
-  updatedBy: UpdateResponseUserType
-  rfqid: String
-  date: Date
-  quotation: String
-  eid: Int
-  company: CompanyType
-  location: LocationType
-}
-
-type NotesType {
-  id: ID!
-  createdAt: DateTime
-  updatedAt: DateTime
-  createdBy: UpdateResponseUserType
-  updatedBy: UpdateResponseUserType
-  rfqid: String
-  date: Date
-  revision: Int
-  notes: String
-  company: CompanyType
-  location: LocationType
-}
-
-"""IPC (Interim Payment Certificate) GraphQL Type"""
-type IpcType {
-  id: ID!
-  createdAt: DateTime
-  updatedAt: DateTime
-  createdBy: UpdateResponseUserType
-  updatedBy: UpdateResponseUserType
-
-  """Project ID reference"""
-  pid: Int
-
-  """IPC reference number (e.g., 'Metito IPC 1-3', 'IPC 004')"""
-  ipcrefno: String
-
-  """Link to IPC document (e.g., Google Drive link)"""
-  ipclink: String
-  company: CompanyType
-  location: LocationType
-  lastUpdatedBy: String
-  lastUpdatedAt: String
-}
-
-type AttendanceReminderConfigType {
-  id: ID!
-  createdAt: DateTime
-  updatedAt: DateTime
-  createdBy: UpdateResponseUserType
-  updatedBy: UpdateResponseUserType
-  location: LocationType!
-
-  """Minutes before shift end to show the 'shift ending soon' reminder."""
-  preEndReminderMinutes: Int!
-
-  """
-  Minutes between each 'are you still working?' reminder after shift end.
-  """
-  postEndReminderIntervalMinutes: Int!
-
-  """
-  How many 'are you still working?' reminders to show after shift end. Minimum 1: the last one is also the auto-checkout moment.
-  """
-  postEndReminderCount: Int!
-  autoCheckoutGraceMinutes: Int
-}
-
 type HolidayType {
   id: ID!
   createdAt: DateTime
@@ -5027,215 +4956,6 @@ enum TimesheetHolidayTypeChoices {
 
   """Local Holiday"""
   LOCAL_HOLIDAY
-}
-
-type UpdateGFTTemplateType {
-  id: ID!
-  createdAt: DateTime
-  updatedAt: DateTime
-
-  """Title of the form template"""
-  title: String!
-
-  """Optional description"""
-  description: String
-  formType: String
-
-  """Whether this template is active"""
-  isActive: Boolean!
-  questions: [UpdateGFTQuestionType]
-  questionsCount: Int
-}
-
-type UpdateGFTQuestionType {
-  id: ID!
-
-  """The question text"""
-  label: String!
-
-  """Display order"""
-  order: Int!
-
-  """Option for score 1 (lowest)"""
-  option1: String!
-
-  """Option for score 2"""
-  option2: String!
-
-  """Option for score 3"""
-  option3: String!
-
-  """Option for score 4"""
-  option4: String!
-
-  """Option for score 5 (highest)"""
-  option5: String!
-}
-
-type InvoiceHistoryType {
-  id: ID!
-  createdAt: DateTime
-  updatedAt: DateTime
-  createdBy: UpdateResponseUserType
-  updatedBy: UpdateResponseUserType
-  invoiceId: Int
-  amount: Int
-  date: Date
-  company: CompanyType
-  location: LocationType
-}
-
-type MainType {
-  id: ID!
-  createdAt: DateTime
-  updatedAt: DateTime
-  createdBy: UpdateResponseUserType
-  updatedBy: UpdateResponseUserType
-  name: String
-  user: String
-  datetime: DateTime
-  company: CompanyType
-  location: LocationType
-}
-
-type ClientType {
-  id: ID!
-  createdAt: DateTime
-  updatedAt: DateTime
-  createdBy: UpdateResponseUserType
-  updatedBy: UpdateResponseUserType
-  rfqid: String
-  cp: String
-  cpd: String
-  pn: String
-  ln: String
-  email: String
-  add1: String
-  company: CompanyType
-  location: LocationType
-}
-
-type CommunicationType {
-  id: ID!
-  createdAt: DateTime
-  updatedAt: DateTime
-  createdBy: UpdateResponseUserType
-  updatedBy: UpdateResponseUserType
-  pid: Int
-  comrefno: String
-  comlink: String
-  company: CompanyType
-  location: LocationType
-}
-
-type UpdateContactDetailsType {
-  id: ID!
-  createdAt: DateTime
-  updatedAt: DateTime
-  createdBy: UpdateResponseUserType
-  updatedBy: UpdateResponseUserType
-  projectId: String
-  name: String
-  design: String
-  phone: String
-  mail: String
-  company: CompanyType
-  location: LocationType
-}
-
-"""A connector: one per location, created by the installer."""
-type BiometricAgentType {
-  id: ID!
-  createdAt: DateTime
-
-  """Location this connector serves. Its time zone is used for punch times."""
-  location: LocationType
-  name: String!
-
-  """First characters of the token, shown in the UI to identify it."""
-  tokenPrefix: String!
-  isActive: Boolean!
-
-  """
-  Punches before this local hour count towards the previous day (covers late OUT punches after midnight).
-  """
-  dayStartHour: Int!
-  lastSeenAt: DateTime
-  lastPunchAt: DateTime
-  agentVersion: String
-  agentHostname: String
-  lastError: String
-  isOnline: Boolean
-  locationName: String
-
-  """
-  Zone punch times are read in: the connector location's time zone, e.g. 'UTC+05:30'.
-  """
-  timezone: String
-
-  """
-  True when the location's time zone is empty or unreadable (UTC is used).
-  """
-  timezoneWarning: Boolean
-
-  """
-  The connector PC's clock zone, e.g. 'UTC+03:00 (Arab Standard Time)'; null until reported.
-  """
-  pcClock: String
-
-  """
-  The PC's clock zone differs from the location's time zone (a warning only: punch times use the location's).
-  """
-  pcClockDiffers: Boolean
-  deviceCount: Int
-
-  """
-  What the connector reports about itself on check-in (its settings are made on its PC, never a password): {configured, syncing, sqlHost, database, table, columns, intervalMinutes, lastSyncAt, latestPunch, sentToday, driver, auth ...}; null until it reported once.
-  """
-  connectorStatus: JSONString
-
-  """
-  The location uses app check-in now, so Penquee has paused the connector.
-  """
-  paused: Boolean
-
-  """"server · database · table" the connector reads; null until set up."""
-  readsFrom: String
-
-  """
-  Another location's connector reads the same punch table on the same SQL Server; null when not.
-  """
-  sharedTableWarning: String
-
-  """Punches received from this connector (grows during the first import)."""
-  punchTotal: Int
-
-  """
-  At least one machine code is mapped to an employee (with punches received, the location records attendance by machine: timesheet.attendance_mode.connector_ready).
-  """
-  hasMappings: Boolean
-
-  """
-  The connector's last problem in plain words (the technical text stays in its log on the PC).
-  """
-  lastErrorMessage: String
-
-  """
-  Switched off in Penquee, not uninstalled, and the latest connector of its location (a later install replaced the older ones on their PC): it can be switched on again while the location has no working connector.
-  """
-  canSwitchOn: Boolean
-}
-
-type BiometricDeviceType {
-  id: ID!
-  createdAt: DateTime
-  agent: BiometricAgentType
-  deviceNo: String!
-  name: String
-  location: LocationType
-  lastPunchAt: DateTime
-  locationName: String
-  agentName: String
 }
 
 type PaymentMethodDetailType {
@@ -5369,6 +5089,11 @@ input PaymentRefundInput {
   paymentIntentId: String!
   reason: String!
   amount: BigInt
+
+  """
+  refund_and_rebill (default): the period the payment paid is billed again. refund_keep_period: a goodwill refund -- the period stays paid, nothing is re-charged.
+  """
+  mode: String
 }
 
 type AdminRequestRefund {
@@ -5461,7 +5186,7 @@ input AdminPromoCodeInput {
   code: String!
   name: String
   discountType: String!
-  discountValue: Int!
+  discountValue: BigInt!
   currency: String
   active: Boolean
   startsAt: DateTime
@@ -5546,6 +5271,11 @@ input CompanyUpdateInput {
   suspensionReason: String
   suspendedUntil: DateTime
   resumeReason: String
+
+  """
+  Required when a status or billing field changes; kept in the audit log.
+  """
+  reason: String
 }
 
 type AdminUpdateCompanySubscription {

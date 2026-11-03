@@ -4,6 +4,8 @@ import { createPortal } from 'react-dom';
 export interface ColumnFilterOption {
   value: string;
   count: number;
+  /** Shown instead of `value` (server facets: value is an id, label its name). */
+  label?: string;
 }
 
 export const EMPTY_FILTER_VALUE = '(empty)';
@@ -52,7 +54,7 @@ export const ColumnFilter: React.FC<ColumnFilterProps> = ({ label, options, sele
   const visibleOptions = useMemo(() => {
     const needle = query.trim().toLowerCase();
     if (!needle) return options;
-    return options.filter((option) => option.value.toLowerCase().includes(needle));
+    return options.filter((option) => (option.label ?? option.value).toLowerCase().includes(needle));
   }, [options, query]);
 
   const toggleValue = (value: string) => {
@@ -135,7 +137,7 @@ export const ColumnFilter: React.FC<ColumnFilterProps> = ({ label, options, sele
                 onChange={() => toggleValue(option.value)}
                 className="h-3.5 w-3.5 rounded accent-cyan-500"
               />
-              <span className="min-w-0 flex-1 truncate">{option.value}</span>
+              <span className="min-w-0 flex-1 truncate">{option.label ?? option.value}</span>
               <span className="shrink-0 text-[10px] font-semibold text-slate-400">{option.count}</span>
             </label>
           ))
