@@ -873,7 +873,7 @@ type Mutation {
   """Refresh every non-pinned currency now from the rate source."""
   adminRefreshCurrencyRates: AdminRefreshCurrencyRates
   adminRefundPayment(input: PaymentRefundInput!): AdminRefundPayment
-  adminRequestRefund(amount: BigInt, mode: String, paymentIntentId: String!, reason: String!): AdminRequestRefund
+  adminRequestRefund(amount: BigInt, paymentIntentId: String!, reason: String!): AdminRequestRefund
   adminResumeCompany(companyId: Int!, reason: String!): AdminResumeCompany
 
   """
@@ -5089,11 +5089,6 @@ input PaymentRefundInput {
   paymentIntentId: String!
   reason: String!
   amount: BigInt
-
-  """
-  refund_and_rebill (default): the period the payment paid is billed again. refund_keep_period: a goodwill refund -- the period stays paid, nothing is re-charged.
-  """
-  mode: String
 }
 
 type AdminRequestRefund {
