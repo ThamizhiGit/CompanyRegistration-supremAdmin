@@ -120,7 +120,7 @@ test.describe('commerce / companies', () => {
       {
         request: {
           query: ADMIN_REQUEST_REFUND_MUTATION,
-          variables: { paymentIntentId: 'pi_acme', reason: 'Duplicate charge', amount: 1000, mode: 'refund_and_rebill' },
+          variables: { paymentIntentId: 'pi_acme', reason: 'Duplicate charge', amount: 1000 },
         },
         result: { data: { adminRequestRefund: { success: true, message: 'queued' } } },
       },

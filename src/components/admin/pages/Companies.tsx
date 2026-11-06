@@ -210,9 +210,6 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
   const [selectedPayment, setSelectedPayment] = useState<CompanyPaymentType | null>(null);
   const [refundReason, setRefundReason] = useState('');
   const [refundAmount, setRefundAmount] = useState('');
-  // refund_and_rebill: the refunded period is billed again; refund_keep_period:
-  // a goodwill refund, the period stays paid and nothing is re-charged.
-  const [refundMode, setRefundMode] = useState<'refund_and_rebill' | 'refund_keep_period'>('refund_and_rebill');
   const [manualSource, setManualSource] = useState('portal');
   const [manualMethod, setManualMethod] = useState('card');
   const [manualReceiver, setManualReceiver] = useState('');
@@ -688,7 +685,6 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
     setSelectedPayment(null);
     setRefundReason('');
     setRefundAmount('');
-    setRefundMode('refund_and_rebill');
     setManualReason('');
     setManualReceiver('');
     setManualSender('');
@@ -769,7 +765,6 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
           paymentIntentId: selectedPayment.paymentIntentId,
           reason: refundReason || 'Admin requested refund',
           amount,
-          mode: refundMode,
         },
       });
       const payload = result?.data?.adminRequestRefund;
@@ -782,7 +777,6 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
       setSelectedPayment(null);
       setRefundReason('');
       setRefundAmount('');
-      setRefundMode('refund_and_rebill');
       refetchHistory();
       refetchCompanies();
     } catch (err: any) {
@@ -1846,17 +1840,6 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                       step={currencyInputStep(selectedPayment.currency || 'USD')}
                       min="0"
                     />
-                  </label>
-                  <label className="block">
-                      <span className="block text-xs font-semibold text-slate-600 mb-1.5">After the refund</span>
-                    <select
-                      value={refundMode}
-                      onChange={(event) => setRefundMode(event.target.value as 'refund_and_rebill' | 'refund_keep_period')}
-                      className="w-full h-10 border border-slate-300 bg-white rounded-lg px-3 text-sm focus:outline-none focus:ring-2 focus:ring-pink-100 focus:border-pink-400"
-                    >
-                      <option value="refund_and_rebill">Bill the period again</option>
-                      <option value="refund_keep_period">Keep the period paid (goodwill)</option>
-                    </select>
                   </label>
                   <button
                       type="button"
