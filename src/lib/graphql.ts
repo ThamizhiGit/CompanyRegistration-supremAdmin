@@ -396,8 +396,8 @@ export const ADMIN_UPDATE_PAYMENT_STATUS_MUTATION = gql`
 `;
 
 export const ADMIN_REQUEST_REFUND_MUTATION = gql`
-  mutation AdminRequestRefund($paymentIntentId: String!, $amount: BigInt, $reason: String!, $mode: String) {
-    adminRequestRefund(paymentIntentId: $paymentIntentId, amount: $amount, reason: $reason, mode: $mode) {
+  mutation AdminRequestRefund($paymentIntentId: String!, $amount: BigInt, $reason: String!) {
+    adminRequestRefund(paymentIntentId: $paymentIntentId, amount: $amount, reason: $reason) {
       success
       message
       payment {
