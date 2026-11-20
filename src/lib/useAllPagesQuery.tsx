@@ -257,7 +257,18 @@ export function usePagedQuery<TRow>(
   const current = result.data?.[field] ?? undefined;
   const previous = (result.previousData as Record<string, Feed<TRow> | null | undefined> | undefined)?.[field] ?? undefined;
   const feed: Feed<TRow> | undefined = current ?? previous;
-  const totalCount = feed?.totalCount ?? 0;
+  // A keyset feed (activity) sends its total on the first page only: the
+  // later pages (cursor) have the same filters, so the same total is kept.
+  const totalKey = useMemo(() => {
+    const filters = JSON.parse(filterKey);
+    delete filters.cursor;
+    return `${JSON.stringify(filters)}|${debouncedTextKey}`;
+  }, [filterKey, debouncedTextKey]);
+  const knownTotal = useRef<{ key: string; total: number } | null>(null);
+  if (typeof feed?.totalCount === 'number') knownTotal.current = { key: totalKey, total: feed.totalCount };
+  const totalCount = typeof feed?.totalCount === 'number'
+    ? feed.totalCount
+    : knownTotal.current?.key === totalKey ? knownTotal.current.total : 0;
 
   // Rows removed meanwhile (a delete, a refetch): a page past the end goes
   // back to the last page instead of showing an empty one.

@@ -16,6 +16,7 @@ import {
   formatPriceOrUnavailable,
   moneyInputError,
   wholeNumberError,
+  WHOLE_UNIT_CURRENCIES,
 } from '../../../lib/admin-utils';
 import { isAbortError, startSessionLoop } from '../../../lib/useAllPagesQuery';
 
@@ -147,7 +148,9 @@ export const expandModuleIds = (ids: Iterable<string>, options: PackageModuleOpt
 
 /**
  * Smallest id list for a set of covered modules: a feature area whose parts
- * are all covered is sent as the area alone.
+ * are all covered is sent as the area alone -- unless the area itself is
+ * switched off and not chosen yet (the server refuses an inactive module newly
+ * added to a package), then its parts are sent one by one.
  */
 export const normalizeModuleIds = (covered: Set<string>, options: PackageModuleOption[]): string[] => {
   const result: string[] = [];
@@ -157,7 +160,7 @@ export const normalizeModuleIds = (covered: Set<string>, options: PackageModuleO
       return;
     }
     const chosen = children.filter((c) => covered.has(c.id));
-    if (covered.has(module.id) || chosen.length === children.length) {
+    if (covered.has(module.id) || (chosen.length === children.length && module.active)) {
       result.push(module.id);
     } else {
       chosen.forEach((c) => result.push(c.id));
@@ -233,7 +236,11 @@ export const derivedYearlyCents = (draft: PackageDraft): number | null => {
   }
   // No yearly price saved: the server charges 12 monthly payments less the discount.
   const pct = mode === 'percent' ? Math.min(Math.max(Number(draft.yearlyDiscountPct) || 0, 0), 100) : 0;
-  return Math.round((draft.basePriceCents * 12 * (100 - pct)) / 100);
+  const yearly = Math.round((draft.basePriceCents * 12 * (100 - pct)) / 100);
+  // ISK/UGX: the server rounds up to a whole unit (what is charged).
+  return WHOLE_UNIT_CURRENCIES.has((draft.currency || '').toUpperCase()) && yearly % 100
+    ? (Math.floor(yearly / 100) + 1) * 100
+    : yearly;
 };
 
 /** The ids adminSavePlan checks: a part whose feature area is also chosen is covered by the area. */
@@ -604,8 +611,15 @@ export const PackageBuilder: React.FC<{
         next.add(child.id);
       }
     } else {
-      const on = !next.has(node.module.id) && !(node.children.length && node.children.every((c) => next.has(c.id)));
-      [node.module, ...node.children].forEach((m) => (on ? next.add(m.id) : next.delete(m.id)));
+      // Full = the area, or every part that may be in it, is chosen.
+      const addableParts = node.children.filter((c) => c.active || covered.has(c.id));
+      const on = !next.has(node.module.id) && !(addableParts.length && addableParts.every((c) => next.has(c.id)));
+      // Turning an area on adds what may be added: switched-off parts (or a
+      // switched-off area) not in the package already stay out.
+      [node.module, ...node.children].forEach((m) => {
+        if (!on) next.delete(m.id);
+        else if (m.active || covered.has(m.id)) next.add(m.id);
+      });
     }
     setCovered(next);
   };

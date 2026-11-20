@@ -884,7 +884,7 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
     const rows = plans.map((plan) => (
       `<tr><td>${escapeHtml(plan.id)}</td><td>${escapeHtml(plan.name)}</td><td>${escapeHtml(formatPrice(plan.basePriceCents, plan.currency))}</td><td>${escapeHtml(plan.billingInterval)}</td><td>${escapeHtml(plan.active ? 'Active' : 'Inactive')}</td></tr>`
     )).join('');
-    const printWindow = window.open('', '_blank', 'noopener,noreferrer,width=1024,height=768');
+    const printWindow = window.open('', '_blank', 'width=1024,height=768');
     if (!printWindow) return;
     printWindow.document.write(`<!doctype html><html><head><title>Plans</title><style>body{font-family:Arial,sans-serif;padding:28px;color:#0f172a}table{border-collapse:collapse;width:100%}th,td{border:1px solid #cbd5e1;padding:8px 10px;text-align:left}th{background:#f1f5f9}</style></head><body><h1>Plans</h1><table><thead><tr><th>ID</th><th>Name</th><th>Price</th><th>Billing</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table></body></html>`);
     printWindow.document.close();

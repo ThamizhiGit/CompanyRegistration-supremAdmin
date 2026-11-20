@@ -485,6 +485,7 @@ export const ADMIN_COMPANIES_QUERY = gql`
       trialEndsAt
       nextBillingDate
       nextBillingAmountCents
+      nextBillingCurrency
       currency
       subscriptionDueDate
       subscriptionRecurringDate
@@ -549,6 +550,7 @@ export const ADMIN_COMPANIES_FEED_QUERY = gql`
         trialEndsAt
         nextBillingDate
         nextBillingAmountCents
+        nextBillingCurrency
         currency
         subscriptionDueDate
         subscriptionRecurringDate
@@ -871,6 +873,7 @@ export const ADMIN_ASSIGN_COMPANY_PLAN_MUTATION = gql`
         trialEndsAt
         nextBillingDate
         nextBillingAmountCents
+        nextBillingCurrency
       }
     }
   }
