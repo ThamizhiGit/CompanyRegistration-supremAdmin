@@ -140,6 +140,7 @@ type AdminCompanyType {
   trialEndsAt: DateTime
   nextBillingDate: DateTime
   nextBillingAmountCents: BigInt
+  nextBillingCurrency: String
   currency: String
   latestPaymentPlanId: String
   latestPaymentPlanName: String

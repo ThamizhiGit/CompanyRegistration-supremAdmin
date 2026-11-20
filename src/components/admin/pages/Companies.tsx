@@ -83,6 +83,7 @@ interface CompanyType {
   trialEndsAt?: string | null;
   nextBillingDate?: string | null;
   nextBillingAmountCents?: number | null;
+  nextBillingCurrency?: string | null;
   /** The company's billing currency: next billing amounts are in it. */
   currency?: string | null;
   subscriptionDueDate: string | null;
@@ -789,6 +790,10 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
 
   const handleManualSubscription = async () => {
     if (!selectedPayment || !selectedHistoryFor || manualInFlightRef.current) return;
+    if (!manualReason.trim()) {
+      onToast('error', 'Please add a reason for this manual action');
+      return;
+    }
     manualInFlightRef.current = true;
     setManualInFlight(true);
     try {
@@ -1501,7 +1506,7 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                             ['Plan', getCompanyPlanName(viewingCompany)],
                             ['Trial ends', formatDateTime(viewingCompany.trialEndsAt || '')],
                             ['Next billing date', formatDateTime(viewingCompany.nextBillingDate || '')],
-                            ['Next billing amount', viewingCompany.nextBillingAmountCents !== null && viewingCompany.nextBillingAmountCents !== undefined ? formatPrice(viewingCompany.nextBillingAmountCents, viewingCompany.currency || viewingCompany.latestPaymentCurrency || 'USD') : '-'],
+                            ['Next billing amount', viewingCompany.nextBillingAmountCents !== null && viewingCompany.nextBillingAmountCents !== undefined ? formatPrice(viewingCompany.nextBillingAmountCents, viewingCompany.nextBillingCurrency || viewingCompany.currency || viewingCompany.latestPaymentCurrency || 'USD') : '-'],
                             ['Due date', formatDateTime(viewingCompany.subscriptionDueDate || '')],
                             ['Recurring date', formatDateTime(viewingCompany.subscriptionRecurringDate || '')],
                           ].map(([label, value]) => (

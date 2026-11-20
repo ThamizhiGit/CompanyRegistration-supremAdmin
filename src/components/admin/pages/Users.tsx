@@ -68,6 +68,7 @@ export const Users: React.FC<{onToast: (type: 'success'|'error', msg: string) =>
     refetch: refetchUsers,
   } = usePagedQuery<UserType>(ADMIN_USERS_FEED_QUERY, 'adminUsersFeed', {
     filter: {
+      // "(empty)" ("") becomes 0, which the server reads as "not set".
       companyId: companySelections.map(Number).filter(Number.isFinite),
       locationId: locationSelections.map(Number).filter(Number.isFinite),
       isActive: singleBoolean(statusSelections, 'true'),
