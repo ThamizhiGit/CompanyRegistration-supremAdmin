@@ -625,7 +625,7 @@ export const Subscriptions: React.FC<{
     const rows = filteredPayments.map((payment) => (
       `<tr><td>${escapeHtml(payment.displayCompanyName)}</td><td>${escapeHtml(payment.email)}</td><td>${escapeHtml(payment.planName || payment.planId || '-')}</td><td>${escapeHtml(formatPrice(payment.finalAmountCents ?? payment.amount, payment.currency))}</td><td>${escapeHtml(payment.status)}</td><td>${escapeHtml(formatDate(payment.dueDate || null))}</td></tr>`
     )).join('');
-    const printWindow = window.open('', '_blank', 'noopener,noreferrer,width=1024,height=768');
+    const printWindow = window.open('', '_blank', 'width=1024,height=768');
     if (!printWindow) return;
     printWindow.document.write(`<!doctype html><html><head><title>Subscriptions</title><style>body{font-family:Arial,sans-serif;padding:28px;color:#0f172a}table{border-collapse:collapse;width:100%}th,td{border:1px solid #cbd5e1;padding:8px 10px;text-align:left}th{background:#f1f5f9}</style></head><body><h1>Subscriptions & Payments</h1><table><thead><tr><th>Company</th><th>Email</th><th>Plan</th><th>Amount</th><th>Status</th><th>Due Date</th></tr></thead><tbody>${rows}</tbody></table></body></html>`);
     printWindow.document.close();

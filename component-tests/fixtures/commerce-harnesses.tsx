@@ -122,12 +122,12 @@ export function CompaniesHarness({ mocks = [], scenario, paymentCurrency = 'USD'
         result: { data: { adminCompanyPaymentHistory: [payment] } },
       },
       {
-        request: { query: ADMIN_REQUEST_REFUND_MUTATION, variables: { paymentIntentId: 'pi_acme', reason: 'Duplicate charge', amount: 1000, mode: 'refund_and_rebill' } },
+        request: { query: ADMIN_REQUEST_REFUND_MUTATION, variables: { paymentIntentId: 'pi_acme', reason: 'Duplicate charge', amount: 1000 } },
         ...actionDelay,
         result: { data: { adminRequestRefund: { success: true, message: 'queued' } } },
       },
       {
-        request: { query: ADMIN_REQUEST_REFUND_MUTATION, variables: { paymentIntentId: 'pi_acme', reason: 'Admin requested refund', amount: null, mode: 'refund_and_rebill' } },
+        request: { query: ADMIN_REQUEST_REFUND_MUTATION, variables: { paymentIntentId: 'pi_acme', reason: 'Admin requested refund', amount: null } },
         result: { data: { adminRequestRefund: { success: true, message: 'queued' } } },
       },
       {
