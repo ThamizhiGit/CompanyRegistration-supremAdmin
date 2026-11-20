@@ -3,6 +3,11 @@ import { ADMIN_USER_ACTIVITY_LOGS_FEED_QUERY } from '../../../lib/graphql';
 import { InlineSpinner, Pager, usePagedQuery } from '../../../lib/useAllPagesQuery';
 import { toDateTimeLocalValue, formatDateTime } from '../../../lib/admin-utils';
 import { useDebouncedValue } from '../../../lib/useDebouncedValue';
+import { Eye } from 'lucide-react';
+import { DataTable, RowActionButton } from '../ui/DataTable';
+
+const filterInputClass =
+  'h-8 w-full rounded-lg border border-slate-200 bg-white px-2 text-xs text-slate-700 outline-none focus:border-sky-400 focus:ring-2 focus:ring-sky-100';
 
 interface ActivityType {
   id: string;
@@ -26,6 +31,7 @@ export const UserActivityLog: React.FC = () => {
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
   const [selected, setSelected] = useState<ActivityType | null>(null);
+  const [filtersOpen, setFiltersOpen] = useState(true);
   const debouncedCompanyId = useDebouncedValue(companyId);
   // Keyset paging: cursors[n] reads page n (page 0 has none). New rows written
   // while paging never shift the next page.
@@ -78,7 +84,7 @@ export const UserActivityLog: React.FC = () => {
   return (
     <div className="space-y-8">
       <div>
-        <h2 className="text-2xl font-bold text-slate-800">User Activity Log</h2>
+        <h2 className="text-2xl font-semibold text-gray-700">User Activity Log</h2>
         <p className="text-slate-600">Audit logs across user and company activity</p>
       </div>
       {error ? (
@@ -88,106 +94,96 @@ export const UserActivityLog: React.FC = () => {
         </p>
       ) : null}
 
-      <div className="bg-white rounded-lg border border-slate-200 p-6">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <input
-            className="px-3 py-2 border border-slate-300 rounded-lg"
-            value={actor}
-            onChange={(event) => setActor(event.target.value)}
-            placeholder="Actor"
+      <DataTable<ActivityType>
+        testId="activity-table"
+        rows={logs}
+        rowKey={(log) => String(log.id)}
+        searchPlaceholder="Search actor"
+        searchValue={actor}
+        onSearchChange={setActor}
+        filtersOpen={filtersOpen}
+        onFiltersToggle={(open) => {
+          if (!open) {
+            setAction('');
+            setCompanyId('');
+            setUserId('');
+            setFromDate('');
+            setToDate('');
+          }
+          setFiltersOpen(open);
+        }}
+        onRefresh={() => refetch()}
+        loading={loading}
+        loadingText={<InlineSpinner label="Loading activity logs..." />}
+        emptyMessage="No activity in selected filters"
+        footer={(
+          <Pager
+            page={page}
+            pageSize={pageSize}
+            totalCount={totalCount}
+            onPage={goToPage}
+            refreshing={refreshing}
+            what="entries"
           />
-          <input
-            className="px-3 py-2 border border-slate-300 rounded-lg"
-            value={action}
-            onChange={(event) => setAction(event.target.value)}
-            placeholder="Action"
-          />
-          <div className="grid grid-cols-2 gap-2">
-            <input
-              className="px-3 py-2 border border-slate-300 rounded-lg"
-              value={companyId}
-              onChange={(event) => setCompanyId(event.target.value ? parseInt(event.target.value, 10) : '')}
-              placeholder="Company Id"
-              type="number"
-              min={1}
-            />
-            <input
-              className="px-3 py-2 border border-slate-300 rounded-lg"
-              value={userId}
-              onChange={(event) => setUserId(event.target.value)}
-              placeholder="User Id"
-            />
-          </div>
-          <div className="grid grid-cols-2 gap-2 md:col-span-2">
-            {/* The state holds ISO strings; the input needs local "YYYY-MM-DDTHH:mm". */}
-            <input
-              type="datetime-local"
-              aria-label="From"
-              value={toDateTimeLocalValue(fromDate || null)}
-              onChange={(event) => setFromDate(event.target.value ? new Date(event.target.value).toISOString() : '')}
-              className="px-3 py-2 border border-slate-300 rounded-lg"
-            />
-            <input
-              type="datetime-local"
-              aria-label="To"
-              value={toDateTimeLocalValue(toDate || null)}
-              onChange={(event) => setToDate(event.target.value ? new Date(event.target.value).toISOString() : '')}
-              className="px-3 py-2 border border-slate-300 rounded-lg"
-            />
-          </div>
-        </div>
-      </div>
-
-      <div className="bg-white rounded-lg border border-slate-200 overflow-hidden">
-        {loading ? (
-          <InlineSpinner label="Loading activity logs..." />
-        ) : logs.length === 0 ? (
-          <div className="text-center py-12 text-slate-500">No activity in selected filters</div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead className="bg-slate-50 border-b border-slate-200">
-                <tr>
-                  <th className="text-left py-3 px-4 font-semibold text-slate-700">Time</th>
-                  <th className="text-left py-3 px-4 font-semibold text-slate-700">Actor</th>
-                  <th className="text-left py-3 px-4 font-semibold text-slate-700">Action</th>
-                  <th className="text-left py-3 px-4 font-semibold text-slate-700">Target</th>
-                  <th className="text-right py-3 px-4 font-semibold text-slate-700">Details</th>
-                </tr>
-              </thead>
-              <tbody>
-                {logs.map((log) => (
-                  <tr key={log.id} className="border-b border-slate-100 hover:bg-slate-50">
-                    <td className="py-3 px-4 text-sm text-slate-700">{formatDateTime(log.createdAt)}</td>
-                    <td className="py-3 px-4 font-medium text-slate-800">{displayValue(log.actor)}</td>
-                    <td className="py-3 px-4 text-slate-700">{displayValue(log.action)}</td>
-                    <td className="py-3 px-4 text-slate-700">{displayValue(log.targetType)} / {displayValue(log.targetId)}</td>
-                    <td className="py-3 px-4 text-right">
-                      <button
-                        className="px-3 py-2 rounded-lg border border-slate-200 text-slate-700 text-sm hover:bg-slate-100"
-                        onClick={() => setSelected(log)}
-                      >
-                        View
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
         )}
-        <Pager
-          page={page}
-          pageSize={pageSize}
-          totalCount={totalCount}
-          onPage={goToPage}
-          refreshing={refreshing}
-          what="entries"
-        />
-      </div>
+        columns={[
+          {
+            key: 'time',
+            header: 'Time',
+            className: 'whitespace-nowrap',
+            filterCell: (
+              <div className="flex flex-col gap-1">
+                {/* The state holds ISO strings; the input needs local "YYYY-MM-DDTHH:mm". */}
+                <input
+                  type="datetime-local"
+                  aria-label="From"
+                  value={toDateTimeLocalValue(fromDate || null)}
+                  onChange={(event) => setFromDate(event.target.value ? new Date(event.target.value).toISOString() : '')}
+                  className={filterInputClass}
+                />
+                <input
+                  type="datetime-local"
+                  aria-label="To"
+                  value={toDateTimeLocalValue(toDate || null)}
+                  onChange={(event) => setToDate(event.target.value ? new Date(event.target.value).toISOString() : '')}
+                  className={filterInputClass}
+                />
+              </div>
+            ),
+            render: (log) => formatDateTime(log.createdAt),
+          },
+          { key: 'actor', header: 'Actor', render: (log) => <span className="font-semibold">{displayValue(log.actor)}</span> },
+          {
+            key: 'action',
+            header: 'Action',
+            filterCell: <input className={filterInputClass} value={action} onChange={(event) => setAction(event.target.value)} placeholder="Action" aria-label="Action" />,
+            render: (log) => displayValue(log.action),
+          },
+          {
+            key: 'target',
+            header: 'Target',
+            filterCell: (
+              <div className="grid grid-cols-2 gap-1">
+                <input
+                  className={filterInputClass}
+                  value={companyId}
+                  onChange={(event) => setCompanyId(event.target.value ? parseInt(event.target.value, 10) : '')}
+                  placeholder="Company Id"
+                  aria-label="Company Id"
+                  type="number"
+                  min={1}
+                />
+                <input className={filterInputClass} value={userId} onChange={(event) => setUserId(event.target.value)} placeholder="User Id" aria-label="User Id" />
+              </div>
+            ),
+            render: (log) => `${displayValue(log.targetType)} / ${displayValue(log.targetId)}`,
+          },
+        ]}
+        rowActions={(log) => <RowActionButton title="View" icon={<Eye />} onClick={() => setSelected(log)} />}
+      />
 
       {selected && (
-        <div className="fixed inset-0 z-40 bg-black/30 flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/40 p-4">
           <div className="bg-white max-w-2xl w-full rounded-xl border border-slate-200 shadow-xl">
             <div className="p-4 border-b border-slate-100 flex items-center justify-between">
               <h3 className="font-bold text-lg text-slate-800">Activity Detail</h3>

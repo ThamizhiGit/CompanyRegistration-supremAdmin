@@ -31,21 +31,22 @@ import {
   Download,
   Edit2,
   Eye,
-  Filter,
   HandCoins,
   Landmark,
   Layers,
   MapPin,
-  Printer,
   ReceiptText,
   Save,
-  Search,
   Users,
   X,
 } from 'lucide-react';
 import { ColumnFilter } from '../ColumnFilter';
 import { ChangePackageDialog, PackageCell, useCompanyPackages } from './PackageBuilder';
 import { DateRangePicker, DateRangeValue } from '../DateRangePicker';
+import { DataTable, RowActionButton, StatusBadge, type DataTableSort } from '../ui/DataTable';
+
+const filterInputClass =
+  'h-8 w-full rounded-lg border border-slate-200 bg-white px-2 text-xs text-slate-700 outline-none focus:border-sky-400 focus:ring-2 focus:ring-sky-100';
 
 interface EditingCompanyDetail {
   id: number;
@@ -489,28 +490,17 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
     createdAt: 'createdAt',
   };
 
-  // The server sorts every page; no direction = newest first.
-  const cycleSort = (key: CompanySortKey) => {
-    const direction: SortDirection = sortKey !== key ? 'asc' : sortDirection === 'asc' ? 'desc' : sortDirection === 'desc' ? null : 'asc';
+  // The server sorts every page; no sort = newest first.
+  const changeCompanySort = (next: DataTableSort | null) => {
+    if (!next) {
+      setSortDirection(null);
+      setServerSort({ field: 'createdAt', direction: 'desc' });
+      return;
+    }
+    const key = next.key as CompanySortKey;
     setSortKey(key);
-    setSortDirection(direction);
-    setServerSort(direction ? { field: SERVER_SORT[key], direction } : { field: 'createdAt', direction: 'desc' });
-  };
-
-  const SortHeader = ({ label, sort }: { label: string; sort: CompanySortKey }) => {
-    const active = sortKey === sort && sortDirection;
-    return (
-      <button
-        type="button"
-        onClick={() => cycleSort(sort)}
-        className="inline-flex items-center gap-1 font-semibold text-slate-700 hover:text-cyan-700"
-      >
-        <span>{label}</span>
-        <span className={`text-xs ${active ? 'text-cyan-700' : 'text-slate-400'}`}>
-          {active ? (sortDirection === 'asc' ? '▲' : '▼') : '↕'}
-        </span>
-      </button>
-    );
+    setSortDirection(next.dir);
+    setServerSort({ field: SERVER_SORT[key], direction: next.dir });
   };
 
   // Every company of the current filter (not only this page), up to EXPORT_ROW_CAP.
@@ -846,7 +836,7 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
       {!viewingCompany && (
         <>
       <div>
-        <h2 className="text-2xl font-bold text-slate-800">Companies</h2>
+        <h2 className="text-2xl font-semibold text-gray-700">Companies</h2>
         <p className="text-slate-600">Manage tenants, plan assignments, subscriptions, and payment history</p>
       </div>
       {companiesError ? (
@@ -856,258 +846,172 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
         </p>
       ) : null}
 
-      <div className="bg-white rounded-lg border border-slate-200 p-4 space-y-3">
-        <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-          <div className="flex flex-1 flex-col gap-3 md:flex-row md:flex-wrap md:items-center">
-            <div className="relative md:min-w-[280px] md:flex-[1_1_320px]">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-              <label htmlFor="company-search" className="sr-only">Search companies</label>
-              <input
-                id="company-search"
-                type="text"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search companies, email, payment..."
-                className="w-full rounded-lg border border-slate-300 py-2 pl-9 pr-3 text-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-100"
-              />
-            </div>
-            <button
-              type="button"
-              onClick={() => setFiltersOpen((open) => {
-                if (open) {
-                  setStatusSelections([]);
-                  setPlanSelections([]);
-                  setDueFrom('');
-                  setDueTo('');
-                  setRecurringFrom('');
-                  setRecurringTo('');
-                  setGatewaySelections([]);
-                }
-                return !open;
-              })}
-              aria-pressed={filtersOpen}
-              title="Filters"
-              className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border transition ${
-                filtersOpen
-                  ? 'border-cyan-400 bg-cyan-50 text-cyan-600'
-                  : 'border-slate-200 bg-slate-50 text-slate-400 hover:border-cyan-300 hover:text-cyan-500'
-              }`}
-            >
-              <Filter className="h-4 w-4" />
-            </button>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={clearFilters}
-              className="rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-100"
-            >
+      <DataTable<CompanyType>
+        testId="companies-table"
+        rows={companies}
+        rowKey={(company) => String(company.id)}
+        searchPlaceholder="Search companies, email, payment..."
+        searchValue={search}
+        onSearchChange={setSearch}
+        filtersOpen={filtersOpen}
+        onFiltersToggle={(open) => {
+          if (!open) clearFilters();
+          setFiltersOpen(open);
+        }}
+        sort={sortDirection ? { key: sortKey, dir: sortDirection } : null}
+        onSortChange={changeCompanySort}
+        onRefresh={() => refetchCompanies()}
+        onPrint={printCompanies}
+        headerActions={(
+          <>
+            <button type="button" onClick={clearFilters} className="inline-flex h-9 items-center justify-center rounded-lg border border-slate-200/60 bg-slate-50 px-3 text-[13px] font-medium text-slate-500 transition-all hover:bg-slate-100 hover:text-slate-700">
               Clear
             </button>
             {companyExport.exporting ? (
-              <button
-                type="button"
-                onClick={companyExport.cancel}
-                className="inline-flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-800"
-              >
-                <X className="h-4 w-4" />
-                Cancel export
+              <button type="button" onClick={companyExport.cancel} className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-3 text-[13px] font-medium text-amber-800">
+                <X className="h-[15px] w-[15px]" /> Cancel export
               </button>
             ) : (
-              <button
-                type="button"
-                onClick={exportCompanies}
-                title="Export every matching company"
-                className="inline-flex items-center gap-2 rounded-lg border border-emerald-200 px-3 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-50"
-              >
-                <Download className="h-4 w-4" />
-                Export all
+              <button type="button" onClick={exportCompanies} title="Export every matching company" className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-slate-200/60 bg-slate-50 px-3 text-[13px] font-medium text-slate-500 transition-all hover:bg-slate-100 hover:text-slate-700">
+                <Download className="h-[15px] w-[15px]" /> Export all
               </button>
             )}
-            <button
-              type="button"
-              onClick={printCompanies}
-              className="inline-flex items-center gap-2 rounded-lg border border-blue-200 px-3 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-50"
-            >
-              <Printer className="h-4 w-4" />
-              PDF
-            </button>
-          </div>
-        </div>
-      </div>
-
-      <div className="bg-white rounded-lg border border-slate-200 overflow-hidden">
-        {companiesLoading ? (
-          <InlineSpinner label="Loading companies..." />
-        ) : companies.length === 0 && !filtersActive ? (
-          <div className="text-center py-12 text-slate-500">No companies found</div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[1160px]">
-              <thead className="bg-slate-50 border-b border-slate-200">
-                <tr>
-                  <th className="text-left py-3 px-4"><SortHeader label="Company" sort="company" /></th>
-                  <th className="text-left py-3 px-4"><SortHeader label="Subscription Status" sort="subscriptionStatus" /></th>
-                  <th className="text-left py-3 px-4"><SortHeader label="Plan" sort="planName" /></th>
-                  <th className="text-left py-3 px-4 font-semibold text-slate-700">Package</th>
-                  <th className="text-left py-3 px-4"><SortHeader label="Email" sort="latestPaymentEmail" /></th>
-                  <th className="text-left py-3 px-4"><SortHeader label="Due Date" sort="subscriptionDueDate" /></th>
-                  <th className="text-left py-3 px-4"><SortHeader label="Recurring Date" sort="subscriptionRecurringDate" /></th>
-                  <th className="text-left py-3 px-4"><SortHeader label="Gateway" sort="latestPaymentGatewayMethod" /></th>
-                  <th className="sticky right-0 z-10 bg-slate-50 text-right py-3 px-4 font-semibold text-slate-700">Actions</th>
-                </tr>
-                {filtersOpen ? (
-                <tr className="border-t border-slate-200 bg-white">
-                  <th className="px-4 py-2"></th>
-                  <th className="px-4 py-2">
-                    <ColumnFilter
-                      label="Subscription Status"
-                      options={companyStatusOptions}
-                      selectedValues={statusSelections}
-                      onChange={setStatusSelections}
-                    />
-                  </th>
-                  <th className="px-4 py-2">
-                    <ColumnFilter
-                      label="Plan"
-                      options={companyPlanOptions}
-                      selectedValues={planSelections}
-                      onChange={setPlanSelections}
-                    />
-                  </th>
-                  <th className="px-4 py-2"></th>
-                  {/* Email: the search box (the server searches it). */}
-                  <th className="px-4 py-2"></th>
-                  <th className="px-4 py-2">
-                    <div className="flex flex-col gap-1">
-                      <input type="date" value={dueFrom} onChange={(event) => setDueFrom(event.target.value)} aria-label="Due from" className="h-8 w-full rounded-lg border border-slate-200 bg-slate-50 px-2 text-xs outline-none focus:border-cyan-400 focus:bg-white" />
-                      <input type="date" value={dueTo} onChange={(event) => setDueTo(event.target.value)} aria-label="Due to" className="h-8 w-full rounded-lg border border-slate-200 bg-slate-50 px-2 text-xs outline-none focus:border-cyan-400 focus:bg-white" />
-                    </div>
-                  </th>
-                  <th className="px-4 py-2">
-                    <div className="flex flex-col gap-1">
-                      <input type="date" value={recurringFrom} onChange={(event) => setRecurringFrom(event.target.value)} aria-label="Recurring from" className="h-8 w-full rounded-lg border border-slate-200 bg-slate-50 px-2 text-xs outline-none focus:border-cyan-400 focus:bg-white" />
-                      <input type="date" value={recurringTo} onChange={(event) => setRecurringTo(event.target.value)} aria-label="Recurring to" className="h-8 w-full rounded-lg border border-slate-200 bg-slate-50 px-2 text-xs outline-none focus:border-cyan-400 focus:bg-white" />
-                    </div>
-                  </th>
-                  <th className="px-4 py-2">
-                    <ColumnFilter
-                      label="Gateway"
-                      options={companyGatewayOptions}
-                      selectedValues={gatewaySelections}
-                      onChange={setGatewaySelections}
-                    />
-                  </th>
-                  <th className="sticky right-0 z-10 bg-white px-4 py-2 text-right">
-                    <button
-                      type="button"
-                      onClick={clearFilters}
-                      className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100"
-                    >
-                      Clear
-                    </button>
-                  </th>
-                </tr>
-                ) : null}
-              </thead>
-              <tbody>
-                {companies.length === 0 ? (
-                  <tr>
-                    <td colSpan={9} className="py-12 text-center text-slate-500">
-                      {filtersActive ? 'No companies match your filters' : 'No companies found'}
-                    </td>
-                  </tr>
-                ) : null}
-                {companies.map((company) => {
-                  const effectiveSubscriptionStatus = getEffectiveSubscriptionStatus(company);
-                  const planName = getCompanyPlanName(company);
-                  return (
-                    <tr key={company.id} className="group border-b border-slate-100 hover:bg-slate-50">
-                      <td className="py-3 px-4 font-medium text-slate-800 max-w-[180px] truncate" title={company.company}>{company.company}</td>
-                      <td className="py-3 px-4">
-                        <span className={`inline-block px-3 py-1 rounded-full text-sm ${getStatusBadgeClass(effectiveSubscriptionStatus)}`}>
-                          {effectiveSubscriptionStatus}
-                        </span>
-                      </td>
-                      <td className="py-3 px-4 text-slate-700">
-                        <div className="font-semibold text-slate-800">{planName}</div>
-                        {company.employeeCount ?? company.latestPaymentEmployeeCountSnapshot ? (
-                          <div className="text-xs text-slate-500">
-                            {company.employeeCount ?? company.latestPaymentEmployeeCountSnapshot} employees
-                          </div>
-                        ) : null}
-                      </td>
-                      <td className="py-3 px-4 text-slate-700">
-                        <PackageCell info={packages.get(Number(company.id))} companyId={Number(company.id)} failed={packageFailedIds.has(Number(company.id))} />
-                      </td>
-                      <td className="py-3 px-4 text-slate-700 max-w-[200px] truncate" title={company.latestPaymentEmail || '-'}>{company.latestPaymentEmail || '-'}</td>
-                      <td className="py-3 px-4 text-slate-700 whitespace-nowrap">{formatDate(company.subscriptionDueDate)}</td>
-                      <td className="py-3 px-4 text-slate-700 whitespace-nowrap">{formatDate(company.subscriptionRecurringDate)}</td>
-                      <td className="py-3 px-4 text-slate-700">
-                        <div>{getCompanyGatewayLabel(company)}</div>
-                        <div className="text-xs text-slate-500">{company.latestPaymentGatewayStatus || '-'}</div>
-                      </td>
-                      <td className="sticky right-0 bg-white py-3 px-4 group-hover:bg-slate-50">
-                        <div className="flex items-center justify-end gap-1 whitespace-nowrap">
-                          <button
-                            title="View Company"
-                            onClick={() => {
-                              setViewingCompany(company);
-                              handleOpenHistory(company.id);
-                            }}
-                            className="p-2 hover:bg-blue-50 text-blue-600 rounded-lg"
-                          >
-                            <Eye className="w-4 h-4" />
-                          </button>
-                          <button
-                            title="Edit Company"
-                            onClick={() =>
-                              setEditingDetail({
-                                id: company.id,
-                                company: company.company,
-                                planId: getCompanyPlanId(company),
-                                originalPlanId: getCompanyPlanId(company),
-                                originalPlanName: getCompanyPlanName(company),
-                                originalSubscriptionStatus: getEffectiveSubscriptionStatus(company),
-                                subscriptionStatus: getEffectiveSubscriptionStatus(company),
-                                subscriptionStatusReason: '',
-                                subscriptionDueDate: company.subscriptionDueDate || '',
-                                subscriptionRecurringDate: company.subscriptionRecurringDate || '',
-                                originalSubscriptionDueDate: company.subscriptionDueDate || '',
-                                originalSubscriptionRecurringDate: company.subscriptionRecurringDate || '',
-                                isMultiLocationEnabled: company.isMultiLocationEnabled,
-                              })
-                            }
-                            className="p-2 hover:bg-emerald-50 text-emerald-600 rounded-lg"
-                          >
-                            <Edit2 className="w-4 h-4" />
-                          </button>
-                          <button
-                            title="Change package"
-                            onClick={() => setChangingPackageFor({ id: Number(company.id), name: company.company })}
-                            className="p-2 hover:bg-sky-50 text-sky-600 rounded-lg"
-                            data-testid={`change-package-${company.id}`}
-                          >
-                            <Layers className="w-4 h-4" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+          </>
         )}
-        <Pager
-          page={companiesPage}
-          pageSize={companiesPageSize}
-          totalCount={companiesTotal}
-          onPage={setCompaniesPage}
-          refreshing={companiesRefreshing}
-          what="companies"
-        />
-      </div>
+        loading={companiesLoading}
+        loadingText={<InlineSpinner label="Loading companies..." />}
+        emptyMessage={filtersActive ? 'No companies match your filters' : 'No companies found'}
+        minWidth="1160px"
+        footer={(
+          <Pager
+            page={companiesPage}
+            pageSize={companiesPageSize}
+            totalCount={companiesTotal}
+            onPage={setCompaniesPage}
+            refreshing={companiesRefreshing}
+            what="companies"
+          />
+        )}
+        columns={[
+          {
+            key: 'company',
+            header: 'Company',
+            sortable: true,
+            render: (company) => <div className="max-w-[180px] truncate font-semibold" title={company.company}>{company.company}</div>,
+          },
+          {
+            key: 'subscriptionStatus',
+            header: 'Subscription Status',
+            sortable: true,
+            filterCell: <ColumnFilter label="Subscription Status" options={companyStatusOptions} selectedValues={statusSelections} onChange={setStatusSelections} />,
+            render: (company) => <StatusBadge value={getEffectiveSubscriptionStatus(company)} />,
+          },
+          {
+            key: 'planName',
+            header: 'Plan',
+            sortable: true,
+            filterCell: <ColumnFilter label="Plan" options={companyPlanOptions} selectedValues={planSelections} onChange={setPlanSelections} />,
+            render: (company) => (
+              <>
+                <div className="font-semibold">{getCompanyPlanName(company)}</div>
+                {company.employeeCount ?? company.latestPaymentEmployeeCountSnapshot ? (
+                  <div className="text-xs text-slate-500">{company.employeeCount ?? company.latestPaymentEmployeeCountSnapshot} employees</div>
+                ) : null}
+              </>
+            ),
+          },
+          {
+            key: 'package',
+            header: 'Package',
+            render: (company) => (
+              <PackageCell info={packages.get(Number(company.id))} companyId={Number(company.id)} failed={packageFailedIds.has(Number(company.id))} />
+            ),
+          },
+          {
+            key: 'latestPaymentEmail',
+            header: 'Email',
+            sortable: true,
+            render: (company) => <div className="max-w-[200px] truncate" title={company.latestPaymentEmail || '-'}>{company.latestPaymentEmail || '-'}</div>,
+          },
+          {
+            key: 'subscriptionDueDate',
+            header: 'Due Date',
+            sortable: true,
+            className: 'whitespace-nowrap',
+            filterCell: (
+              <div className="flex flex-col gap-1">
+                <input type="date" value={dueFrom} onChange={(event) => setDueFrom(event.target.value)} aria-label="Due from" className={filterInputClass} />
+                <input type="date" value={dueTo} onChange={(event) => setDueTo(event.target.value)} aria-label="Due to" className={filterInputClass} />
+              </div>
+            ),
+            render: (company) => formatDate(company.subscriptionDueDate),
+          },
+          {
+            key: 'subscriptionRecurringDate',
+            header: 'Recurring Date',
+            sortable: true,
+            className: 'whitespace-nowrap',
+            filterCell: (
+              <div className="flex flex-col gap-1">
+                <input type="date" value={recurringFrom} onChange={(event) => setRecurringFrom(event.target.value)} aria-label="Recurring from" className={filterInputClass} />
+                <input type="date" value={recurringTo} onChange={(event) => setRecurringTo(event.target.value)} aria-label="Recurring to" className={filterInputClass} />
+              </div>
+            ),
+            render: (company) => formatDate(company.subscriptionRecurringDate),
+          },
+          {
+            key: 'latestPaymentGatewayMethod',
+            header: 'Gateway',
+            sortable: true,
+            filterCell: <ColumnFilter label="Gateway" options={companyGatewayOptions} selectedValues={gatewaySelections} onChange={setGatewaySelections} />,
+            render: (company) => (
+              <>
+                <div>{getCompanyGatewayLabel(company)}</div>
+                <div className="text-xs text-slate-500">{company.latestPaymentGatewayStatus || '-'}</div>
+              </>
+            ),
+          },
+        ]}
+        rowActions={(company) => (
+          <>
+            <RowActionButton
+              title="View Company"
+              icon={<Eye />}
+              onClick={() => {
+                setViewingCompany(company);
+                handleOpenHistory(company.id);
+              }}
+            />
+            <RowActionButton
+              title="Edit Company"
+              icon={<Edit2 />}
+              onClick={() =>
+                setEditingDetail({
+                  id: company.id,
+                  company: company.company,
+                  planId: getCompanyPlanId(company),
+                  originalPlanId: getCompanyPlanId(company),
+                  originalPlanName: getCompanyPlanName(company),
+                  originalSubscriptionStatus: getEffectiveSubscriptionStatus(company),
+                  subscriptionStatus: getEffectiveSubscriptionStatus(company),
+                  subscriptionStatusReason: '',
+                  subscriptionDueDate: company.subscriptionDueDate || '',
+                  subscriptionRecurringDate: company.subscriptionRecurringDate || '',
+                  originalSubscriptionDueDate: company.subscriptionDueDate || '',
+                  originalSubscriptionRecurringDate: company.subscriptionRecurringDate || '',
+                  isMultiLocationEnabled: company.isMultiLocationEnabled,
+                })
+              }
+            />
+            <RowActionButton
+              title="Change package"
+              icon={<Layers />}
+              testId={`change-package-${company.id}`}
+              onClick={() => setChangingPackageFor({ id: Number(company.id), name: company.company })}
+            />
+          </>
+        )}
+      />
 
       {changingPackageFor ? (
         <ChangePackageDialog
@@ -1126,7 +1030,7 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
       ) : null}
 
       {editingDetail && (
-        <div className="fixed inset-0 z-40 bg-black/30 flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/40 p-4">
           <div className="bg-white rounded-2xl shadow-xl border border-slate-200 w-full max-w-2xl">
             <div className="p-5 border-b border-slate-100 flex items-center justify-between">
               <h3 className="text-lg font-bold text-slate-700">Edit Company</h3>
@@ -1147,7 +1051,7 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                   type="text"
                   value={editingDetail.company}
                   onChange={(event) => setEditingDetail({ ...editingDetail, company: event.target.value })}
-                  className="w-full border border-slate-300 rounded-lg px-3 py-2"
+                  className="w-full min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                 />
               </div>
               <div>
@@ -1158,7 +1062,7 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
 	                  onChange={(event) =>
 	                    setEditingDetail(syncEditingStatus(editingDetail, event.target.value))
 	                  }
-	                  className="w-full border border-slate-300 rounded-lg px-3 py-2 bg-white"
+	                  className="w-full min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
 	                >
                   {subscriptionStatusOptions
                     .filter((status) => editableStatuses.has(status.value) || status.value === editingDetail.originalSubscriptionStatus)
@@ -1180,7 +1084,7 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
 	                  onChange={(event) =>
 	                    setEditingDetail(syncEditingPlan(editingDetail, event.target.value))
 	                  }
-	                  className="w-full border border-slate-300 rounded-lg px-3 py-2 bg-white"
+	                  className="w-full min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
 	                >
                   {editPlanOptions(editingDetail).map((plan) => (
                     <option key={plan.id} value={plan.id}>
@@ -1563,152 +1467,137 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
               )}
 
               {company360Tab === 'payments' && (
-                <section className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-                  <div className="px-5 py-4 border-b border-slate-100 flex items-center gap-3">
-                    <div className="w-9 h-9 rounded-lg bg-violet-50 text-violet-600 flex items-center justify-center">
-                      <ReceiptText className="w-5 h-5" />
-                    </div>
-                    <div>
-                      <h4 className="font-semibold text-slate-900">Payment History</h4>
-                      <p className="text-xs text-slate-500">Transactions, gateway details and payment actions</p>
-                    </div>
-                  </div>
-
-                  <div className="p-5 flex flex-col lg:flex-row lg:items-end gap-3">
-                <div className="w-full lg:w-52">
-                  <label htmlFor="payment-history-status" className="block text-sm font-medium text-slate-700 mb-1.5">
-                    Payment Status
-                  </label>
-                  <select
-                    id="payment-history-status"
-                    value={historyStatus}
-                    onChange={(event) => setHistoryStatus(event.target.value)}
-                    className="w-full h-10 px-3 border border-slate-300 rounded-lg bg-white text-sm focus:outline-none focus:ring-2 focus:ring-cyan-100 focus:border-cyan-400"
-                  >
-                    <option value="all">All</option>
-                    {paymentStatuses.map((status) => (
-                      <option key={status} value={status}>{status}</option>
-                    ))}
-                  </select>
-                </div>
-                <div className="pb-0.5">
-                  <DateRangePicker
-                    from={historyDateFrom ? toDateTimeLocalValue(historyDateFrom).slice(0, 10) : ''}
-                    to={historyDateTo ? toDateTimeLocalValue(historyDateTo).slice(0, 10) : ''}
-                    onChange={applyHistoryDateRange}
-                    onClear={clearHistoryDateFilter}
-                  />
-                </div>
-              </div>
-
-              <div className="mx-5">
-                <PartialListWarning
-                  error={historyPageError}
-                  loadingMore={historyLoadingMore}
-                  shown={historyItems.length}
-                  what="payments"
-                  onRetry={() => refetchHistory()}
+                <DataTable<CompanyPaymentType>
+                  testId="company-payment-history"
+                  title="Payment History"
+                  rows={historyItems}
+                  rowKey={(payment) => payment.paymentIntentId}
+                  searchPlaceholder="Search payments"
+                  headerExtra={(
+                    <>
+                      <select
+                        id="payment-history-status"
+                        aria-label="Payment Status"
+                        value={historyStatus}
+                        onChange={(event) => setHistoryStatus(event.target.value)}
+                        className="h-9 rounded-lg border border-slate-200 bg-white px-2.5 text-[13px] text-slate-700 outline-none transition-all focus:border-sky-400 focus:ring-2 focus:ring-sky-100"
+                      >
+                        <option value="all">All statuses</option>
+                        {paymentStatuses.map((status) => (
+                          <option key={status} value={status}>{status}</option>
+                        ))}
+                      </select>
+                      <DateRangePicker
+                        from={historyDateFrom ? toDateTimeLocalValue(historyDateFrom).slice(0, 10) : ''}
+                        to={historyDateTo ? toDateTimeLocalValue(historyDateTo).slice(0, 10) : ''}
+                        onChange={applyHistoryDateRange}
+                        onClear={clearHistoryDateFilter}
+                      />
+                    </>
+                  )}
+                  onRefresh={() => refetchHistory()}
+                  exportName="Payment history"
+                  notice={(
+                    <PartialListWarning
+                      error={historyPageError}
+                      loadingMore={historyLoadingMore}
+                      shown={historyItems.length}
+                      what="payments"
+                      onRetry={() => refetchHistory()}
+                    />
+                  )}
+                  loading={historyLoading}
+                  loadingText="Loading payment history..."
+                  emptyMessage="No payment history"
+                  minWidth="1000px"
+                  columns={[
+                    {
+                      key: 'paymentIntentId',
+                      header: 'Payment',
+                      render: (payment) => (
+                        <div className="max-w-[220px]" title={payment.paymentIntentId}>
+                          <div className="truncate">{payment.paymentIntentId}</div>
+                          {payment.invoiceNumber ? (
+                            <div className="truncate font-mono text-xs font-semibold text-sky-700">{payment.invoiceNumber}</div>
+                          ) : null}
+                        </div>
+                      ),
+                    },
+                    { key: 'email', header: 'Email', render: (payment) => <div className="max-w-[220px] truncate" title={payment.email}>{payment.email}</div> },
+                    {
+                      key: 'plan',
+                      header: 'Plan',
+                      value: (payment) => payment.planName || payment.planId || '-',
+                      sortable: true,
+                      render: (payment) => (
+                        <>
+                          <div className="font-semibold">{payment.planName || payment.planId || '-'}</div>
+                          <div className="text-xs text-slate-500">{payment.employeeCountSnapshot ?? '-'} employees</div>
+                        </>
+                      ),
+                    },
+                    { key: 'status', header: 'Status', sortable: true, filterable: true, status: true },
+                    {
+                      key: 'amount',
+                      header: 'Amount',
+                      sortable: true,
+                      value: (payment) => payment.finalAmountCents ?? payment.amount,
+                      exportValue: (payment) => formatPrice(payment.finalAmountCents ?? payment.amount, payment.currency),
+                      render: (payment) => <span className="font-semibold">{formatPrice(payment.finalAmountCents ?? payment.amount, payment.currency)}</span>,
+                    },
+                    {
+                      key: 'method',
+                      header: 'Method',
+                      value: (payment) => getPaymentGatewayLabel(payment),
+                      filterable: true,
+                      render: (payment) => (
+                        <>
+                          <div className="font-medium capitalize">{getPaymentGatewayLabel(payment)}</div>
+                          <div className="text-xs text-slate-500">
+                            {[payment.source, payment.paymentGatewayStatus]
+                              .filter((value, index, values) => value && value !== getPaymentGatewayLabel(payment) && values.indexOf(value) === index)
+                              .join(' · ') || '-'}
+                          </div>
+                        </>
+                      ),
+                    },
+                    {
+                      key: 'createdAt',
+                      header: 'Created',
+                      sortable: true,
+                      exportValue: (payment) => formatDateTime(payment.createdAt),
+                      render: (payment) => formatDateTime(payment.createdAt),
+                    },
+                  ]}
+                  rowActions={(payment) => (
+                    <>
+                      <button
+                        type="button"
+                        title="Open payment detail"
+                        aria-label={`Open details for ${payment.paymentIntentId}`}
+                        onClick={() => setSelectedPayment(payment)}
+                        className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-sky-200 bg-sky-50 text-sky-600 transition hover:border-sky-400 hover:bg-sky-100 hover:text-sky-700"
+                      >
+                        <Eye className="h-4 w-4" />
+                      </button>
+                      <select
+                        aria-label={`Update status for ${payment.paymentIntentId}`}
+                        value={payment.status}
+                        onChange={(event) => handlePaymentStatusChange(payment.paymentIntentId, event.target.value)}
+                        disabled={paymentStatusInFlight !== null}
+                        className="h-9 min-w-[120px] shrink-0 rounded-lg border border-slate-200 bg-white px-3 text-[13px] text-slate-700 outline-none focus:border-sky-400 focus:ring-2 focus:ring-sky-100 disabled:opacity-60"
+                      >
+                        {/* Refunds go through Refund (payment detail), which gives the money back;
+                            "refunded" only shows as the current status. */}
+                        {paymentStatuses
+                          .filter((status) => status !== 'refunded' || payment.status === 'refunded')
+                          .map((status) => (
+                            <option key={status} value={status} disabled={status === 'refunded'}>{status}</option>
+                          ))}
+                      </select>
+                    </>
+                  )}
                 />
-              </div>
-              {historyLoading ? (
-                <div className="mx-5 mb-5 text-center py-10 text-slate-500">Loading payment history...</div>
-              ) : historyItems.length === 0 ? (
-                <div className="mx-5 mb-5 text-center py-10 rounded-xl bg-slate-50 border border-dashed border-slate-200 text-slate-500">
-                  No payment history
-                </div>
-              ) : (
-                <div className="custom-scrollbar mx-5 mb-5 overflow-x-auto border border-slate-200 rounded-lg">
-                  <table className="w-full">
-                    <thead className="bg-slate-50 border-b border-slate-200">
-                      <tr>
-                        <th className="text-left py-3 px-4">Payment</th>
-                        <th className="text-left py-3 px-4">Email</th>
-                        <th className="text-left py-3 px-4">Plan</th>
-                        <th className="text-left py-3 px-4">Status</th>
-                        <th className="text-left py-3 px-4">Amount</th>
-                        <th className="text-left py-3 px-4">Method</th>
-                        <th className="text-left py-3 px-4">Created</th>
-                        <th className="min-w-[185px] text-right py-3 px-4">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {historyItems.map((payment) => (
-                          <tr key={payment.paymentIntentId} className="border-t border-slate-100">
-                            <td
-                              className="max-w-[220px] py-3 px-4 text-slate-700 truncate"
-                              title={payment.paymentIntentId}
-                            >
-                              <div className="truncate">{payment.paymentIntentId}</div>
-                              {payment.invoiceNumber ? (
-                                <div className="truncate text-xs font-mono font-semibold text-cyan-700">{payment.invoiceNumber}</div>
-                              ) : null}
-                            </td>
-                            <td
-                              className="max-w-[220px] py-3 px-4 text-slate-700 truncate"
-                              title={payment.email}
-                            >
-                              {payment.email}
-                            </td>
-                            <td className="py-3 px-4 text-slate-700">
-                              <div className="font-medium">{payment.planName || payment.planId || '-'}</div>
-                              <div className="text-xs text-slate-500">
-                                {payment.employeeCountSnapshot ?? '-'} employees
-                              </div>
-                            </td>
-                            <td className="py-3 px-4">
-                              <span className={`inline-block px-2 py-1 rounded-full text-sm ${
-                                payment.status === 'succeeded' ? 'bg-emerald-50 text-emerald-700' :
-                                payment.status === 'pending' ? 'bg-yellow-50 text-yellow-700' :
-                                payment.status === 'failed' ? 'bg-red-50 text-red-700' :
-                                'bg-slate-100 text-slate-700'
-                              }`}>
-                                {payment.status}
-                              </span>
-                            </td>
-                            <td className="py-3 px-4 text-slate-700">{formatPrice(payment.finalAmountCents ?? payment.amount, payment.currency)}</td>
-                            <td className="py-3 px-4 text-slate-700">
-                              <div className="font-medium capitalize">{getPaymentGatewayLabel(payment)}</div>
-                              <div className="text-xs text-slate-500">
-                                {[payment.source, payment.paymentGatewayStatus]
-                                  .filter((value, index, values) => value && value !== getPaymentGatewayLabel(payment) && values.indexOf(value) === index)
-                                  .join(' · ') || '-'}
-                              </div>
-                            </td>
-                            <td className="py-3 px-4 text-slate-700">{formatDateTime(payment.createdAt)}</td>
-                            <td className="py-3 px-4">
-                              <div className="flex items-center justify-end gap-2 whitespace-nowrap">
-                                <button
-                                  title="Open payment detail"
-                                  aria-label={`Open details for ${payment.paymentIntentId}`}
-                                  onClick={() => setSelectedPayment(payment)}
-                                  className="w-9 h-9 inline-flex shrink-0 items-center justify-center border border-slate-200 rounded-full text-blue-600 hover:border-blue-200 hover:bg-blue-50 transition-colors"
-                                >
-                                  <Eye className="w-4 h-4" />
-                                </button>
-                                <select
-                                  aria-label={`Update status for ${payment.paymentIntentId}`}
-                                  value={payment.status}
-                                  onChange={(event) => handlePaymentStatusChange(payment.paymentIntentId, event.target.value)}
-                                  disabled={paymentStatusInFlight !== null}
-                                  className="h-9 min-w-[120px] shrink-0 px-3 border border-slate-300 rounded-lg text-sm bg-white disabled:opacity-60"
-                                >
-                                  {/* Refunds go through Refund (payment detail), which gives the money back;
-                                      "refunded" only shows as the current status. */}
-                                  {paymentStatuses
-                                    .filter((status) => status !== 'refunded' || payment.status === 'refunded')
-                                    .map((status) => (
-                                      <option key={status} value={status} disabled={status === 'refunded'}>{status}</option>
-                                    ))}
-                                </select>
-                              </div>
-                            </td>
-                          </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-                </section>
               )}
             </div>
         </div>
@@ -1828,7 +1717,7 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                     <input
                       value={refundReason}
                       onChange={(event) => setRefundReason(event.target.value)}
-                      className="w-full h-10 border border-slate-300 bg-white rounded-lg px-3 text-sm focus:outline-none focus:ring-2 focus:ring-pink-100 focus:border-pink-400"
+                      className="w-full min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                       placeholder="Refund reason"
                     />
                   </label>
@@ -1839,7 +1728,7 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                     <input
                       value={refundAmount}
                       onChange={(event) => setRefundAmount(event.target.value)}
-                      className="w-full h-10 border border-slate-300 bg-white rounded-lg px-3 text-sm focus:outline-none focus:ring-2 focus:ring-pink-100 focus:border-pink-400"
+                      className="w-full min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                       placeholder="Amount"
                       type="number"
                       step={currencyInputStep(selectedPayment.currency || 'USD')}
@@ -1893,7 +1782,7 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                     <input
                     value={manualSource}
                     onChange={(event) => setManualSource(event.target.value)}
-                      className="w-full h-10 border border-slate-300 bg-white rounded-lg px-3 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-100 focus:border-cyan-400"
+                      className="w-full min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                     placeholder="Source"
                   />
                   </label>
@@ -1902,7 +1791,7 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                     <input
                     value={manualMethod}
                     onChange={(event) => setManualMethod(event.target.value)}
-                      className="w-full h-10 border border-slate-300 bg-white rounded-lg px-3 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-100 focus:border-cyan-400"
+                      className="w-full min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                     placeholder="Payment method"
                   />
                   </label>
@@ -1911,7 +1800,7 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                     <input
                     value={manualReceiver}
                     onChange={(event) => setManualReceiver(event.target.value)}
-                      className="w-full h-10 border border-slate-300 bg-white rounded-lg px-3 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-100 focus:border-cyan-400"
+                      className="w-full min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                     placeholder="Receiver medium"
                   />
                   </label>
@@ -1920,7 +1809,7 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                     <input
                     value={manualSender}
                     onChange={(event) => setManualSender(event.target.value)}
-                      className="w-full h-10 border border-slate-300 bg-white rounded-lg px-3 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-100 focus:border-cyan-400"
+                      className="w-full min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                     placeholder="Sender medium"
                   />
                   </label>
@@ -1928,7 +1817,7 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
                     <span className="block text-xs font-semibold text-slate-600 mb-1.5">Reason / notes</span>
                   <textarea
                       rows={3}
-                      className="w-full resize-y border border-slate-300 bg-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-100 focus:border-cyan-400"
+                      className="w-full resize-y min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                     placeholder="Reason / notes"
                     value={manualReason}
                     onChange={(event) => setManualReason(event.target.value)}
