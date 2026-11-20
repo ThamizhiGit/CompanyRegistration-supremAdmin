@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useQuery } from '@apollo/client/react';
 import { ADMIN_INFRASTRUCTURE_QUERY } from '../../../lib/graphql';
 import { formatPrice } from '../../../lib/admin-utils';
+import { DataTable } from '../ui/DataTable';
 
 interface InfrastructureEntry {
   income: number;
@@ -42,7 +43,7 @@ export const Infrastructure: React.FC = () => {
     <div className="space-y-8">
       <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div>
-          <h2 className="text-2xl font-bold text-slate-800">Infrastructure</h2>
+          <h2 className="text-2xl font-semibold text-gray-700">Infrastructure</h2>
           <p className="text-slate-600">Income, expense, and operational platform metrics</p>
         </div>
 
@@ -54,7 +55,7 @@ export const Infrastructure: React.FC = () => {
               const nextPeriod = event.target.value;
               setPeriod(nextPeriod);
             }}
-            className="px-3 py-2 border border-slate-300 rounded-lg"
+            className="min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
           >
             <option value="7d">Last 7 days</option>
             <option value="30d">Last 30 days</option>
@@ -85,39 +86,33 @@ export const Infrastructure: React.FC = () => {
         </div>
       </div>
 
-      <div className="bg-white rounded-lg border border-slate-200 overflow-hidden">
-        <div className="p-4 border-b border-slate-100">
-          <h3 className="font-bold text-slate-700">Daily trend ({payload.period})</h3>
-        </div>
-        {payload.byDay.length === 0 ? (
-          <div className="py-10 text-center text-slate-500">No trend data available</div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead className="bg-slate-50">
-                <tr>
-                  <th className="text-left px-4 py-3 text-sm font-semibold text-slate-700">Date</th>
-                  <th className="text-left px-4 py-3 text-sm font-semibold text-slate-700">Income</th>
-                  <th className="text-left px-4 py-3 text-sm font-semibold text-slate-700">Expense</th>
-                  <th className="text-left px-4 py-3 text-sm font-semibold text-slate-700">Net</th>
-                </tr>
-              </thead>
-              <tbody>
-                {payload.byDay.map((row) => (
-                  <tr key={row.date} className="border-t border-slate-100">
-                    <td className="px-4 py-3 text-slate-800">{row.date}</td>
-                    <td className="px-4 py-3 text-slate-700">{formatPrice(row.income)}</td>
-                    <td className="px-4 py-3 text-slate-700">{formatPrice(row.expense)}</td>
-                    <td className={`px-4 py-3 font-medium ${row.income - row.expense >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
-                      {formatPrice(row.income - row.expense)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
+      <DataTable<(typeof payload.byDay)[number]>
+        testId="infrastructure-trend-table"
+        title={`Daily trend (${payload.period})`}
+        rows={payload.byDay}
+        rowKey={(row) => row.date}
+        searchPlaceholder="Search dates"
+        exportName="Infrastructure daily trend"
+        emptyMessage="No trend data available"
+        pageSize={0}
+        columns={[
+          { key: 'date', header: 'Date', sortable: true, render: (row) => <span className="font-semibold">{row.date}</span> },
+          { key: 'income', header: 'Income', sortable: true, value: (row) => row.income, exportValue: (row) => formatPrice(row.income), render: (row) => formatPrice(row.income) },
+          { key: 'expense', header: 'Expense', sortable: true, value: (row) => row.expense, exportValue: (row) => formatPrice(row.expense), render: (row) => formatPrice(row.expense) },
+          {
+            key: 'net',
+            header: 'Net',
+            sortable: true,
+            value: (row) => row.income - row.expense,
+            exportValue: (row) => formatPrice(row.income - row.expense),
+            render: (row) => (
+              <span className={`font-semibold ${row.income - row.expense >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
+                {formatPrice(row.income - row.expense)}
+              </span>
+            ),
+          },
+        ]}
+      />
 
       <div className="bg-white rounded-lg border border-slate-200 p-4">
         <p className="text-sm text-slate-600">Failed refunds in selected period</p>

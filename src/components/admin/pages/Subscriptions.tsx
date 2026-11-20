@@ -17,17 +17,17 @@ import {
   Download,
   Edit2,
   Eye,
-  Filter,
   Landmark,
   Layers,
-  Printer,
-  RefreshCw,
-  Search,
   X,
 } from 'lucide-react';
 import { ColumnFilter } from '../ColumnFilter';
 import { ChangePackageDialog, PackageCell, useCompanyPackages } from './PackageBuilder';
 import { EXPORT_ROW_CAP, facetOptions, InlineSpinner, isAbortError, Pager, useFeedExport, usePagedQuery } from '../../../lib/useAllPagesQuery';
+import { DataTable, RowActionButton, StatusBadge, type DataTableSort } from '../ui/DataTable';
+
+const filterInputClass =
+  'h-8 w-full rounded-lg border border-slate-200 bg-white px-2 text-xs text-slate-700 outline-none focus:border-sky-400 focus:ring-2 focus:ring-sky-100';
 
 /** The payload of an admin mutation: `success: false` is a refusal, not a success. */
 type ActionPayload = { success?: boolean | null; message?: string | null } | null | undefined;
@@ -566,26 +566,18 @@ export const Subscriptions: React.FC<{
     });
   }, [indexedPayments]);
 
-  // The server sorts (every page); no direction = newest first.
-  const cycleSort = (key: PaymentSortKey) => {
-    const direction: SortDirection = sortKey !== key ? 'asc' : sortDirection === 'asc' ? 'desc' : sortDirection === 'desc' ? null : 'asc';
+  // The server sorts (every page); no sort = newest first.
+  const changePaymentSort = (next: DataTableSort | null) => {
+    if (!next) {
+      setSortDirection(null);
+      setServerSort({ field: 'createdAt', direction: 'desc' });
+      return;
+    }
+    const key = next.key as PaymentSortKey;
     setSortKey(key);
-    setSortDirection(direction);
-    setServerSort(direction ? { field: SERVER_SORT[key], direction } : { field: 'createdAt', direction: 'desc' });
+    setSortDirection(next.dir);
+    setServerSort({ field: SERVER_SORT[key], direction: next.dir });
   };
-
-  const SortHeader = ({ label, column }: { label: string; column: PaymentSortKey }) => (
-    <button
-      type="button"
-      onClick={() => cycleSort(column)}
-      className={`inline-flex w-full items-center gap-1 text-left text-sm font-semibold ${
-        sortKey === column && sortDirection ? 'text-cyan-700' : 'text-slate-700'
-      }`}
-    >
-      <span>{label}</span>
-      <span className="text-[10px]">{sortKey === column && sortDirection ? (sortDirection === 'asc' ? '▲' : '▼') : '↕'}</span>
-    </button>
-  );
 
   // Every payment of the current filter (not only this page), up to EXPORT_ROW_CAP.
   const exportPayments = async () => {
@@ -637,16 +629,9 @@ export const Subscriptions: React.FC<{
     <div className="space-y-8">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h2 className="text-2xl font-bold text-slate-800">Subscriptions & Payments</h2>
+          <h2 className="text-2xl font-semibold text-gray-700">Subscriptions & Payments</h2>
           <p className="text-slate-600">Monitor plan billing, trial snapshots, and payment transactions</p>
         </div>
-        <button
-          onClick={() => refetch()}
-          className="flex items-center gap-2 px-4 py-2 hover:bg-slate-100 rounded-lg font-medium transition-colors"
-        >
-          <RefreshCw className="w-4 h-4" />
-          Refresh
-        </button>
       </div>
       {error ? (
         <p role="alert" className="flex flex-wrap items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
@@ -655,9 +640,42 @@ export const Subscriptions: React.FC<{
         </p>
       ) : null}
 
-      <div className="rounded-xl border border-slate-200 bg-white p-3 space-y-3">
-        {companyIdFilter !== null && (
-          <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 flex items-center justify-between gap-3 text-sm text-blue-700">
+      <DataTable<IndexedPaymentType>
+        testId="payments-table"
+        rows={filteredPayments}
+        rowKey={(payment) => payment.paymentIntentId}
+        searchPlaceholder="Search company, plan, email..."
+        searchValue={companySearch}
+        onSearchChange={setCompanySearch}
+        filtersOpen={filtersOpen}
+        onFiltersToggle={(open) => {
+          if (!open) {
+            setPlanSelections([]);
+            setAmountMin('');
+            setAmountMax('');
+            setStatusSelections([]);
+            setGatewaySelections([]);
+            setCreatedFrom('');
+            setCreatedTo('');
+            setDueOnly(false);
+          }
+          setFiltersOpen(open);
+        }}
+        sort={sortDirection ? { key: sortKey, dir: sortDirection } : null}
+        onSortChange={changePaymentSort}
+        onRefresh={() => refetch()}
+        onPrint={printPayments}
+        headerActions={paymentExport.exporting ? (
+          <button type="button" onClick={paymentExport.cancel} className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-3 text-[13px] font-medium text-amber-800">
+            <X className="h-[15px] w-[15px]" /> Cancel export
+          </button>
+        ) : (
+          <button type="button" onClick={exportPayments} title="Export every matching payment" className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-slate-200/60 bg-slate-50 px-3 text-[13px] font-medium text-slate-500 transition-all hover:bg-slate-100 hover:text-slate-700">
+            <Download className="h-[15px] w-[15px]" /> Export all
+          </button>
+        )}
+        notice={companyIdFilter !== null ? (
+          <div className="flex items-center justify-between gap-3 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-[13px] text-sky-700">
             <div>Filtering subscriptions for Company ID: {companyIdFilter}</div>
             <button
               type="button"
@@ -665,242 +683,19 @@ export const Subscriptions: React.FC<{
                 setCompanyIdFilter(null);
                 setCompanySearch('');
               }}
-              className="inline-flex items-center gap-1 px-3 py-1 text-blue-700 border border-blue-200 rounded-lg hover:bg-blue-100"
+              className="inline-flex items-center gap-1 rounded-lg border border-sky-200 px-3 py-1 text-sky-700 hover:bg-sky-100"
             >
-              <X className="w-3.5 h-3.5" /> Clear company filter
+              <X className="h-3.5 w-3.5" /> Clear company filter
             </button>
           </div>
-        )}
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="relative min-w-[220px] max-w-[320px] flex-1">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-            <input
-              type="text"
-              value={companySearch}
-              onChange={(event) => setCompanySearch(event.target.value)}
-              placeholder="Search company, plan, email..."
-              className="h-9 w-full rounded-lg border border-slate-200 bg-slate-50 pl-9 pr-3 text-[13px] outline-none transition focus:border-cyan-400 focus:bg-white focus:ring-2 focus:ring-cyan-50"
-            />
-          </div>
-          <button
-            type="button"
-            onClick={() => setFiltersOpen((open) => {
-              if (open) {
-                setPlanSelections([]);
-                setAmountMin('');
-                setAmountMax('');
-                setStatusSelections([]);
-                setGatewaySelections([]);
-                setCreatedFrom('');
-                setCreatedTo('');
-                setDueOnly(false);
-              }
-              return !open;
-            })}
-            aria-pressed={filtersOpen}
-            title="Filters"
-            className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border transition ${
-              filtersOpen
-                ? 'border-cyan-400 bg-cyan-50 text-cyan-600'
-                : 'border-slate-200 bg-slate-50 text-slate-400 hover:border-cyan-300 hover:text-cyan-500'
-            }`}
-          >
-            <Filter className="h-4 w-4" />
-          </button>
-          {paymentExport.exporting ? (
-            <button type="button" onClick={paymentExport.cancel} className="inline-flex h-9 items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 text-sm font-semibold text-amber-800">
-              <X className="h-4 w-4" /> Cancel export
-            </button>
-          ) : (
-            <button onClick={exportPayments} title="Export every matching payment" className="inline-flex h-9 items-center gap-2 rounded-lg border border-slate-200 px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">
-              <Download className="h-4 w-4" /> Export all
-            </button>
-          )}
-          <button onClick={printPayments} className="inline-flex h-9 items-center gap-2 rounded-lg border border-slate-200 px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">
-            <Printer className="h-4 w-4" /> Print
-          </button>
-        </div>
-      </div>
-
-      <div className="bg-white rounded-lg border border-slate-200">
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[1020px]">
-              <thead className="bg-slate-50 border-b border-slate-200">
-                <tr>
-                  <th className="py-3 px-3"><SortHeader label="Company" column="displayCompanyName" /></th>
-                  <th className="py-3 px-3"><SortHeader label="Email" column="email" /></th>
-                  <th className="py-3 px-3"><SortHeader label="Plan" column="planName" /></th>
-                  <th className="py-3 px-3 text-left font-semibold text-slate-700">Package</th>
-                  <th className="py-3 px-3"><SortHeader label="Amount" column="amount" /></th>
-                  <th className="py-3 px-3"><SortHeader label="Due Date" column="dueDate" /></th>
-                  <th className="py-3 px-3"><SortHeader label="Trial End" column="trialEndsAt" /></th>
-                  <th className="py-3 px-3"><SortHeader label="Status" column="status" /></th>
-                  <th className="text-left py-3 px-3 font-semibold text-slate-700">Gateway</th>
-                  <th className="py-3 px-3"><SortHeader label="Created" column="createdAt" /></th>
-                  <th className="text-right py-3 px-3 font-semibold text-slate-700">Action</th>
-                </tr>
-                {filtersOpen ? (
-                <tr className="border-t border-slate-200 bg-white">
-                  {/* Company and email: the search box (the server searches both). */}
-                  <th className="px-3 py-2"></th>
-                  <th className="px-3 py-2"></th>
-                  <th className="px-3 py-2">
-                    <ColumnFilter
-                      label="Plan"
-                      options={planOptions}
-                      selectedValues={planSelections}
-                      onChange={setPlanSelections}
-                    />
-                  </th>
-                  <th className="px-3 py-2"></th>
-                  <th className="px-3 py-2">
-                    <div className="flex gap-1">
-                      <input type="number" min={0} step="0.01" value={amountMin} onChange={(event) => setAmountMin(event.target.value)} placeholder="Min" aria-label="Minimum amount" className="h-8 w-full rounded-lg border border-slate-200 bg-slate-50 px-2 text-xs outline-none focus:border-cyan-400 focus:bg-white" />
-                      <input type="number" min={0} step="0.01" value={amountMax} onChange={(event) => setAmountMax(event.target.value)} placeholder="Max" aria-label="Maximum amount" className="h-8 w-full rounded-lg border border-slate-200 bg-slate-50 px-2 text-xs outline-none focus:border-cyan-400 focus:bg-white" />
-                    </div>
-                  </th>
-                  <th className="px-3 py-2">
-                    <div className="space-y-2">
-                      <label className="inline-flex items-center gap-2 text-xs font-semibold text-slate-700">
-                        <input
-                          type="checkbox"
-                          checked={dueOnly}
-                          onChange={(event) => setDueOnly(event.target.checked)}
-                        />
-                        Due only
-                      </label>
-                    </div>
-                  </th>
-                  <th className="px-3 py-2"></th>
-                  <th className="px-3 py-2">
-                    <ColumnFilter
-                      label="Status"
-                      options={statusOptions}
-                      selectedValues={statusSelections}
-                      onChange={setStatusSelections}
-                    />
-                  </th>
-                  <th className="px-3 py-2">
-                    <ColumnFilter
-                      label="Gateway"
-                      options={gatewayOptions}
-                      selectedValues={gatewaySelections}
-                      onChange={setGatewaySelections}
-                    />
-                  </th>
-                  <th className="px-3 py-2">
-                    <div className="flex flex-col gap-1">
-                      <input type="date" value={createdFrom} onChange={(event) => setCreatedFrom(event.target.value)} aria-label="Created from" className="h-8 w-full rounded-lg border border-slate-200 bg-slate-50 px-2 text-xs outline-none focus:border-cyan-400 focus:bg-white" />
-                      <input type="date" value={createdTo} onChange={(event) => setCreatedTo(event.target.value)} aria-label="Created to" className="h-8 w-full rounded-lg border border-slate-200 bg-slate-50 px-2 text-xs outline-none focus:border-cyan-400 focus:bg-white" />
-                    </div>
-                  </th>
-                  <th className="px-3 py-2"></th>
-                </tr>
-                ) : null}
-              </thead>
-              <tbody>
-                {loading ? (
-                  <tr>
-                    <td colSpan={11} className="px-4">
-                      <InlineSpinner label="Loading subscriptions..." />
-                    </td>
-                  </tr>
-                ) : filteredPayments.length === 0 ? (
-                  <tr>
-                    <td colSpan={11} className="px-4 py-12 text-center text-slate-500">
-                      {companySearch.trim() || planSelections.length || statusSelections.length || gatewaySelections.length || amountMin || amountMax || createdFrom || createdTo || dueOnly
-                        ? 'No payments match your filters'
-                        : 'No payments found'}
-                    </td>
-                  </tr>
-                ) : filteredPayments.map((payment) => (
-                    <tr key={payment.paymentIntentId} className="border-b border-slate-100 hover:bg-slate-50">
-                      <td className="py-3 px-3 font-medium text-slate-800">
-                        <div className="max-w-[150px] truncate" title={payment.displayCompanyName}>{payment.displayCompanyName}</div>
-                        <div className="max-w-[150px] truncate text-xs font-mono font-semibold text-cyan-700" title={payment.invoiceNumber || payment.paymentIntentId}>
-                          {payment.invoiceNumber ? payment.invoiceNumber : payment.paymentIntentId}
-                        </div>
-                      </td>
-                      <td className="py-3 px-3 text-slate-700"><div className="max-w-[160px] truncate" title={payment.email}>{payment.email}</div></td>
-                      <td className="py-3 px-3 text-slate-700">
-                        <div className="font-semibold text-slate-800">{payment.planName || payment.planId || '-'}</div>
-                        {payment.employeeCountSnapshot !== null && payment.employeeCountSnapshot !== undefined ? (
-                          <div className="text-xs text-slate-500">{payment.employeeCountSnapshot} employees</div>
-                        ) : null}
-                      </td>
-                      <td className="py-3 px-3 text-slate-700">
-                        {payment.companyId ? (
-                          <PackageCell info={packages.get(Number(payment.companyId))} companyId={Number(payment.companyId)} failed={packageFailedIds.has(Number(payment.companyId))} />
-                        ) : (
-                          <span className="text-xs text-slate-400">-</span>
-                        )}
-                      </td>
-                      <td className="py-3 px-3 font-semibold text-slate-800">
-                        <div>{formatPrice(payment.finalAmountCents ?? payment.amount, payment.currency)}</div>
-                        {payment.originalAmountCents !== null && payment.originalAmountCents !== undefined && payment.originalAmountCents !== (payment.finalAmountCents ?? payment.amount) ? (
-                          <div className="text-xs font-normal text-slate-500">
-                            Original {formatPrice(payment.originalAmountCents, payment.currency)}
-                          </div>
-                        ) : null}
-                      </td>
-                      <td className="py-3 px-3 text-slate-600 text-sm">
-                        <div>{formatDate(payment.dueDate || null)}</div>
-                        <div className="text-xs text-slate-400">Recurring {formatDate(payment.recurringDate || null)}</div>
-                      </td>
-                      <td className="py-3 px-3 text-slate-600 text-sm">
-                        {formatDate(payment.trialEndsAt || null)}
-                      </td>
-                      <td className="py-3 px-3">
-                        <span className={`inline-block px-3 py-1 rounded-full text-sm font-medium ${getPaymentStatusClass(payment.status)}`}>
-                          {payment.status}
-                        </span>
-                      </td>
-                      <td className="py-3 px-3 text-slate-700">
-                        <div>{getGatewayLabel(payment)}</div>
-                        <div className="text-xs text-slate-500">{payment.paymentGatewayStatus || '-'}</div>
-                      </td>
-                      <td className="py-3 px-3 text-slate-600 text-sm">
-                        {formatDate(payment.createdAt)}
-                      </td>
-                      <td className="py-3 px-3 text-right">
-                        <div className="flex items-center justify-end gap-1 whitespace-nowrap">
-                          <button
-                            type="button"
-                            onClick={() => setViewingPayment(payment)}
-                            title="View subscription"
-                            className="rounded-lg p-2 text-blue-600 hover:bg-blue-50"
-                          >
-                            <Eye className="h-4 w-4" />
-                            <span className="sr-only">View subscription</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => openEditPayment(payment)}
-                            title="Edit subscription"
-                            className="rounded-lg p-2 text-cyan-700 hover:bg-cyan-50"
-                          >
-                            <Edit2 className="h-4 w-4" />
-                            <span className="sr-only">Edit subscription</span>
-                          </button>
-                          {payment.companyId ? (
-                            <button
-                              type="button"
-                              onClick={() => setChangingPackageFor({ id: Number(payment.companyId), name: payment.displayCompanyName })}
-                              title="Change package"
-                              className="rounded-lg p-2 text-sky-700 hover:bg-sky-50"
-                              data-testid={`change-package-${payment.paymentIntentId}`}
-                            >
-                              <Layers className="h-4 w-4" />
-                              <span className="sr-only">Change package</span>
-                            </button>
-                          ) : null}
-                        </div>
-                      </td>
-                    </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+        ) : null}
+        loading={loading}
+        loadingText={<InlineSpinner label="Loading subscriptions..." />}
+        emptyMessage={companySearch.trim() || planSelections.length || statusSelections.length || gatewaySelections.length || amountMin || amountMax || createdFrom || createdTo || dueOnly
+          ? 'No payments match your filters'
+          : 'No payments found'}
+        minWidth="1100px"
+        footer={(
           <Pager
             page={paymentsPage}
             pageSize={paymentsPageSize}
@@ -909,7 +704,134 @@ export const Subscriptions: React.FC<{
             refreshing={paymentsRefreshing}
             what="payments"
           />
-      </div>
+        )}
+        columns={[
+          {
+            key: 'displayCompanyName',
+            header: 'Company',
+            sortable: true,
+            render: (payment) => (
+              <>
+                <div className="max-w-[160px] truncate font-semibold" title={payment.displayCompanyName}>{payment.displayCompanyName}</div>
+                <div className="max-w-[160px] truncate font-mono text-xs font-semibold text-sky-700" title={payment.invoiceNumber || payment.paymentIntentId}>
+                  {payment.invoiceNumber ? payment.invoiceNumber : payment.paymentIntentId}
+                </div>
+              </>
+            ),
+          },
+          {
+            key: 'email',
+            header: 'Email',
+            sortable: true,
+            render: (payment) => <div className="max-w-[170px] truncate" title={payment.email}>{payment.email}</div>,
+          },
+          {
+            key: 'planName',
+            header: 'Plan',
+            sortable: true,
+            filterCell: <ColumnFilter label="Plan" options={planOptions} selectedValues={planSelections} onChange={setPlanSelections} />,
+            render: (payment) => (
+              <>
+                <div className="font-semibold">{payment.planName || payment.planId || '-'}</div>
+                {payment.employeeCountSnapshot !== null && payment.employeeCountSnapshot !== undefined ? (
+                  <div className="text-xs text-slate-500">{payment.employeeCountSnapshot} employees</div>
+                ) : null}
+              </>
+            ),
+          },
+          {
+            key: 'package',
+            header: 'Package',
+            noExport: true,
+            render: (payment) => (payment.companyId ? (
+              <PackageCell info={packages.get(Number(payment.companyId))} companyId={Number(payment.companyId)} failed={packageFailedIds.has(Number(payment.companyId))} />
+            ) : (
+              <span className="text-xs text-slate-400">-</span>
+            )),
+          },
+          {
+            key: 'amount',
+            header: 'Amount',
+            sortable: true,
+            filterCell: (
+              <div className="flex gap-1">
+                <input type="number" min={0} step="0.01" value={amountMin} onChange={(event) => setAmountMin(event.target.value)} placeholder="Min" aria-label="Minimum amount" className={filterInputClass} />
+                <input type="number" min={0} step="0.01" value={amountMax} onChange={(event) => setAmountMax(event.target.value)} placeholder="Max" aria-label="Maximum amount" className={filterInputClass} />
+              </div>
+            ),
+            render: (payment) => (
+              <>
+                <div className="font-semibold">{formatPrice(payment.finalAmountCents ?? payment.amount, payment.currency)}</div>
+                {payment.originalAmountCents !== null && payment.originalAmountCents !== undefined && payment.originalAmountCents !== (payment.finalAmountCents ?? payment.amount) ? (
+                  <div className="text-xs text-slate-500">Original {formatPrice(payment.originalAmountCents, payment.currency)}</div>
+                ) : null}
+              </>
+            ),
+          },
+          {
+            key: 'dueDate',
+            header: 'Due Date',
+            sortable: true,
+            filterCell: (
+              <label className="inline-flex items-center gap-2 text-xs font-semibold text-slate-600">
+                <input type="checkbox" className="h-4 w-4 cursor-pointer rounded accent-sky-500" checked={dueOnly} onChange={(event) => setDueOnly(event.target.checked)} />
+                Due only
+              </label>
+            ),
+            render: (payment) => (
+              <>
+                <div>{formatDate(payment.dueDate || null)}</div>
+                <div className="text-xs text-slate-400">Recurring {formatDate(payment.recurringDate || null)}</div>
+              </>
+            ),
+          },
+          { key: 'trialEndsAt', header: 'Trial End', sortable: true, render: (payment) => formatDate(payment.trialEndsAt || null) },
+          {
+            key: 'status',
+            header: 'Status',
+            sortable: true,
+            filterCell: <ColumnFilter label="Status" options={statusOptions} selectedValues={statusSelections} onChange={setStatusSelections} />,
+            render: (payment) => <StatusBadge value={payment.status} />,
+          },
+          {
+            key: 'gateway',
+            header: 'Gateway',
+            filterCell: <ColumnFilter label="Gateway" options={gatewayOptions} selectedValues={gatewaySelections} onChange={setGatewaySelections} />,
+            render: (payment) => (
+              <>
+                <div>{getGatewayLabel(payment)}</div>
+                <div className="text-xs text-slate-500">{payment.paymentGatewayStatus || '-'}</div>
+              </>
+            ),
+          },
+          {
+            key: 'createdAt',
+            header: 'Created',
+            sortable: true,
+            filterCell: (
+              <div className="flex flex-col gap-1">
+                <input type="date" value={createdFrom} onChange={(event) => setCreatedFrom(event.target.value)} aria-label="Created from" className={filterInputClass} />
+                <input type="date" value={createdTo} onChange={(event) => setCreatedTo(event.target.value)} aria-label="Created to" className={filterInputClass} />
+              </div>
+            ),
+            render: (payment) => formatDate(payment.createdAt),
+          },
+        ]}
+        rowActions={(payment) => (
+          <>
+            <RowActionButton title="View subscription" icon={<Eye />} onClick={() => setViewingPayment(payment)} />
+            <RowActionButton title="Edit subscription" icon={<Edit2 />} onClick={() => openEditPayment(payment)} />
+            {payment.companyId ? (
+              <RowActionButton
+                title="Change package"
+                icon={<Layers />}
+                testId={`change-package-${payment.paymentIntentId}`}
+                onClick={() => setChangingPackageFor({ id: Number(payment.companyId), name: payment.displayCompanyName })}
+              />
+            ) : null}
+          </>
+        )}
+      />
 
       {changingPackageFor ? (
         <ChangePackageDialog
@@ -932,7 +854,7 @@ export const Subscriptions: React.FC<{
             role="dialog"
             aria-modal="true"
             aria-labelledby="subscription-payment-detail-title"
-            className="max-h-[92vh] w-full max-w-5xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl flex flex-col"
+            className="max-h-[92vh] w-full max-w-5xl overflow-hidden rounded-xl bg-white shadow-2xl shadow-2xl flex flex-col"
           >
             <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-5 py-4 sm:px-6 sm:py-5">
               <div className="min-w-0">
@@ -1095,11 +1017,11 @@ export const Subscriptions: React.FC<{
       ) : null}
 
       {editingPayment ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
           <div className="max-h-[90vh] w-full max-w-4xl overflow-y-auto rounded-xl bg-white p-6 shadow-xl">
             <div className="mb-5 flex items-center justify-between gap-3">
               <div>
-                <h3 className="text-lg font-bold text-slate-800">Edit Subscription Payment</h3>
+                <h3 className="m-0 text-[22px] font-bold tracking-[-0.3px] text-slate-800">Edit Subscription Payment</h3>
                 <p className="text-sm text-slate-500">{editingPayment.displayCompanyName} / {editingPayment.paymentIntentId}</p>
               </div>
               <button
@@ -1119,7 +1041,7 @@ export const Subscriptions: React.FC<{
                   <select
                     value={editStatus}
                     onChange={(event) => setEditStatus(event.target.value)}
-                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-100"
+                    className="mt-1 w-full min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                   >
                     {paymentStatusOptions
                       // A card payment is refunded through Stripe (Refund), never marked by hand.
@@ -1133,7 +1055,7 @@ export const Subscriptions: React.FC<{
                   type="button"
                   onClick={submitStatusChange}
                   disabled={savingAction !== null}
-                  className="disabled:opacity-50 rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-700"
+                  className="inline-flex h-[42px] items-center justify-center gap-2 rounded-[10px] bg-gradient-to-r from-sky-500 to-cyan-400 px-9 text-sm font-bold text-white shadow-[0_2px_8px_rgba(14,165,233,0.25)] transition hover:from-sky-600 hover:to-cyan-500 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Save status
                 </button>
@@ -1147,7 +1069,7 @@ export const Subscriptions: React.FC<{
                     type="datetime-local"
                     value={editDueDate}
                     onChange={(event) => setEditDueDate(event.target.value)}
-                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-100"
+                    className="mt-1 w-full min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                   />
                 </label>
                 <label className="mb-3 block text-sm font-medium text-slate-700">
@@ -1156,7 +1078,7 @@ export const Subscriptions: React.FC<{
                     value={editDueReason}
                     onChange={(event) => setEditDueReason(event.target.value)}
                     rows={3}
-                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-100"
+                    className="mt-1 w-full min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                     placeholder="Reason for due date change"
                   />
                 </label>
@@ -1164,7 +1086,7 @@ export const Subscriptions: React.FC<{
                   type="button"
                   onClick={submitDueDateChange}
                   disabled={savingAction !== null}
-                  className="disabled:opacity-50 rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-700"
+                  className="inline-flex h-[42px] items-center justify-center gap-2 rounded-[10px] bg-gradient-to-r from-sky-500 to-cyan-400 px-9 text-sm font-bold text-white shadow-[0_2px_8px_rgba(14,165,233,0.25)] transition hover:from-sky-600 hover:to-cyan-500 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Save due date
                 </button>
@@ -1177,7 +1099,7 @@ export const Subscriptions: React.FC<{
                   <select
                     value={suspendScope}
                     onChange={(event) => setSuspendScope(event.target.value)}
-                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-100"
+                    className="mt-1 w-full min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                   >
                     <option value="billing_only">billing_only</option>
                     <option value="feature_limited">feature_limited</option>
@@ -1190,7 +1112,7 @@ export const Subscriptions: React.FC<{
                     type="datetime-local"
                     value={suspendUntil}
                     onChange={(event) => setSuspendUntil(event.target.value)}
-                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-100"
+                    className="mt-1 w-full min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                   />
                 </label>
                 <label className="mb-3 block text-sm font-medium text-slate-700">
@@ -1199,7 +1121,7 @@ export const Subscriptions: React.FC<{
                     value={suspendReason}
                     onChange={(event) => setSuspendReason(event.target.value)}
                     rows={3}
-                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-100"
+                    className="mt-1 w-full min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                     placeholder="Reason for suspension"
                   />
                 </label>
@@ -1221,7 +1143,7 @@ export const Subscriptions: React.FC<{
                     value={resumeReason}
                     onChange={(event) => setResumeReason(event.target.value)}
                     rows={3}
-                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-100"
+                    className="mt-1 w-full min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                     placeholder="Reason for resuming company"
                   />
                 </label>
@@ -1253,7 +1175,7 @@ export const Subscriptions: React.FC<{
                     <input
                       value={manualSource}
                       onChange={(event) => setManualSource(event.target.value)}
-                      className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-100"
+                      className="mt-1 w-full min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                       placeholder="manual"
                     />
                   </label>
@@ -1262,7 +1184,7 @@ export const Subscriptions: React.FC<{
                     <select
                       value={manualPaymentMethod}
                       onChange={(event) => setManualPaymentMethod(event.target.value)}
-                      className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-100"
+                      className="mt-1 w-full min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                     >
                       {manualPaymentMethodOptions.map((method) => (
                         <option key={method.value} value={method.value}>
@@ -1276,7 +1198,7 @@ export const Subscriptions: React.FC<{
                     <input
                       value={manualReceiver}
                       onChange={(event) => setManualReceiver(event.target.value)}
-                      className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-100"
+                      className="mt-1 w-full min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                       placeholder="PayPal account, check number, register"
                     />
                   </label>
@@ -1285,7 +1207,7 @@ export const Subscriptions: React.FC<{
                     <input
                       value={manualSender}
                       onChange={(event) => setManualSender(event.target.value)}
-                      className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-100"
+                      className="mt-1 w-full min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                       placeholder="Customer account, check issuer, payer"
                     />
                   </label>
@@ -1295,7 +1217,7 @@ export const Subscriptions: React.FC<{
                       value={manualReason}
                       onChange={(event) => setManualReason(event.target.value)}
                       rows={2}
-                      className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-100"
+                      className="mt-1 w-full min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                       placeholder="Reason for recording this payment"
                     />
                   </label>
@@ -1305,7 +1227,7 @@ export const Subscriptions: React.FC<{
                       value={manualNote}
                       onChange={(event) => setManualNote(event.target.value)}
                       rows={2}
-                      className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-100"
+                      className="mt-1 w-full min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                       placeholder="Optional admin note"
                     />
                   </label>
@@ -1328,7 +1250,7 @@ export const Subscriptions: React.FC<{
               <button
                 type="button"
                 onClick={closeEditPayment}
-                className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                className="h-[42px] rounded-[10px] border-[1.5px] border-slate-300 bg-white px-8 text-sm font-semibold text-slate-600 transition hover:border-slate-400 hover:bg-slate-50 hover:text-slate-800 disabled:cursor-not-allowed disabled:opacity-55"
               >
                 Close
               </button>

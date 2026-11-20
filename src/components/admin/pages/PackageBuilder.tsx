@@ -19,6 +19,7 @@ import {
   WHOLE_UNIT_CURRENCIES,
 } from '../../../lib/admin-utils';
 import { isAbortError, startSessionLoop } from '../../../lib/useAllPagesQuery';
+import { dataTableClass } from '../ui/FormKit';
 
 /**
  * Packages (dynamic packages): the admin sets the package price; modules carry
@@ -526,10 +527,10 @@ export const YearlyPricingFields: React.FC<{
   };
 
   return (
-    <div className="space-y-3 rounded-lg border border-emerald-200 bg-emerald-50/40 p-3 md:col-span-2" data-testid="yearly-pricing">
+    <div className="space-y-3 rounded-lg border-[1.5px] border-slate-200 bg-white p-3 md:col-span-2" data-testid="yearly-pricing">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="text-sm font-semibold text-slate-800">Yearly price (discount for paying yearly)</span>
-        <div className="flex rounded-lg border border-slate-300 bg-white p-0.5 text-xs font-semibold" role="radiogroup">
+        <span className="text-[11.5px] font-semibold uppercase tracking-[0.02em] text-slate-500">Yearly price (discount for paying yearly)</span>
+        <div className="flex rounded-lg border border-slate-200 bg-slate-50 p-0.5 text-xs font-semibold" role="radiogroup">
           {(['fixed', 'percent'] as const).map((option) => (
             <button
               key={option}
@@ -537,7 +538,7 @@ export const YearlyPricingFields: React.FC<{
               role="radio"
               aria-checked={mode === option}
               onClick={() => switchMode(option)}
-              className={`rounded-md px-2.5 py-1 ${mode === option ? 'bg-sky-600 text-white' : 'text-slate-600'}`}
+              className={`rounded-md px-2.5 py-1 transition ${mode === option ? 'bg-sky-500 text-white shadow-sm' : 'text-slate-600 hover:text-slate-800'}`}
               data-testid={`yearly-mode-${option}`}
             >
               {option === 'fixed' ? 'Fixed yearly price' : '% off 12 months'}
@@ -547,7 +548,7 @@ export const YearlyPricingFields: React.FC<{
       </div>
       {mode === 'fixed' ? (
         <label className="block">
-          <span className="mb-1 block text-sm font-medium text-slate-700">Yearly price ({currency} / year)</span>
+          <span className="mb-1 block text-[11.5px] font-semibold uppercase tracking-[0.02em] text-slate-500">Yearly price ({currency} / year)</span>
           <input
             type="number"
             min="0"
@@ -555,13 +556,13 @@ export const YearlyPricingFields: React.FC<{
             value={value.yearlyPriceOverride}
             placeholder={`e.g. ${amountFromCents(Math.round(fullYear * 0.8), currency)}`}
             onChange={(event) => onChange({ ...value, yearlyPriceOverride: event.target.value })}
-            className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2"
+            className="h-9 w-full rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 text-[13px] text-slate-800 outline-none transition focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)]"
             data-testid="yearly-price"
           />
         </label>
       ) : (
         <label className="block">
-          <span className="mb-1 block text-sm font-medium text-slate-700">Discount off 12 monthly payments (%)</span>
+          <span className="mb-1 block text-[11.5px] font-semibold uppercase tracking-[0.02em] text-slate-500">Discount off 12 monthly payments (%)</span>
           <input
             type="number"
             min="0"
@@ -569,7 +570,7 @@ export const YearlyPricingFields: React.FC<{
             step="1"
             value={value.yearlyDiscountPct}
             onChange={(event) => onChange({ ...value, yearlyDiscountPct: Number(event.target.value) || 0 })}
-            className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2"
+            className="h-9 w-full rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 text-[13px] text-slate-800 outline-none transition focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)]"
             data-testid="yearly-discount"
           />
         </label>
@@ -645,11 +646,13 @@ export const PackageBuilder: React.FC<{
   const selectedAreas = summarizeFeatureAreas(value.modules.map((m) => m.moduleId), options);
 
   return (
-    <section className="space-y-4 rounded-xl border border-sky-100 bg-sky-50/40 p-4" data-testid="package-builder">
+    <section className="space-y-4 rounded-xl border border-slate-200 bg-slate-50 px-4 pb-5 pt-4 sm:px-6 sm:pb-6 sm:pt-5" data-testid="package-builder">
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
-          <Layers className="h-4 w-4 text-sky-600" />
-          <h4 className="text-sm font-bold uppercase tracking-wide text-sky-700">Modules in this package</h4>
+          <span className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-lg bg-sky-100 text-sky-600">
+            <Layers className="h-4 w-4" />
+          </span>
+          <h4 className="m-0 text-[13px] font-bold uppercase tracking-[0.5px] text-slate-800">Modules in this package</h4>
         </div>
         <label className="flex items-center gap-2 text-sm text-slate-700">
           <input
@@ -1044,11 +1047,11 @@ export const ChangePackageDialog: React.FC<{
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" data-testid="change-package-dialog">
-      <div className="flex max-h-[90vh] w-full max-w-xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4" data-testid="change-package-dialog">
+      <div className="flex max-h-[90vh] w-full max-w-xl flex-col overflow-hidden rounded-xl bg-white shadow-2xl">
         <div className="flex items-center justify-between border-b border-slate-100 p-5">
-          <h3 className="text-lg font-bold text-slate-800">Change package · {companyName}</h3>
-          <button type="button" onClick={onClose} className="rounded-lg border border-slate-200 p-2 text-slate-700 hover:bg-slate-100" aria-label="Close">
+          <h3 className="m-0 text-[22px] font-bold tracking-[-0.3px] text-slate-800">Change package · {companyName}</h3>
+          <button type="button" onClick={onClose} className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700" aria-label="Close">
             <X className="h-5 w-5" />
           </button>
         </div>
@@ -1085,14 +1088,14 @@ export const ChangePackageDialog: React.FC<{
           </p>
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             <label className="block">
-              <span className="mb-1 block text-sm font-medium text-slate-700">Package</span>
+              <span className="mb-1 block text-[11.5px] font-semibold uppercase tracking-[0.02em] text-slate-500">Package</span>
               <select
                 value={plan ? planId : ''}
                 onChange={(event) => {
                   touched.current = true;
                   setPlanId(event.target.value);
                 }}
-                className="w-full rounded-lg border border-slate-300 px-3 py-2"
+                className="w-full min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                 data-testid="change-package-plan"
               >
                 {!plan ? (
@@ -1109,14 +1112,14 @@ export const ChangePackageDialog: React.FC<{
               </select>
             </label>
             <label className="block">
-              <span className="mb-1 block text-sm font-medium text-slate-700">Billing interval</span>
+              <span className="mb-1 block text-[11.5px] font-semibold uppercase tracking-[0.02em] text-slate-500">Billing interval</span>
               <select
                 value={billingInterval}
                 onChange={(event) => {
                   touched.current = true;
                   setBillingInterval(event.target.value);
                 }}
-                className="w-full rounded-lg border border-slate-300 px-3 py-2"
+                className="w-full min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                 data-testid="change-package-interval"
               >
                 {intervals.map((i) => (
@@ -1173,25 +1176,25 @@ export const ChangePackageDialog: React.FC<{
             </p>
           )}
           <label className="block">
-            <span className="mb-1 block text-sm font-medium text-slate-700">Reason</span>
+            <span className="mb-1 block text-[11.5px] font-semibold uppercase tracking-[0.02em] text-slate-500">Reason</span>
             <input
               value={reason}
               onChange={(event) => setReason(event.target.value)}
-              className="w-full rounded-lg border border-slate-300 px-3 py-2"
+              className="w-full min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
               placeholder="Why is the package changing?"
               data-testid="change-package-reason"
             />
           </label>
         </div>
         <div className="flex justify-end gap-2 border-t border-slate-100 p-4">
-          <button type="button" onClick={onClose} className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700">
+          <button type="button" onClick={onClose} className="h-[42px] rounded-[10px] border-[1.5px] border-slate-300 bg-white px-8 text-sm font-semibold text-slate-600 transition hover:border-slate-400 hover:bg-slate-50 hover:text-slate-800 disabled:cursor-not-allowed disabled:opacity-55">
             Cancel
           </button>
           <button
             type="button"
             onClick={submit}
             disabled={!canSubmit}
-            className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+            className="inline-flex h-[42px] items-center justify-center gap-2 rounded-[10px] bg-gradient-to-r from-sky-500 to-cyan-400 px-9 text-sm font-bold text-white shadow-[0_2px_8px_rgba(14,165,233,0.25)] transition hover:from-sky-600 hover:to-cyan-500 disabled:cursor-not-allowed disabled:opacity-50"
             data-testid="change-package-submit"
           >
             {loading || submitting ? 'Saving…' : 'Change package'}
@@ -1352,11 +1355,11 @@ export const ApplyToSubscribersDialog: React.FC<{
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" data-testid="apply-subscribers-dialog">
-      <div className="flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4" data-testid="apply-subscribers-dialog">
+      <div className="flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl bg-white shadow-2xl">
         <div className="flex items-center justify-between border-b border-slate-100 p-5">
-          <h3 className="text-lg font-bold text-slate-800">Apply {planName} to existing subscribers</h3>
-          <button type="button" onClick={onClose} className="rounded-lg border border-slate-200 p-2 text-slate-700 hover:bg-slate-100" aria-label="Close">
+          <h3 className="m-0 text-[22px] font-bold tracking-[-0.3px] text-slate-800">Apply {planName} to existing subscribers</h3>
+          <button type="button" onClick={onClose} className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700" aria-label="Close">
             <X className="h-5 w-5" />
           </button>
         </div>
@@ -1381,7 +1384,7 @@ export const ApplyToSubscribersDialog: React.FC<{
           {preview === null ? <p className="text-sm text-slate-500">Loading preview…</p> : null}
           {preview && preview.length === 0 ? <p className="text-sm text-slate-500">Every subscriber already has the current version.</p> : null}
           {preview && preview.length > 0 ? (
-            <table className="w-full text-sm" data-testid="apply-subscribers-preview">
+            <table className={`w-full text-sm ${dataTableClass}`} data-testid="apply-subscribers-preview">
               <thead className="border-b border-slate-200 text-left text-xs uppercase text-slate-500">
                 <tr>
                   <th className="py-2 pr-3">Company</th>
@@ -1407,18 +1410,18 @@ export const ApplyToSubscribersDialog: React.FC<{
           ) : null}
           {preview && preview.length > 0 ? (
             <label className="block">
-              <span className="mb-1 block text-sm font-medium text-slate-700">Reason</span>
+              <span className="mb-1 block text-[11.5px] font-semibold uppercase tracking-[0.02em] text-slate-500">Reason</span>
               <input
                 value={reason}
                 onChange={(event) => setReason(event.target.value)}
-                className="w-full rounded-lg border border-slate-300 px-3 py-2"
+                className="w-full min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                 data-testid="apply-subscribers-reason"
               />
             </label>
           ) : null}
         </div>
         <div className="flex justify-end gap-2 border-t border-slate-100 p-4">
-          <button type="button" onClick={onClose} className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700">
+          <button type="button" onClick={onClose} className="h-[42px] rounded-[10px] border-[1.5px] border-slate-300 bg-white px-8 text-sm font-semibold text-slate-600 transition hover:border-slate-400 hover:bg-slate-50 hover:text-slate-800 disabled:cursor-not-allowed disabled:opacity-55">
             {preview && preview.length ? 'Not now' : 'Close'}
           </button>
           {preview && preview.length > 0 ? (
@@ -1426,7 +1429,7 @@ export const ApplyToSubscribersDialog: React.FC<{
               type="button"
               onClick={apply}
               disabled={loading || applying}
-              className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+              className="inline-flex h-[42px] items-center justify-center gap-2 rounded-[10px] bg-gradient-to-r from-sky-500 to-cyan-400 px-9 text-sm font-bold text-white shadow-[0_2px_8px_rgba(14,165,233,0.25)] transition hover:from-sky-600 hover:to-cyan-500 disabled:cursor-not-allowed disabled:opacity-50"
               data-testid="apply-subscribers-submit"
             >
               {applying ? 'Applying…' : `Apply to ${preview.length} company(s)`}

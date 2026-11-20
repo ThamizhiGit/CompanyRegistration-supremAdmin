@@ -48,13 +48,14 @@ test.describe('commerce / plans', () => {
     await expect(component.getByText('No promo codes found')).toBeVisible();
   });
 
-  test('uses the canonical fallback when the plans query errors', async ({ mount }) => {
+  test('says the plans could not be loaded (no built-in stand-ins) when the plans query errors', async ({ mount }) => {
     const component = await mount(
       <PlansHarness scenario="error" />,
     );
 
-    await expect(component.getByText(/Showing canonical fallback plans/)).toBeVisible();
-    await expect(component.getByText('Premium', { exact: true })).toBeVisible();
+    await expect(component.getByTestId('plans-load-error')).toBeVisible();
+    await expect(component.getByTestId('plans-load-error').getByRole('button', { name: 'Try again' })).toBeVisible();
+    await expect(component.getByText('Premium', { exact: true })).toHaveCount(0);
   });
 
   test('creates a promo code and reports validation failures', async ({ mount }) => {

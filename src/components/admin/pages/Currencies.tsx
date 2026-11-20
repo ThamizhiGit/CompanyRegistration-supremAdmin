@@ -1,12 +1,13 @@
 import React, { useEffect, useState } from 'react';
 import { useMutation, useQuery } from '@apollo/client/react';
-import { Edit2, Plus, RefreshCw, X } from 'lucide-react';
+import { Edit2, RefreshCw, X } from 'lucide-react';
 import {
   ADMIN_CURRENCY_RATES_QUERY,
   ADMIN_REFRESH_CURRENCY_RATES_MUTATION,
   ADMIN_SAVE_CURRENCY_RATE_MUTATION,
 } from '../../../lib/graphql';
 import { centsFromAmount, formatDateTime, formatPrice, wholeNumberError } from '../../../lib/admin-utils';
+import { DataTable, RowActionButton } from '../ui/DataTable';
 
 interface CurrencyRateRow {
   code: string;
@@ -262,7 +263,7 @@ export const Currencies: React.FC<{ onToast: (type: 'success' | 'error', msg: st
     <div className="space-y-4" data-testid="currencies-page">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="text-2xl font-bold text-slate-800">Currencies</h2>
+          <h2 className="text-2xl font-semibold text-gray-700">Currencies</h2>
           <p className="text-sm text-slate-500">
             Package prices are set in {info?.baseCurrency || 'USD'}. Customers see and pay them in a currency listed here
             while it is switched on. Last automatic refresh:{' '}
@@ -271,155 +272,164 @@ export const Currencies: React.FC<{ onToast: (type: 'success' | 'error', msg: st
             </span>
           </p>
         </div>
-        <div className="flex gap-2">
+      </div>
+
+      {error ? <p className="text-sm text-rose-600">Could not load currencies: {error.message}</p> : null}
+      <DataTable<CurrencyRateRow>
+        testId="currencies-table"
+        rows={rates}
+        rowKey={(row) => row.code}
+        rowTestId={(row) => `currency-row-${row.code}`}
+        searchPlaceholder="Search currencies"
+        headerExtra={(
+          <label className="flex items-center gap-2 text-[13px] text-slate-500">
+            Preview
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={previewUsd}
+              onChange={(event) => setPreviewUsd(event.target.value)}
+              className="h-9 w-24 rounded-lg border border-slate-200 bg-white px-2.5 text-[13px] text-slate-700 outline-none transition-all focus:border-sky-400 focus:ring-2 focus:ring-sky-100"
+              data-testid="currencies-preview-input"
+              aria-label="Preview price in USD"
+            />
+            USD
+          </label>
+        )}
+        headerActions={(
           <button
             type="button"
             onClick={handleRefresh}
             disabled={refreshing}
-            className="inline-flex h-9 items-center gap-2 rounded-lg border border-slate-200 px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+            className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-slate-200/60 bg-slate-50 px-3 text-[13px] font-medium text-slate-500 transition-all hover:bg-slate-100 hover:text-slate-700 disabled:opacity-50"
             data-testid="currencies-refresh"
           >
-            <RefreshCw className="h-4 w-4" /> {refreshing ? 'Refreshing…' : 'Refresh rates now'}
+            <RefreshCw className="h-[15px] w-[15px]" /> {refreshing ? 'Refreshing…' : 'Refresh rates now'}
           </button>
-          <button
-            type="button"
-            onClick={() =>
-              setEditing({
-                isNew: true, code: '', name: '', symbol: '', ratePerUsd: '', originalRate: '', roundTo: '0', active: false,
-                isManual: true, originalActive: false, source: 'manual',
-              })
-            }
-            className="inline-flex h-9 items-center gap-2 rounded-lg bg-sky-600 px-3 text-sm font-semibold text-white hover:bg-sky-700"
-            data-testid="currencies-add"
-          >
-            <Plus className="h-4 w-4" /> Add currency
-          </button>
-        </div>
-      </div>
-
-      <label className="flex items-center gap-2 text-sm text-slate-700">
-        Preview a price of
-        <input
-          type="number"
-          min="0"
-          step="0.01"
-          value={previewUsd}
-          onChange={(event) => setPreviewUsd(event.target.value)}
-          className="w-28 rounded-lg border border-slate-300 px-2 py-1"
-          data-testid="currencies-preview-input"
-        />
-        USD (rounded exactly as at checkout)
-      </label>
-
-      {error ? <p className="text-sm text-rose-600">Could not load currencies: {error.message}</p> : null}
-      <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
-        <table className="w-full min-w-[900px] text-sm" data-testid="currencies-table">
-          <thead className="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase text-slate-500">
-            <tr>
-              <th className="px-3 py-3">Currency</th>
-              <th className="px-3 py-3">Rate (per 1 USD)</th>
-              <th className="px-3 py-3">Round up to</th>
-              <th className="px-3 py-3">Preview</th>
-              <th className="px-3 py-3">Rate source</th>
-              <th className="px-3 py-3">Offered</th>
-              <th className="px-3 py-3 text-right">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading && !rates.length ? (
-              <tr>
-                <td colSpan={7} className="px-3 py-8 text-center text-slate-500">Loading…</td>
-              </tr>
-            ) : null}
-            {rates.map((row) => (
-              <tr key={row.code} className="border-b border-slate-100" data-testid={`currency-row-${row.code}`}>
-                <td className="px-3 py-2">
-                  <div className="font-semibold text-slate-800">
-                    {row.code} <span className="font-normal text-slate-500">{row.symbol}</span>
-                  </div>
-                  <div className="text-xs text-slate-500">{row.name}</div>
-                </td>
-                <td className="px-3 py-2 font-mono">{row.ratePerUsd}</td>
-                <td className="px-3 py-2">{row.roundTo ? `${row.roundTo} ${row.code}` : '-'}</td>
-                <td className="px-3 py-2 font-semibold" data-testid={`currency-preview-${row.code}`}>
-                  {row.previewCents !== null && row.previewCents !== undefined ? formatPrice(row.previewCents, row.code) : '-'}
-                </td>
-                <td className="px-3 py-2 text-xs text-slate-600">
-                  {SOURCE_LABELS[row.source] || row.source || '-'}
-                  {row.isManual && row.code !== 'USD' ? (
-                    <span className="ml-1 rounded bg-amber-50 px-1.5 text-amber-700">pinned</span>
-                  ) : null}
-                  {row.updatedAt ? <div className="text-slate-400">{formatDateTime(row.updatedAt)}</div> : null}
-                </td>
-                <td className="px-3 py-2">
-                  <button
-                    type="button"
-                    disabled={row.code === 'USD' || saving}
-                    onClick={() => toggleActive(row)}
-                    className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                      row.active ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'
-                    } disabled:cursor-not-allowed`}
-                    data-testid={`currency-toggle-${row.code}`}
-                  >
-                    {row.active ? 'On' : 'Off'}
-                  </button>
-                </td>
-                <td className="px-3 py-2 text-right">
-                  <button
-                    type="button"
-                    onClick={() => openEdit(row)}
-                    className="rounded-lg p-2 text-sky-700 hover:bg-sky-50"
-                    title={`Edit ${row.code}`}
-                    data-testid={`currency-edit-${row.code}`}
-                  >
-                    <Edit2 className="h-4 w-4" />
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+        )}
+        createLabel="Add currency"
+        createTestId="currencies-add"
+        onCreate={() =>
+          setEditing({
+            isNew: true, code: '', name: '', symbol: '', ratePerUsd: '', originalRate: '', roundTo: '0', active: false,
+            isManual: true, originalActive: false, source: 'manual',
+          })
+        }
+        exportName="Currencies"
+        loading={loading}
+        loadingText="Loading…"
+        emptyMessage="No currencies"
+        minWidth="900px"
+        pageSize={0}
+        columns={[
+          {
+            key: 'code',
+            header: 'Currency',
+            value: (row) => `${row.code} ${row.name}`,
+            sortable: true,
+            render: (row) => (
+              <>
+                <div className="font-semibold">
+                  {row.code} <span className="font-normal text-slate-500">{row.symbol}</span>
+                </div>
+                <div className="text-xs text-slate-500">{row.name}</div>
+              </>
+            ),
+          },
+          { key: 'ratePerUsd', header: 'Rate (per 1 USD)', value: (row) => Number(row.ratePerUsd), sortable: true, render: (row) => <span className="font-mono">{row.ratePerUsd}</span> },
+          { key: 'roundTo', header: 'Round up to', value: (row) => row.roundTo || 0, render: (row) => (row.roundTo ? `${row.roundTo} ${row.code}` : '-') },
+          {
+            key: 'preview',
+            header: 'Preview',
+            value: (row) => (row.previewCents !== null && row.previewCents !== undefined ? formatPrice(row.previewCents, row.code) : '-'),
+            render: (row) => (
+              <span className="font-semibold" data-testid={`currency-preview-${row.code}`}>
+                {row.previewCents !== null && row.previewCents !== undefined ? formatPrice(row.previewCents, row.code) : '-'}
+              </span>
+            ),
+          },
+          {
+            key: 'source',
+            header: 'Rate source',
+            value: (row) => SOURCE_LABELS[row.source] || row.source || '-',
+            filterable: true,
+            render: (row) => (
+              <div className="text-xs text-slate-600">
+                {SOURCE_LABELS[row.source] || row.source || '-'}
+                {row.isManual && row.code !== 'USD' ? (
+                  <span className="ml-1 rounded bg-amber-50 px-1.5 text-amber-700">pinned</span>
+                ) : null}
+                {row.updatedAt ? <div className="text-slate-400">{formatDateTime(row.updatedAt)}</div> : null}
+              </div>
+            ),
+          },
+          {
+            key: 'active',
+            header: 'Offered',
+            value: (row) => (row.active ? 'On' : 'Off'),
+            filterable: true,
+            render: (row) => (
+              <button
+                type="button"
+                disabled={row.code === 'USD' || saving}
+                onClick={() => toggleActive(row)}
+                title={row.active ? `Stop offering ${row.code}` : `Offer ${row.code}`}
+                className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:opacity-60 ${
+                  row.active ? 'bg-sky-500' : 'bg-slate-200'
+                }`}
+                data-testid={`currency-toggle-${row.code}`}
+              >
+                <span className={`inline-block h-3.5 w-3.5 rounded-full bg-white transition-all duration-200 ${row.active ? 'translate-x-4' : 'translate-x-1'}`} />
+                <span className="sr-only">{row.active ? 'On' : 'Off'}</span>
+              </button>
+            ),
+          },
+        ]}
+        rowActions={(row) => (
+          <RowActionButton title={`Edit ${row.code}`} icon={<Edit2 />} testId={`currency-edit-${row.code}`} onClick={() => openEdit(row)} />
+        )}
+      />
 
       {editing ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" data-testid="currency-dialog">
-          <div className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4" data-testid="currency-dialog">
+          <div className="w-full max-w-lg rounded-xl bg-white shadow-2xl">
             <div className="flex items-center justify-between border-b border-slate-100 p-5">
-              <h3 className="text-lg font-bold text-slate-800">{editing.isNew ? 'Add currency' : `Edit ${editing.code}`}</h3>
-              <button type="button" onClick={() => setEditing(null)} className="rounded-lg border border-slate-200 p-2 text-slate-700 hover:bg-slate-100" aria-label="Close">
+              <h3 className="m-0 text-[22px] font-bold tracking-[-0.3px] text-slate-800">{editing.isNew ? 'Add currency' : `Edit ${editing.code}`}</h3>
+              <button type="button" onClick={() => setEditing(null)} className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700" aria-label="Close">
                 <X className="h-5 w-5" />
               </button>
             </div>
             <div className="grid grid-cols-1 gap-4 p-5 md:grid-cols-2">
               <label className="block">
-                <span className="mb-1 block text-sm font-medium text-slate-700">Code</span>
+                <span className="mb-1 block text-[11.5px] font-semibold uppercase tracking-[0.02em] text-slate-500">Code</span>
                 <input
                   value={editing.code}
                   disabled={!editing.isNew}
                   maxLength={3}
                   onChange={(event) => setEditing({ ...editing, code: event.target.value.toUpperCase() })}
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2 disabled:bg-slate-100"
+                  className="w-full min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                   data-testid="currency-code"
                 />
               </label>
               <label className="block">
-                <span className="mb-1 block text-sm font-medium text-slate-700">Symbol</span>
+                <span className="mb-1 block text-[11.5px] font-semibold uppercase tracking-[0.02em] text-slate-500">Symbol</span>
                 <input
                   value={editing.symbol}
                   onChange={(event) => setEditing({ ...editing, symbol: event.target.value })}
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2"
+                  className="w-full min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                 />
               </label>
               <label className="block md:col-span-2">
-                <span className="mb-1 block text-sm font-medium text-slate-700">Name</span>
+                <span className="mb-1 block text-[11.5px] font-semibold uppercase tracking-[0.02em] text-slate-500">Name</span>
                 <input
                   value={editing.name}
                   onChange={(event) => setEditing({ ...editing, name: event.target.value })}
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2"
+                  className="w-full min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                 />
               </label>
               <label className="block">
-                <span className="mb-1 block text-sm font-medium text-slate-700">Rate (units per 1 USD)</span>
+                <span className="mb-1 block text-[11.5px] font-semibold uppercase tracking-[0.02em] text-slate-500">Rate (units per 1 USD)</span>
                 <input
                   value={editing.ratePerUsd}
                   disabled={editing.code === 'USD'}
@@ -428,19 +438,19 @@ export const Currencies: React.FC<{ onToast: (type: 'success' | 'error', msg: st
                     // A typed rate is pinned so the daily refresh keeps it.
                     setEditing({ ...editing, ratePerUsd: event.target.value, isManual: true })
                   }
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2 disabled:bg-slate-100"
+                  className="w-full min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                   data-testid="currency-rate"
                 />
               </label>
               <label className="block">
-                <span className="mb-1 block text-sm font-medium text-slate-700">Round prices up to (whole units)</span>
+                <span className="mb-1 block text-[11.5px] font-semibold uppercase tracking-[0.02em] text-slate-500">Round prices up to (whole units)</span>
                 <input
                   type="number"
                   min="0"
                   step="1"
                   value={editing.roundTo}
                   onChange={(event) => setEditing({ ...editing, roundTo: event.target.value })}
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2"
+                  className="w-full min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                   data-testid="currency-round-to"
                 />
               </label>
@@ -466,14 +476,14 @@ export const Currencies: React.FC<{ onToast: (type: 'success' | 'error', msg: st
               </label>
             </div>
             <div className="flex justify-end gap-2 border-t border-slate-100 p-4">
-              <button type="button" onClick={() => setEditing(null)} className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700">
+              <button type="button" onClick={() => setEditing(null)} className="h-[42px] rounded-[10px] border-[1.5px] border-slate-300 bg-white px-8 text-sm font-semibold text-slate-600 transition hover:border-slate-400 hover:bg-slate-50 hover:text-slate-800 disabled:cursor-not-allowed disabled:opacity-55">
                 Cancel
               </button>
               <button
                 type="button"
                 onClick={handleSave}
                 disabled={saving}
-                className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                className="inline-flex h-[42px] items-center justify-center gap-2 rounded-[10px] bg-gradient-to-r from-sky-500 to-cyan-400 px-9 text-sm font-bold text-white shadow-[0_2px_8px_rgba(14,165,233,0.25)] transition hover:from-sky-600 hover:to-cyan-500 disabled:cursor-not-allowed disabled:opacity-50"
                 data-testid="currency-save"
               >
                 {saving ? 'Saving…' : 'Save'}
