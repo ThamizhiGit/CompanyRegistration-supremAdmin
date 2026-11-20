@@ -157,7 +157,7 @@ const AccountsReportTable: React.FC<{ period: 'monthly' | 'annual' }> = ({ perio
     const tableRows = rows.map((row) => (
       `<tr><td>${escapeHtml(row.Period)}</td><td>${row.Income.toFixed(2)}</td><td>${row.Expense.toFixed(2)}</td><td>${row.Net.toFixed(2)}</td></tr>`
     )).join('');
-    const printWindow = window.open('', '_blank', 'noopener,noreferrer,width=1024,height=768');
+    const printWindow = window.open('', '_blank', 'width=1024,height=768');
     if (!printWindow) return;
     printWindow.document.write(`
       <!doctype html>
