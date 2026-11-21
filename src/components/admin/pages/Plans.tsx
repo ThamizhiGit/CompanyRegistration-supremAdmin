@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery } from '@apollo/client/react';
 import { CalendarDays, Check, CreditCard, Download, Edit2, FileText, Filter, Gauge, ListChecks, Plus, Printer, RotateCcw, Save, Search, Trash2 } from 'lucide-react';
-import { FormActions, FormDialog, FormField, FormSection, checkboxClass, formControlClass } from '../ui/FormKit';
+import { FormActions, FormDialog, FormField, FormSection, checkboxClass, formControlClass, useConfirmDialog } from '../ui/FormKit';
 import { DataTable, RowActionButton } from '../ui/DataTable';
 import {
   ADMIN_DELETE_PLAN_MUTATION,
@@ -380,12 +380,15 @@ const downloadTextFile = (filename: string, content: string, type: string) => {
 };
 
 export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string) => void }> = ({ onToast }) => {
+  // In-app confirm / reason questions (not the browser's "localhost says").
+  const { confirm, askReason, dialog } = useConfirmDialog();
   const [activeTab, setActiveTab] = useState<PlanAdminTab>('plans');
   const [search, setSearch] = useState('');
   const [activeFilter, setActiveFilter] = useState<'all' | 'active' | 'inactive'>('all');
   const [editing, setEditing] = useState<EditingPlan | null>(null);
   const [editingMode, setEditingMode] = useState<'create' | 'edit'>('edit');
-  const [viewMode, setViewMode] = useState<'card' | 'table'>('card');
+  // Table first (as in the portal); Board View is one click away.
+  const [viewMode, setViewMode] = useState<'card' | 'table'>('table');
   const [planFiltersOpen, setPlanFiltersOpen] = useState(true);
   const [promoSearch, setPromoSearch] = useState('');
   const [editingPromo, setEditingPromo] = useState<EditingPromo | null>(null);
@@ -698,8 +701,16 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
 
   const handleDeletePlan = (plan: PlanType) => once(`delete-plan-${plan.id}`, () => deletePlanNow(plan));
   const deletePlanNow = async (plan: PlanType) => {
-    const reason = window.prompt(`Reason for deleting ${plan.name}`, 'Admin deleted unused plan');
-    if (!reason?.trim()) {
+    const reason = await askReason({
+      title: `Delete ${plan.name}?`,
+      message: 'Customers can no longer choose this plan at registration. Companies already on it keep it.',
+      label: 'Reason for deleting',
+      defaultValue: 'Admin deleted unused plan',
+      confirmLabel: 'Delete plan',
+      tone: 'danger',
+    });
+    if (reason === null) return;
+    if (!reason.trim()) {
       onToast('error', 'Reason is required to delete a plan');
       return;
     }
@@ -729,8 +740,16 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
 
   const handleDeactivatePromo = (promo: PromoCodeType) => once(`deactivate-promo-${promo.id}`, () => deactivatePromoNow(promo));
   const deactivatePromoNow = async (promo: PromoCodeType) => {
-    const reason = window.prompt(`Reason for deactivating ${promo.code}`, 'Admin deactivated promo code');
-    if (!reason?.trim()) {
+    const reason = await askReason({
+      title: `Deactivate ${promo.code}?`,
+      message: 'Customers can no longer use this code at checkout.',
+      label: 'Reason for deactivating',
+      defaultValue: 'Admin deactivated promo code',
+      confirmLabel: 'Deactivate',
+      tone: 'danger',
+    });
+    if (reason === null) return;
+    if (!reason.trim()) {
       onToast('error', 'Reason is required to deactivate a promo code');
       return;
     }
@@ -1688,6 +1707,7 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
           </FormSection>
         </FormDialog>
       )}
+      {dialog}
     </div>
   );
 };

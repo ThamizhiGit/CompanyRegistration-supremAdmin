@@ -144,8 +144,10 @@ test.describe('Expenses', () => {
   test('requests the next page with the correct offset', async ({ mount }) => {
     const component = await mount(apollo(<Expenses onToast={() => {}} />, [
       expensesMock([expense()], 15),
+      // Page 2 of 15 holds rows 11-15.
       expensesMock([
         expense({ id: 'expense-11', expenseRef: 'EXP-011', title: 'Page two expense' }),
+        ...[12, 13, 14, 15].map((n) => expense({ id: `expense-${n}`, expenseRef: `EXP-0${n}`, title: `Expense ${n}` })),
       ], 15, 10),
     ]));
 

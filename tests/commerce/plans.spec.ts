@@ -3,6 +3,7 @@ import { test, expect } from '../fixtures/graphql.fixture';
 test('admin navigation and plans popup flows', async ({ adminPage: page }) => {
   await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible();
   await page.getByRole('button', { name: 'Plans' }).click();
+  await page.getByRole('button', { name: 'Board View' }).click(); // the page opens in Table View
   await expect(page.getByRole('heading', { name: 'Plans & Pricing' })).toBeVisible();
 
   await page.getByPlaceholder('Search plans').fill('premium');
@@ -15,6 +16,7 @@ test('admin navigation and plans popup flows', async ({ adminPage: page }) => {
 
 test('plan cards show prices, feature areas and subscriber versions', async ({ adminPage: page }) => {
   await page.getByRole('button', { name: 'Plans' }).click();
+  await page.getByRole('button', { name: 'Board View' }).click(); // the page opens in Table View
   await expect(page.getByRole('heading', { name: 'Free', exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Premium', exact: true })).toBeVisible();
   await expect(page.getByText('Free for 6 months', { exact: true })).toBeVisible();
@@ -29,6 +31,7 @@ test('plan cards show prices, feature areas and subscriber versions', async ({ a
 
 test('plans page saves plan edits with the package modules', async ({ adminPage: page, mockApi }) => {
   await page.getByRole('button', { name: 'Plans' }).click();
+  await page.getByRole('button', { name: 'Board View' }).click(); // the page opens in Table View
   await page.getByRole('button', { name: 'Edit plan' }).nth(1).click();
   await page.getByLabel('Trial months').fill('7');
   await page.getByRole('button', { name: 'Save plan' }).click();
@@ -53,6 +56,7 @@ test('plans page saves plan edits with the package modules', async ({ adminPage:
 
 test('plans page saves yearly billing interval edits', async ({ adminPage: page, mockApi }) => {
   await page.getByRole('button', { name: 'Plans' }).click();
+  await page.getByRole('button', { name: 'Board View' }).click(); // the page opens in Table View
   await page.getByRole('button', { name: 'Edit plan' }).nth(1).click();
   await page.getByTestId('plan-billing-interval').selectOption('yearly');
   await page.getByRole('button', { name: 'Save plan' }).click();
@@ -79,6 +83,7 @@ test('editing a yearly-only package keeps it yearly at the same price', async ({
     recommended: false,
   });
   await page.getByRole('button', { name: 'Plans' }).click();
+  await page.getByRole('button', { name: 'Board View' }).click(); // the page opens in Table View
   await expect(page.getByTestId('plan-price-premium_yearly')).toHaveText('$120.00 / yr');
   await page.getByRole('button', { name: 'Edit plan' }).nth(2).click();
   await expect(page.getByTestId('plan-billing-interval')).toHaveValue('yearly');
@@ -96,10 +101,11 @@ test('editing a yearly-only package keeps it yearly at the same price', async ({
 
 test('plans page creates a new plan with a module tree selection', async ({ adminPage: page, mockApi }) => {
   await page.getByRole('button', { name: 'Plans' }).click();
+  await page.getByRole('button', { name: 'Board View' }).click(); // the page opens in Table View
   await page.getByRole('button', { name: 'New plan' }).click();
 
   await page.getByLabel('Plan ID').fill('starter');
-  await page.getByLabel('Name', { exact: true }).fill('Starter');
+  await page.getByRole('textbox', { name: 'Name', exact: true }).fill('Starter');
   await page.getByTestId('plan-price').fill('5');
   await page.getByLabel('Employee limit').fill('25');
   await page.getByLabel('Description').fill('A starter plan for smaller teams.');
@@ -135,6 +141,7 @@ test('plans page creates a new plan with a module tree selection', async ({ admi
 
 test('the price preview says per employee when the price is per employee', async ({ adminPage: page }) => {
   await page.getByRole('button', { name: 'Plans' }).click();
+  await page.getByRole('button', { name: 'Board View' }).click(); // the page opens in Table View
   await page.getByRole('button', { name: 'New plan' }).click();
   await page.getByTestId('plan-price').fill('5');
   await expect(page.getByTestId('preview-monthly')).toHaveText('$5.00 / month');
@@ -146,9 +153,10 @@ test('the price preview says per employee when the price is per employee', async
 
 test('a new plan without modules is not saved', async ({ adminPage: page, mockApi }) => {
   await page.getByRole('button', { name: 'Plans' }).click();
+  await page.getByRole('button', { name: 'Board View' }).click(); // the page opens in Table View
   await page.getByRole('button', { name: 'New plan' }).click();
   await page.getByLabel('Plan ID').fill('empty');
-  await page.getByLabel('Name', { exact: true }).fill('Empty');
+  await page.getByRole('textbox', { name: 'Name', exact: true }).fill('Empty');
   await page.getByRole('button', { name: 'Create plan' }).click();
   await expect(page.getByText('Select the modules this package unlocks.').first()).toBeVisible();
   expect(mockApi.lastVariables('AdminSavePlan')).toBeUndefined();
@@ -156,6 +164,7 @@ test('a new plan without modules is not saved', async ({ adminPage: page, mockAp
 
 test('apply an edited package to subscribers after a dry run', async ({ adminPage: page, mockApi }) => {
   await page.getByRole('button', { name: 'Plans' }).click();
+  await page.getByRole('button', { name: 'Board View' }).click(); // the page opens in Table View
   await page.getByTestId('apply-subscribers-premium').click();
   const dialog = page.getByTestId('apply-subscribers-dialog');
   const preview = dialog.getByTestId('apply-subscribers-preview');
@@ -186,9 +195,10 @@ test('apply an edited package to subscribers after a dry run', async ({ adminPag
 
 test('switching the plan currency keeps the typed price (10.50 USD -> JPY -> USD)', async ({ adminPage: page, mockApi }) => {
   await page.getByRole('button', { name: 'Plans' }).click();
+  await page.getByRole('button', { name: 'Board View' }).click(); // the page opens in Table View
   await page.getByRole('button', { name: 'New plan' }).click();
   await page.getByLabel('Plan ID').fill('intl');
-  await page.getByLabel('Name', { exact: true }).fill('International');
+  await page.getByRole('textbox', { name: 'Name', exact: true }).fill('International');
   await page.getByTestId('module-checkbox-employee_management').check();
   const price = page.getByTestId('plan-price');
   const currency = page.getByTestId('plan-currency');
@@ -215,9 +225,10 @@ test('switching the plan currency keeps the typed price (10.50 USD -> JPY -> USD
 test('ISK prices are typed in whole units and sent as two-decimal minor units', async ({ adminPage: page, mockApi }) => {
   mockApi.currencies.push({ ...mockApi.currencies[1], code: 'ISK', name: 'Icelandic Krona', symbol: 'kr', decimals: 2 });
   await page.getByRole('button', { name: 'Plans' }).click();
+  await page.getByRole('button', { name: 'Board View' }).click(); // the page opens in Table View
   await page.getByRole('button', { name: 'New plan' }).click();
   await page.getByLabel('Plan ID').fill('iceland');
-  await page.getByLabel('Name', { exact: true }).fill('Iceland');
+  await page.getByRole('textbox', { name: 'Name', exact: true }).fill('Iceland');
   await page.getByTestId('module-checkbox-employee_management').check();
   await page.getByTestId('plan-currency').selectOption('ISK');
   const price = page.getByTestId('plan-price');
@@ -236,6 +247,7 @@ test('ISK prices are typed in whole units and sent as two-decimal minor units', 
 
 test('a decimal yearly discount is refused before it reaches the API', async ({ adminPage: page, mockApi }) => {
   await page.getByRole('button', { name: 'Plans' }).click();
+  await page.getByRole('button', { name: 'Board View' }).click(); // the page opens in Table View
   await page.getByRole('button', { name: 'Edit plan' }).nth(1).click();
   await page.getByTestId('add-yearly-price').click();
   await page.getByTestId('yearly-discount').fill('12.5');
@@ -252,6 +264,7 @@ test('a decimal yearly discount is refused before it reaches the API', async ({ 
 
 test('a fixed yearly price takes at most 2 decimals and is sent exactly (100.50 -> 10050)', async ({ adminPage: page, mockApi }) => {
   await page.getByRole('button', { name: 'Plans' }).click();
+  await page.getByRole('button', { name: 'Board View' }).click(); // the page opens in Table View
   await page.getByRole('button', { name: 'Edit plan' }).nth(1).click();
   await page.getByTestId('add-yearly-price').click();
   await page.getByTestId('yearly-mode-fixed').click();
@@ -278,6 +291,7 @@ const promoSaved = (payload: { variables?: Record<string, any> }) => ({
 test('switching the promo currency keeps the typed amount (10.50 USD -> JPY -> USD)', async ({ adminPage: page, mockApi }) => {
   mockApi.setOverride('AdminSavePromoCode', promoSaved);
   await page.getByRole('button', { name: 'Plans' }).click();
+  await page.getByRole('button', { name: 'Board View' }).click(); // the page opens in Table View
   await page.getByRole('button', { name: 'Promo Codes' }).click();
   await page.getByRole('button', { name: 'New promo' }).click();
   await page.getByPlaceholder('SAVE20').fill('travel');
@@ -299,6 +313,7 @@ test('switching the promo currency keeps the typed amount (10.50 USD -> JPY -> U
 test('promo amounts and percentages that the API would refuse are stopped in the form', async ({ adminPage: page, mockApi }) => {
   mockApi.setOverride('AdminSavePromoCode', promoSaved);
   await page.getByRole('button', { name: 'Plans' }).click();
+  await page.getByRole('button', { name: 'Board View' }).click(); // the page opens in Table View
   await page.getByRole('button', { name: 'Promo Codes' }).click();
   await page.getByRole('button', { name: 'New promo' }).click();
   await page.getByPlaceholder('SAVE20').fill('half');
@@ -335,18 +350,20 @@ test('a deleted plan id can be used again for a new plan right away', async ({ a
     };
   });
   await page.getByRole('button', { name: 'Plans' }).click();
+  await page.getByRole('button', { name: 'Board View' }).click(); // the page opens in Table View
   await expect(page.getByTestId('plan-subscribers-premium')).toBeVisible();
   const packagingReads = mockApi.requests.get('AdminPlansPackaging')?.length ?? 0;
 
-  page.once('dialog', (dialog) => dialog.accept('Replaced by a new Premium'));
   await page.locator('article').filter({ hasText: 'Premium' }).first().getByRole('button', { name: 'Delete', exact: true }).click();
+  await page.getByTestId('confirm-dialog-input').fill('Replaced by a new Premium');
+  await page.getByTestId('confirm-dialog-ok').click();
   await expect(page.getByText('Plan "Premium" deleted')).toBeVisible();
   // The packaging list is read again (it feeds the "id already exists" check and the counts).
   await expect.poll(() => mockApi.requests.get('AdminPlansPackaging')?.length ?? 0).toBeGreaterThan(packagingReads);
 
   await page.getByRole('button', { name: 'New plan' }).click();
   await page.getByLabel('Plan ID').fill('premium');
-  await page.getByLabel('Name', { exact: true }).fill('Premium');
+  await page.getByRole('textbox', { name: 'Name', exact: true }).fill('Premium');
   await page.getByTestId('module-checkbox-employee_management').check();
   await page.getByRole('button', { name: 'Create plan' }).click();
   await expect(page.getByText('A plan with ID "premium" already exists')).toHaveCount(0);
@@ -365,6 +382,7 @@ test('a plan cannot be edited before its package details load (private / yearly 
   });
   mockApi.plans.push({ ...mockApi.plans[1], id: 'premium_yearly', name: 'Premium Yearly', basePriceCents: 12000, billingInterval: 'yearly', trialMonths: 0, recommended: false });
   await page.getByRole('button', { name: 'Plans' }).click();
+  await page.getByRole('button', { name: 'Board View' }).click(); // the page opens in Table View
   const edit = page.getByRole('button', { name: 'Edit plan' }).nth(2);
   await expect(edit).toBeDisabled();
   release();
@@ -379,6 +397,7 @@ test('a plan cannot be edited before its package details load (private / yearly 
 test('when package details fail to load, Edit says so instead of opening a blank package', async ({ adminPage: page, mockApi }) => {
   mockApi.setOverride('AdminPlansPackaging', { errors: [{ message: 'packaging unavailable' }] });
   await page.getByRole('button', { name: 'Plans' }).click();
+  await page.getByRole('button', { name: 'Board View' }).click(); // the page opens in Table View
   await expect(page.getByTestId('packaging-load-error')).toContainText('packaging unavailable');
   await page.getByRole('button', { name: 'Edit plan' }).first().click();
   await expect(page.getByText(/package details of "Free" could not be loaded/)).toBeVisible();
@@ -388,6 +407,7 @@ test('when package details fail to load, Edit says so instead of opening a blank
 test('a module list that fails to load is shown as an error, not as an empty list', async ({ adminPage: page, mockApi }) => {
   mockApi.setOverride('AdminPackageModules', { errors: [{ message: 'modules unavailable' }] });
   await page.getByRole('button', { name: 'Plans' }).click();
+  await page.getByRole('button', { name: 'Board View' }).click(); // the page opens in Table View
   await page.getByRole('button', { name: 'New plan' }).click();
   await expect(page.getByText('Could not load modules: modules unavailable')).toBeVisible();
 });
@@ -395,6 +415,7 @@ test('a module list that fails to load is shown as an error, not as an empty lis
 test('a plan without modules (an old plan) can still be edited and saved', async ({ adminPage: page, mockApi }) => {
   mockApi.packaging[0].modules = [];
   await page.getByRole('button', { name: 'Plans' }).click();
+  await page.getByRole('button', { name: 'Board View' }).click(); // the page opens in Table View
   await page.getByRole('button', { name: 'Edit plan' }).first().click();
   await expect(page.getByTestId('package-no-modules')).toBeVisible();
   await page.getByLabel('Description').fill('Core features only.');
@@ -418,6 +439,8 @@ test('every page of plans is loaded, and a failed later page is reported', async
   });
   await page.getByRole('button', { name: 'Plans' }).click();
   await page.getByRole('button', { name: 'Table View' }).click();
+  // The table shows 10 rows a page: search for the row past the first API page.
+  await page.getByPlaceholder('Search plans').fill('bulk_201');
   await expect(page.getByTestId('partial-list-warning')).toContainText('Only the first 200 plans could be loaded: page 2 unavailable');
   await expect(page.getByText('bulk_201')).toHaveCount(0);
 
@@ -446,6 +469,8 @@ test('a refresh keeps a long plan list on screen until the new pages arrive (#23
   });
   await page.getByRole('button', { name: 'Plans' }).click();
   await page.getByRole('button', { name: 'Table View' }).click();
+  // The table shows 10 rows a page: search for the row past the first API page.
+  await page.getByPlaceholder('Search plans').fill('bulk_201');
   await expect(page.getByText('bulk_201', { exact: true })).toBeVisible();
 
   holdSecondPage = new Promise<void>((resolve) => { releaseSecondPage = resolve; });
@@ -478,6 +503,7 @@ test('applying re-checks the preview first and stops when it changed', async ({ 
     };
   });
   await page.getByRole('button', { name: 'Plans' }).click();
+  await page.getByRole('button', { name: 'Board View' }).click(); // the page opens in Table View
   await page.getByTestId('apply-subscribers-premium').click();
   const dialog = page.getByTestId('apply-subscribers-dialog');
   await expect(dialog.getByTestId('apply-subscribers-preview')).toContainText('Acme Labs');
@@ -496,5 +522,6 @@ test('applying re-checks the preview first and stops when it changed', async ({ 
 test('a trial of one month says "1 month"', async ({ adminPage: page, mockApi }) => {
   mockApi.plans[1].trialMonths = 1;
   await page.getByRole('button', { name: 'Plans' }).click();
+  await page.getByRole('button', { name: 'Board View' }).click(); // the page opens in Table View
   await expect(page.getByText('Free for 1 month', { exact: true })).toBeVisible();
 });

@@ -388,7 +388,7 @@ export const Users: React.FC<{onToast: (type: 'success'|'error', msg: string) =>
       />
 
       {activityUser !== null && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
+        <div onMouseDown={(event) => { if (event.target === event.currentTarget) setActivityUser(null); }} className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
           <div className="bg-white rounded-xl border border-slate-200 w-full max-w-4xl max-h-[90vh] overflow-hidden">
             <div className="p-4 border-b border-slate-100 flex items-center justify-between gap-3">
               <h3 className="font-bold text-lg text-slate-800 truncate">
@@ -471,16 +471,10 @@ export const Users: React.FC<{onToast: (type: 'success'|'error', msg: string) =>
       )}
 
       {editingUser && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/40 p-4">
+        <div onMouseDown={(event) => { if (event.target === event.currentTarget) setEditingUser(null); }} className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/40 p-4">
           <div className="bg-white rounded-xl border border-slate-200 w-full max-w-xl">
             <div className="p-5 border-b border-slate-100 flex items-center justify-between">
               <h3 className="m-0 text-[22px] font-bold tracking-[-0.3px] text-slate-800">Edit User</h3>
-              <button
-                onClick={() => setEditingUser(null)}
-                className="p-2 rounded-lg hover:bg-slate-100"
-              >
-                ×
-              </button>
             </div>
             <div className="p-5 space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">

@@ -154,14 +154,10 @@ test.describe('commerce / companies', () => {
     await component.getByPlaceholder('Refund reason').fill('Duplicate charge');
     await component.getByPlaceholder('Amount').fill('10');
     // A partial refund is confirmed too, with the amount and currency.
-    const dialogs: string[] = [];
-    page.once('dialog', (dialog) => {
-      dialogs.push(dialog.message());
-      void dialog.accept();
-    });
     await component.getByRole('button', { name: /Apply refund/ }).click();
+    await expect(component.getByTestId('confirm-dialog-message')).toHaveText('Refund $10.00 (USD) of this payment?');
+    await component.getByTestId('confirm-dialog-ok').click();
     await expect(component.getByLabel('toast')).toHaveText('success: Refund requested');
-    expect(dialogs).toEqual(['Refund $10.00 (USD) of this payment?']);
 
     // Re-open the payment detail because a successful refund closes it.
     await component.getByRole('button', { name: /Detail/ }).click();
@@ -188,17 +184,16 @@ test.describe('commerce / companies', () => {
 
     // Empty amount = full refund: only after the admin confirms it.
     await component.getByPlaceholder('Amount').fill('');
-    const dialogs: string[] = [];
-    page.once('dialog', (dialog) => {
-      dialogs.push(dialog.message());
-      void dialog.dismiss();
-    });
     await component.getByRole('button', { name: /Apply refund/ }).click();
-    await expect.poll(() => dialogs).toEqual(['No amount entered: refund everything still paid on this payment?']);
+    await expect(component.getByTestId('confirm-dialog-message')).toHaveText(
+      'No amount entered: refund everything still paid on this payment?',
+    );
+    await component.getByTestId('confirm-dialog-cancel').click();
+    await expect(component.getByTestId('confirm-dialog')).toHaveCount(0);
     await expect(component.getByPlaceholder('Amount')).toBeVisible(); // still open: nothing requested
 
-    page.once('dialog', (dialog) => void dialog.accept());
     await component.getByRole('button', { name: /Apply refund/ }).click();
+    await component.getByTestId('confirm-dialog-ok').click();
     await expect(component.getByLabel('toast')).toHaveText('success: Refund requested');
   });
 
@@ -336,15 +331,12 @@ test.describe('commerce / companies', () => {
     await component.getByPlaceholder('Refund reason').fill('Duplicate charge');
     await component.getByPlaceholder('Amount').fill('10');
 
-    let confirms = 0;
-    page.on('dialog', (dialog) => {
-      confirms += 1;
-      void dialog.accept();
-    });
     await component.getByRole('button', { name: /Apply refund/ }).dblclick();
+    // Asked once, not once per click.
+    await expect(component.getByTestId('confirm-dialog')).toHaveCount(1);
+    await component.getByTestId('confirm-dialog-ok').click();
     await expect(component.getByRole('button', { name: /Requesting refund/ })).toBeDisabled();
     await expect(component.getByLabel('toast')).toHaveText('success: Refund requested');
-    expect(confirms).toBe(1);
 
     await component.getByRole('button', { name: /Detail/ }).click();
     await component.getByPlaceholder('Receiver medium').fill('merchant-7');

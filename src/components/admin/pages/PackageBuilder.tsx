@@ -1047,13 +1047,10 @@ export const ChangePackageDialog: React.FC<{
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4" data-testid="change-package-dialog">
+    <div onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }} className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4" data-testid="change-package-dialog">
       <div className="flex max-h-[90vh] w-full max-w-xl flex-col overflow-hidden rounded-xl bg-white shadow-2xl">
         <div className="flex items-center justify-between border-b border-slate-100 p-5">
           <h3 className="m-0 text-[22px] font-bold tracking-[-0.3px] text-slate-800">Change package · {companyName}</h3>
-          <button type="button" onClick={onClose} className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700" aria-label="Close">
-            <X className="h-5 w-5" />
-          </button>
         </div>
         <div className="flex-1 space-y-4 overflow-y-auto p-5">
           {plansError ? (
@@ -1355,13 +1352,10 @@ export const ApplyToSubscribersDialog: React.FC<{
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4" data-testid="apply-subscribers-dialog">
+    <div onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }} className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4" data-testid="apply-subscribers-dialog">
       <div className="flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl bg-white shadow-2xl">
         <div className="flex items-center justify-between border-b border-slate-100 p-5">
           <h3 className="m-0 text-[22px] font-bold tracking-[-0.3px] text-slate-800">Apply {planName} to existing subscribers</h3>
-          <button type="button" onClick={onClose} className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700" aria-label="Close">
-            <X className="h-5 w-5" />
-          </button>
         </div>
         <div className="flex-1 space-y-3 overflow-y-auto p-5">
           <p className="text-sm text-slate-600">

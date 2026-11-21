@@ -44,6 +44,7 @@ import { ColumnFilter } from '../ColumnFilter';
 import { ChangePackageDialog, PackageCell, useCompanyPackages } from './PackageBuilder';
 import { DateRangePicker, DateRangeValue } from '../DateRangePicker';
 import { DataTable, RowActionButton, StatusBadge, type DataTableSort } from '../ui/DataTable';
+import { useConfirmDialog } from '../ui/FormKit';
 
 const filterInputClass =
   'h-8 w-full rounded-lg border border-slate-200 bg-white px-2 text-xs text-slate-700 outline-none focus:border-sky-400 focus:ring-2 focus:ring-sky-100';
@@ -189,6 +190,8 @@ const downloadTextFile = (filename: string, mimeType: string, content: string) =
 };
 
 export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string) => void}> = ({ onToast }) => {
+  // In-app confirm / reason questions (not the browser's "localhost says").
+  const { confirm, askReason, dialog } = useConfirmDialog();
   const [search, setSearch] = useState('');
   const [sortKey, setSortKey] = useState<CompanySortKey>('createdAt');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
@@ -744,11 +747,18 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
         onToast('error', `${currency} refunds must be in whole units.`);
         return;
       }
-      if (!window.confirm(`Refund ${formatPrice(amount, currency)} (${currency}) of this payment?`)) return;
-    } else if (!window.confirm('No amount entered: refund everything still paid on this payment?')) {
+    }
+    // Held while the question is open too: a double click asks only once.
+    refundInFlightRef.current = true;
+    const ok = await confirm(
+      amount !== null
+        ? { title: 'Refund this payment?', message: `Refund ${formatPrice(amount, currency)} (${currency}) of this payment?`, confirmLabel: 'Refund', tone: 'danger' }
+        : { title: 'Refund the full payment?', message: 'No amount entered: refund everything still paid on this payment?', confirmLabel: 'Refund all', tone: 'danger' },
+    );
+    if (!ok) {
+      refundInFlightRef.current = false;
       return;
     }
-    refundInFlightRef.current = true;
     setRefundInFlight(true);
     try {
       const result: any = await requestRefund({
@@ -1030,18 +1040,10 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
       ) : null}
 
       {editingDetail && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/40 p-4">
+        <div onMouseDown={(event) => { if (event.target === event.currentTarget) setEditingDetail(null); }} className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/40 p-4">
           <div className="bg-white rounded-2xl shadow-xl border border-slate-200 w-full max-w-2xl">
             <div className="p-5 border-b border-slate-100 flex items-center justify-between">
               <h3 className="text-lg font-bold text-slate-700">Edit Company</h3>
-              <button
-                className="px-2 py-1 text-slate-500 hover:text-slate-700"
-                onClick={() => setEditingDetail(null)}
-                title="Close"
-                aria-label="Close"
-              >
-                <X className="w-5 h-5" />
-              </button>
             </div>
             <div className="p-5 space-y-4">
               <div>
@@ -1604,7 +1606,7 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
       )}
 
       {selectedPayment && (
-        <div className="fixed inset-0 z-50 bg-slate-950/40 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6">
+        <div onMouseDown={(event) => { if (event.target === event.currentTarget) setSelectedPayment(null); }} className="fixed inset-0 z-50 bg-slate-950/40 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6">
           <div
             role="dialog"
             aria-modal="true"
@@ -1840,6 +1842,7 @@ export const Companies: React.FC<{onToast: (type: 'success'|'error', msg: string
           </div>
         </div>
       )}
+      {dialog}
     </div>
   );
 };

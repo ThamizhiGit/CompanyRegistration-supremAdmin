@@ -1,5 +1,5 @@
-import React from 'react';
-import { X } from 'lucide-react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { AlertTriangle, HelpCircle, X } from 'lucide-react';
 
 /*
  * The form building blocks of the Penquee portal (con-frontend
@@ -30,7 +30,14 @@ export const FormDialog: React.FC<{
   children: React.ReactNode;
   testId?: string;
 }> = ({ title, subtitle, onClose, widthClass = 'max-w-3xl', closeLabel = 'Close', footer, children, testId }) => (
-  <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/40 p-4" data-testid={testId}>
+  <div
+    className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/40 p-4"
+    data-testid={testId}
+    // A click on the dimmed area outside the form closes it, like Cancel.
+    onMouseDown={(event) => {
+      if (event.target === event.currentTarget) onClose();
+    }}
+  >
     <div
       role="dialog"
       aria-modal="true"
@@ -42,14 +49,6 @@ export const FormDialog: React.FC<{
           <h3 className="m-0 text-[22px] font-bold tracking-[-0.3px] text-slate-800">{title}</h3>
           {subtitle ? <p className="m-0 mt-1 text-[13px] text-slate-400">{subtitle}</p> : null}
         </div>
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label={closeLabel}
-          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
-        >
-          <X className="h-5 w-5" />
-        </button>
       </div>
       <div className="flex flex-1 flex-col gap-4 overflow-y-auto px-5 pb-4 sm:px-6">{children}</div>
       {footer ? <div className="shrink-0 border-t border-slate-100 px-5 py-3 sm:px-6">{footer}</div> : null}
@@ -195,3 +194,189 @@ export const sortHeaderClass = (active: boolean, align: 'left' | 'right' = 'left
   `inline-flex w-full items-center gap-1 text-[14px] font-extrabold uppercase tracking-wider ${
     align === 'right' ? 'justify-end text-right' : 'justify-start text-left'
   } ${active ? 'text-sky-700' : 'text-sky-600 hover:text-sky-700'}`;
+
+/*
+ * In-app confirm / reason dialog, used instead of the browser's
+ * window.confirm / window.prompt ("localhost:3001 says ..."):
+ *
+ *   const { confirm, askReason, dialog } = useConfirmDialog();
+ *   if (!(await confirm({ title: 'Switch LKR off?', message: '...', tone: 'danger' }))) return;
+ *   const reason = await askReason({ title: 'Delete Premium?', label: 'Reason', defaultValue: '...' });
+ *   ...
+ *   return <>{page}{dialog}</>;
+ *
+ * Escape or Cancel answers false / null. A reason is required (OK stays
+ * disabled while it is empty), as the audit log needs one.
+ */
+export interface ConfirmOptions {
+  title: string;
+  message?: React.ReactNode;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  /** danger: red button and icon (delete, switch off, refund). */
+  tone?: 'danger' | 'primary';
+}
+
+export interface ReasonOptions extends ConfirmOptions {
+  label?: string;
+  defaultValue?: string;
+  placeholder?: string;
+}
+
+type DialogState =
+  | { kind: 'confirm'; options: ConfirmOptions; resolve: (ok: boolean) => void }
+  | { kind: 'reason'; options: ReasonOptions; resolve: (reason: string | null) => void };
+
+export const ConfirmDialog: React.FC<{
+  options: ReasonOptions;
+  withReason: boolean;
+  onAnswer: (ok: boolean, reason: string) => void;
+}> = ({ options, withReason, onAnswer }) => {
+  const [reason, setReason] = useState(options.defaultValue ?? '');
+  const okRef = useRef<HTMLButtonElement | null>(null);
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const danger = options.tone === 'danger';
+  const blocked = withReason && !reason.trim();
+
+  useEffect(() => {
+    if (withReason) {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    } else {
+      okRef.current?.focus();
+    }
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.stopPropagation();
+        onAnswer(false, '');
+      }
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return (
+    <div
+      className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/40 p-4"
+      data-testid="confirm-dialog"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onAnswer(false, '');
+      }}
+    >
+      <div
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="confirm-dialog-title"
+        aria-describedby={options.message ? 'confirm-dialog-message' : undefined}
+        className="w-full max-w-md overflow-hidden rounded-xl bg-white shadow-2xl"
+      >
+        <div className="flex gap-4 px-6 pb-2 pt-6">
+          <div
+            className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full ${
+              danger ? 'bg-red-50 text-red-600' : 'bg-sky-50 text-sky-600'
+            }`}
+          >
+            {danger ? <AlertTriangle className="h-5 w-5" /> : <HelpCircle className="h-5 w-5" />}
+          </div>
+          <div className="min-w-0 flex-1">
+            <h3 id="confirm-dialog-title" className="m-0 text-[17px] font-bold tracking-[-0.2px] text-slate-800">
+              {options.title}
+            </h3>
+            {options.message ? (
+              <div id="confirm-dialog-message" data-testid="confirm-dialog-message" className="mt-1.5 whitespace-pre-line text-[13px] leading-relaxed text-slate-500">
+                {options.message}
+              </div>
+            ) : null}
+          </div>
+        </div>
+        {withReason ? (
+          <div className="px-6 pt-3">
+            <label className="group block">
+              <span className="mb-1 block text-[11.5px] font-semibold uppercase tracking-[0.02em] text-slate-500 group-focus-within:text-sky-500">
+                {options.label || 'Reason'}
+                <span aria-hidden="true" className="ml-px text-red-500">*</span>
+              </span>
+              <textarea
+                ref={inputRef}
+                data-testid="confirm-dialog-input"
+                value={reason}
+                rows={2}
+                placeholder={options.placeholder}
+                onChange={(event) => setReason(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && !event.shiftKey && !blocked) {
+                    event.preventDefault();
+                    onAnswer(true, reason.trim());
+                  }
+                }}
+                className="w-full resize-none rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)]"
+              />
+            </label>
+          </div>
+        ) : null}
+        <div className="mt-4 flex justify-end gap-3 border-t border-slate-100 bg-slate-50/60 px-6 py-4">
+          <button
+            type="button"
+            data-testid="confirm-dialog-cancel"
+            onClick={() => onAnswer(false, '')}
+            className="h-10 rounded-[10px] border-[1.5px] border-slate-300 bg-white px-6 text-sm font-semibold text-slate-600 transition hover:border-slate-400 hover:bg-slate-50 hover:text-slate-800"
+          >
+            {options.cancelLabel || 'Cancel'}
+          </button>
+          <button
+            ref={okRef}
+            type="button"
+            data-testid="confirm-dialog-ok"
+            disabled={blocked}
+            onClick={() => onAnswer(true, reason.trim())}
+            className={`h-10 rounded-[10px] px-6 text-sm font-bold text-white transition disabled:cursor-not-allowed disabled:opacity-50 ${
+              danger
+                ? 'bg-red-600 hover:bg-red-700'
+                : 'bg-gradient-to-r from-sky-500 to-cyan-400 shadow-[0_2px_8px_rgba(14,165,233,0.25)] hover:from-sky-600 hover:to-cyan-500'
+            }`}
+          >
+            {options.confirmLabel || 'OK'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export const useConfirmDialog = () => {
+  const [state, setState] = useState<DialogState | null>(null);
+  const stateRef = useRef<DialogState | null>(null);
+  stateRef.current = state;
+
+  // A page left with a question open answers it "no" (nothing waits forever).
+  useEffect(() => () => {
+    const open = stateRef.current;
+    if (open?.kind === 'confirm') open.resolve(false);
+    if (open?.kind === 'reason') open.resolve(null);
+  }, []);
+
+  const confirm = useCallback(
+    (options: ConfirmOptions) => new Promise<boolean>((resolve) => setState({ kind: 'confirm', options, resolve })),
+    [],
+  );
+  const askReason = useCallback(
+    (options: ReasonOptions) => new Promise<string | null>((resolve) => setState({ kind: 'reason', options, resolve })),
+    [],
+  );
+
+  const dialog = state ? (
+    <ConfirmDialog
+      key={state.options.title}
+      options={state.options}
+      withReason={state.kind === 'reason'}
+      onAnswer={(ok, reason) => {
+        setState(null);
+        if (state.kind === 'confirm') state.resolve(ok);
+        else state.resolve(ok ? reason : null);
+      }}
+    />
+  ) : null;
+
+  return { confirm, askReason, dialog };
+};

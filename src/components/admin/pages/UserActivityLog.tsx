@@ -183,7 +183,7 @@ export const UserActivityLog: React.FC = () => {
       />
 
       {selected && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/40 p-4">
+        <div onMouseDown={(event) => { if (event.target === event.currentTarget) setSelected(null); }} className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/40 p-4">
           <div className="bg-white max-w-2xl w-full rounded-xl border border-slate-200 shadow-xl">
             <div className="p-4 border-b border-slate-100 flex items-center justify-between">
               <h3 className="font-bold text-lg text-slate-800">Activity Detail</h3>

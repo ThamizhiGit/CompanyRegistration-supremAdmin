@@ -849,7 +849,7 @@ export const Subscriptions: React.FC<{
       ) : null}
 
       {viewingPayment ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 backdrop-blur-sm p-3 sm:p-6">
+        <div onMouseDown={(event) => { if (event.target === event.currentTarget) setViewingPayment(null); }} className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 backdrop-blur-sm p-3 sm:p-6">
           <div
             role="dialog"
             aria-modal="true"
@@ -1017,20 +1017,13 @@ export const Subscriptions: React.FC<{
       ) : null}
 
       {editingPayment ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
+        <div onMouseDown={(event) => { if (event.target === event.currentTarget) closeEditPayment(); }} className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
           <div className="max-h-[90vh] w-full max-w-4xl overflow-y-auto rounded-xl bg-white p-6 shadow-xl">
             <div className="mb-5 flex items-center justify-between gap-3">
               <div>
                 <h3 className="m-0 text-[22px] font-bold tracking-[-0.3px] text-slate-800">Edit Subscription Payment</h3>
                 <p className="text-sm text-slate-500">{editingPayment.displayCompanyName} / {editingPayment.paymentIntentId}</p>
               </div>
-              <button
-                type="button"
-                onClick={closeEditPayment}
-                className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"
-              >
-                <X className="h-5 w-5" />
-              </button>
             </div>
 
             <div className="grid gap-4 lg:grid-cols-2">
