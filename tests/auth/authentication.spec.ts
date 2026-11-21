@@ -160,6 +160,7 @@ test.describe('Signing out', () => {
   test('clears the cached admin data, so the next sign-in reads it again', async ({ adminPage: page, mockApi }) => {
     const packagingReads = () => mockApi.requests.get('AdminPlansPackaging')?.length ?? 0;
     await page.getByRole('button', { name: 'Plans' }).click();
+    await page.getByRole('button', { name: 'Board View' }).click(); // the page opens in Table View
     await expect(page.getByTestId('plan-subscribers-premium')).toBeVisible();
     const before = packagingReads();
     expect(before).toBeGreaterThan(0);
@@ -171,7 +172,10 @@ test.describe('Signing out', () => {
     await page.getByPlaceholder('Enter your username').fill('admin');
     await page.getByPlaceholder('Enter your password').fill('pass');
     await page.locator('button[type="submit"]').click();
-    await page.getByRole('button', { name: 'Plans' }).click();
+    // Sign-in returns to the page in the address (#/plans), which has its own
+    // "Plans" tab: use the sidebar link.
+    await page.getByLabel('Admin navigation').getByRole('button', { name: 'Plans' }).click();
+    await page.getByRole('button', { name: 'Board View' }).click(); // the page opens in Table View
     await expect(page.getByTestId('plan-subscribers-premium')).toBeVisible();
     // Within the 30 s reuse window the package list would have been reused
     // from the previous session; signing out dropped it.

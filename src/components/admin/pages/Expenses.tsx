@@ -882,7 +882,7 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
       />
 
       {selectedExpense && detailExpense && (
-        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+        <div onMouseDown={(event) => { if (event.target === event.currentTarget) setSelectedExpense(null); }} className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
           <div className="bg-white rounded-xl border border-slate-200 w-full max-w-5xl max-h-[90vh] flex flex-col overflow-hidden">
             <div className="shrink-0 p-5 border-b border-slate-100 flex items-start justify-between gap-4">
               <div>
@@ -1001,18 +1001,15 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
       )}
 
       {showForm && (
-        <div ref={formOverlayRef} className="fixed inset-0 bg-black/40 flex items-start justify-center p-4 overflow-y-auto z-40">
+        <div onMouseDown={(event) => {
+          // Not on its scrollbar: only a click on the dimmed area closes the form.
+          if (event.target === event.currentTarget && event.clientX < event.currentTarget.clientWidth) closeForm();
+        }} ref={formOverlayRef} className="fixed inset-0 bg-black/40 flex items-start justify-center p-4 overflow-y-auto z-40">
           <div className="bg-white w-full max-w-5xl rounded-xl border border-slate-200 p-6 my-6">
             <div className="flex items-center justify-between mb-5">
               <h3 className="m-0 text-[22px] font-bold tracking-[-0.3px] text-slate-800">
                 {editing.id ? 'Edit Expense' : 'Create Expense'}
               </h3>
-              <button
-                onClick={closeForm}
-                className="px-3 py-2 rounded-lg border border-slate-200 text-slate-700"
-              >
-                <X className="w-4 h-4" />
-              </button>
             </div>
 
             {formErrors.duplicate && (

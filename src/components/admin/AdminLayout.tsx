@@ -240,12 +240,17 @@ export const AdminLayout: React.FC<AdminLayoutProps> = ({
             sidebarCollapsed ? 'md:justify-center md:px-0' : ''
           } px-8`}
         >
-          <UserRound
-            className={`h-11 w-11 text-black transition-[width,height] duration-200 ease-out motion-reduce:transition-none ${
-              sidebarCollapsed ? 'md:h-9 md:w-9' : ''
-            }`}
-            strokeWidth={2.2}
-            aria-hidden="true"
+          {/* Penquee logo (same files as the login page); collapsed: the round mark only. */}
+          <picture className={sidebarCollapsed ? 'md:hidden' : ''}>
+            <source srcSet="/assets/penquee_logo.webp" type="image/webp" />
+            <img src="/assets/penquee_logo.png" width={481} height={150} className="h-11 w-auto object-contain" alt="Penquee" />
+          </picture>
+          <img
+            src="/assets/penquee-favicon.png"
+            width={36}
+            height={36}
+            className={`hidden h-9 w-9 object-contain ${sidebarCollapsed ? 'md:block' : ''}`}
+            alt="Penquee"
           />
         </div>
 

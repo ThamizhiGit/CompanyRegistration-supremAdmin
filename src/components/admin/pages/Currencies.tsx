@@ -8,6 +8,7 @@ import {
 } from '../../../lib/graphql';
 import { centsFromAmount, formatDateTime, formatPrice, wholeNumberError } from '../../../lib/admin-utils';
 import { DataTable, RowActionButton } from '../ui/DataTable';
+import { useConfirmDialog } from '../ui/FormKit';
 
 interface CurrencyRateRow {
   code: string;
@@ -65,6 +66,8 @@ const SOURCE_LABELS: Record<string, string> = {
  * Rates refresh automatically every day; a pinned rate is kept as typed.
  */
 export const Currencies: React.FC<{ onToast: (type: 'success' | 'error', msg: string) => void }> = ({ onToast }) => {
+  // In-app confirm / reason questions (not the browser's "localhost says").
+  const { confirm, askReason, dialog } = useConfirmDialog();
   const [previewUsd, setPreviewUsd] = useState('12');
   // Ask the server for a new preview only once typing pauses, not per keystroke.
   const [debouncedPreviewUsd, setDebouncedPreviewUsd] = useState(previewUsd);
@@ -98,18 +101,33 @@ export const Currencies: React.FC<{ onToast: (type: 'success' | 'error', msg: st
   // A seed rate is a placeholder nobody has checked: customers would be
   // charged at it as soon as the currency is switched on.
   const confirmPlaceholderRate = (code: string, ratePerUsd: string) =>
-    window.confirm(
-      `${code} still has a placeholder rate (1 USD = ${ratePerUsd} ${code}) that has not been checked. ` +
+    confirm({
+      title: `Switch ${code} on with an unchecked rate?`,
+      message:
+        `${code} still has a placeholder rate (1 USD = ${ratePerUsd} ${code}) that has not been checked. ` +
         'Customers will be charged at this rate. Switch it on anyway? (Refresh or type the rate first to be safe.)',
-    );
+      confirmLabel: 'Switch on',
+    });
   // A rate typed by hand while the currency was off may be long out of date.
   const confirmUncheckedRate = (code: string, ratePerUsd: string, source: string) =>
     source === 'manual'
-      ? window.confirm(
-          `${code}'s rate (1 USD = ${ratePerUsd} ${code}) was typed by hand and may be out of date. ` +
+      ? confirm({
+          title: `Switch ${code} on?`,
+          message:
+            `${code}'s rate (1 USD = ${ratePerUsd} ${code}) was typed by hand and may be out of date. ` +
             'Customers will be charged at this rate. Switch it on anyway?',
-        )
+          confirmLabel: 'Switch on',
+        })
       : confirmPlaceholderRate(code, ratePerUsd);
+  const confirmSwitchOff = (code: string) =>
+    confirm({
+      title: `Switch ${code} off?`,
+      message:
+        `Switch ${code} off? Customers will no longer be able to pay in it, and companies billed in it ` +
+        'move to their package currency at their next renewal.',
+      confirmLabel: 'Switch off',
+      tone: 'danger',
+    });
   const needsRateCheck = (source: string) => source === 'seed' || source === 'manual';
 
   const handleRefresh = async () => {
@@ -132,15 +150,12 @@ export const Currencies: React.FC<{ onToast: (type: 'success' | 'error', msg: st
     // Switching off removes the currency from checkout at once: make sure it was meant.
     if (
       row.active &&
-      !window.confirm(
-        `Switch ${row.code} off? Customers will no longer be able to pay in it, and companies billed in it ` +
-          'move to their package currency at their next renewal.',
-      )
+      !(await confirmSwitchOff(row.code))
     ) {
       return;
     }
     const placeholder = !row.active && needsRateCheck(row.source);
-    if (placeholder && !confirmUncheckedRate(row.code, row.ratePerUsd, row.source)) return;
+    if (placeholder && !(await confirmUncheckedRate(row.code, row.ratePerUsd, row.source))) return;
     try {
       // The server refuses a placeholder rate unless the admin confirmed it.
       // Switching off is confirmed above too (the server asks when companies are billed in it).
@@ -185,10 +200,13 @@ export const Currencies: React.FC<{ onToast: (type: 'success' | 'error', msg: st
     let confirmed = false;
     if (!editing.isNew && rateChanged && oldRate > 0 && Math.abs(newRate - oldRate) / oldRate > RATE_CHANGE_CONFIRM_RATIO) {
       const change = Math.round(((newRate - oldRate) / oldRate) * 100);
-      const confirmedChange = window.confirm(
-        `The new ${code} rate is ${change > 0 ? '+' : ''}${change}% from the current one.\n\n` +
+      const confirmedChange = await confirm({
+        title: `Save the new ${code} rate?`,
+        message:
+          `The new ${code} rate is ${change > 0 ? '+' : ''}${change}% from the current one.\n\n` +
           `Current: 1 USD = ${editing.originalRate} ${code}\nNew: 1 USD = ${editing.ratePerUsd.trim()} ${code}\n\nSave this rate?`,
-      );
+        confirmLabel: 'Save rate',
+      });
       if (!confirmedChange) return;
       confirmed = true;
     }
@@ -196,24 +214,24 @@ export const Currencies: React.FC<{ onToast: (type: 'success' | 'error', msg: st
     // so the admin checks the typed one (3.0 for 300 would price everything
     // in it 100 times too low). The server asks for this too.
     if (editing.isNew && editing.active) {
-      if (!window.confirm(`Check the rate before ${code} is switched on:\n\n1 USD = ${editing.ratePerUsd.trim()} ${code}\n\nAdd it?`)) return;
+      const ok = await confirm({
+        title: `Add ${code}?`,
+        message: `Check the rate before ${code} is switched on:\n\n1 USD = ${editing.ratePerUsd.trim()} ${code}\n\nAdd it?`,
+        confirmLabel: 'Add currency',
+      });
+      if (!ok) return;
       confirmed = true;
     }
     // Switched off from the edit form: same question as the On/Off button.
     if (!editing.isNew && !editing.active && editing.originalActive) {
-      if (
-        !window.confirm(
-          `Switch ${code} off? Customers will no longer be able to pay in it, and companies billed in it ` +
-            'move to their package currency at their next renewal.',
-        )
-      ) {
+      if (!(await confirmSwitchOff(code))) {
         return;
       }
       confirmed = true;
     }
     // Switching on a currency whose (unchanged) rate is still a placeholder.
     if (!editing.isNew && editing.active && !editing.originalActive && needsRateCheck(editing.source) && !rateChanged) {
-      if (!confirmUncheckedRate(code, editing.originalRate, editing.source)) return;
+      if (!(await confirmUncheckedRate(code, editing.originalRate, editing.source))) return;
       confirmed = true;
     }
     try {
@@ -392,13 +410,10 @@ export const Currencies: React.FC<{ onToast: (type: 'success' | 'error', msg: st
       />
 
       {editing ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4" data-testid="currency-dialog">
+        <div onMouseDown={(event) => { if (event.target === event.currentTarget) setEditing(null); }} className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4" data-testid="currency-dialog">
           <div className="w-full max-w-lg rounded-xl bg-white shadow-2xl">
             <div className="flex items-center justify-between border-b border-slate-100 p-5">
               <h3 className="m-0 text-[22px] font-bold tracking-[-0.3px] text-slate-800">{editing.isNew ? 'Add currency' : `Edit ${editing.code}`}</h3>
-              <button type="button" onClick={() => setEditing(null)} className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700" aria-label="Close">
-                <X className="h-5 w-5" />
-              </button>
             </div>
             <div className="grid grid-cols-1 gap-4 p-5 md:grid-cols-2">
               <label className="block">
@@ -492,6 +507,7 @@ export const Currencies: React.FC<{ onToast: (type: 'success' | 'error', msg: st
           </div>
         </div>
       ) : null}
+      {dialog}
     </div>
   );
 };

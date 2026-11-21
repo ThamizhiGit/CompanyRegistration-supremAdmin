@@ -41,7 +41,7 @@ test.describe('commerce / plans', () => {
     await loading.unmount();
     const component = await mount(<PlansHarness scenario="data" />);
     await expect(component.getByText('Team', { exact: true })).toBeVisible();
-    await component.getByRole('button', { name: 'Table View' }).click();
+    // Table View is the default.
     await component.getByPlaceholder('Search plans').fill('does-not-exist');
     await expect(component.getByText('No plans found')).toBeVisible();
     await component.getByRole('button', { name: 'Promo Codes' }).click();
@@ -92,14 +92,20 @@ test.describe('commerce / plans', () => {
     await expect(component.getByLabel('toast')).toHaveText('success: Promo code "SAVE20" created');
   });
 
-  test('deletes a plan only after collecting an audit reason', async ({ mount, page }) => {
+  test('deletes a plan only after collecting an audit reason', async ({ mount }) => {
     const component = await mount(
       <PlansHarness scenario="actions" />,
     );
 
-    page.once('dialog', async (dialog) => dialog.accept('Retired after migration'));
+    await component.getByRole('button', { name: 'Board View' }).click(); // the page opens in Table View
     const teamPlan = component.locator('article').filter({ hasText: 'Team' });
     await teamPlan.getByRole('button', { name: 'Delete', exact: true }).click();
+    // The app's own dialog (not the browser's prompt): no reason, no delete.
+    await component.getByTestId('confirm-dialog-input').fill('');
+    await expect(component.getByTestId('confirm-dialog-ok')).toBeDisabled();
+    await component.getByTestId('confirm-dialog-input').fill('Retired after migration');
+    await component.getByTestId('confirm-dialog-ok').click();
+    await expect(component.getByTestId('confirm-dialog')).toHaveCount(0);
     await expect(component.getByLabel('toast')).toHaveText('success: Plan "Team" deleted');
   });
 });
