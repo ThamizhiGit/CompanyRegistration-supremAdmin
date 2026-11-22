@@ -2,22 +2,15 @@ import React from 'react';
 import { expect, test } from '@playwright/experimental-ct-react';
 import { type MockedResponse } from '@apollo/client/testing';
 import { CompaniesHarness } from '../fixtures/commerce-harnesses';
+import { companyFeedVariables, feedResult, paged } from '../fixtures/paging';
 import {
-  ADMIN_COMPANIES_QUERY,
+  ADMIN_COMPANIES_FEED_QUERY,
   ADMIN_COMPANY_PAYMENT_HISTORY_QUERY,
   ADMIN_MANUAL_SUBSCRIPTION_MUTATION,
   ADMIN_REQUEST_REFUND_MUTATION,
+  ADMIN_UPDATE_COMPANY_DETAIL_MUTATION,
+  ADMIN_UPDATE_PAYMENT_STATUS_MUTATION,
 } from '../../src/lib/graphql';
-
-const companyVariables = {
-  search: null,
-  status: null,
-  subscriptionStatus: null,
-  dueDateFrom: null,
-  dueDateTo: null,
-  recurringDateFrom: null,
-  recurringDateTo: null,
-};
 
 const company = {
   id: 7,
@@ -62,18 +55,20 @@ const payment = {
   gatewayRefSenderMedium: 'customer-7',
   gatewayPayload: '{}',
   paymentGatewayStatus: 'settled',
+  refundedAmount: 0,
 };
 
-const companiesMock = (items: unknown[], delay?: number): MockedResponse => ({
-  request: { query: ADMIN_COMPANIES_QUERY, variables: companyVariables },
+const companiesMock = (items: unknown[], delay?: number, extra: { totalCount?: number } = {}): MockedResponse => ({
+  request: { query: ADMIN_COMPANIES_FEED_QUERY, variables: companyFeedVariables() },
+  maxUsageCount: 3,
   ...(delay ? { delay } : {}),
-  result: { data: { adminCompanies: items } },
+  result: feedResult('adminCompaniesFeed', items, extra),
 });
 
 const historyMock: MockedResponse = {
   request: {
     query: ADMIN_COMPANY_PAYMENT_HISTORY_QUERY,
-    variables: { companyId: 7, dateFrom: null, dateTo: null, status: null },
+    variables: paged({ companyId: 7, dateFrom: null, dateTo: null, status: null }),
   },
   result: { data: { adminCompanyPaymentHistory: [payment] } },
 };
@@ -118,7 +113,7 @@ test.describe('commerce / companies', () => {
     await expect(picker).not.toBeVisible();
   });
 
-  test('requests a partial refund and sends a manual subscription action', async ({ mount }) => {
+  test('requests a partial refund and sends a manual subscription action', async ({ mount, page }) => {
     const mocks: MockedResponse[] = [
       companiesMock([company]),
       historyMock,
@@ -139,16 +134,16 @@ test.describe('commerce / companies', () => {
             paymentMethod: 'card',
             receiverMedium: 'merchant-7',
             senderMedium: 'customer-7',
-            gatewayPayload: JSON.stringify({
+            gatewayPayload: {
               paymentIntentId: 'pi_acme',
               method: 'card',
               reason: 'Bank verified',
               source: 'portal',
-            }),
+            },
             reason: 'Bank verified',
           },
         },
-        result: { data: { adminManualSubscription: { success: true, message: 'recorded' } } },
+        result: { data: { adminManualSubscriptionAction: { success: true, message: 'recorded', payment: null } } },
       },
     ];
     const component = await mount(<CompaniesHarness scenario="actions" />);
@@ -158,7 +153,10 @@ test.describe('commerce / companies', () => {
     await component.getByRole('button', { name: /Detail/ }).click();
     await component.getByPlaceholder('Refund reason').fill('Duplicate charge');
     await component.getByPlaceholder('Amount').fill('10');
+    // A partial refund is confirmed too, with the amount and currency.
     await component.getByRole('button', { name: /Apply refund/ }).click();
+    await expect(component.getByTestId('confirm-dialog-message')).toHaveText('Refund $10.00 (USD) of this payment?');
+    await component.getByTestId('confirm-dialog-ok').click();
     await expect(component.getByLabel('toast')).toHaveText('success: Refund requested');
 
     // Re-open the payment detail because a successful refund closes it.
@@ -168,5 +166,185 @@ test.describe('commerce / companies', () => {
     await component.getByPlaceholder('Reason / notes').fill('Bank verified');
     await component.getByRole('button', { name: /Trigger Manual/ }).click();
     await expect(component.getByLabel('toast')).toHaveText('success: Manual subscription action submitted');
+  });
+
+  test('refuses a refund amount that is not above zero and confirms a full refund', async ({ mount, page }) => {
+    // The harness answers the full refund (amount: null) for pi_acme.
+    const component = await mount(<CompaniesHarness scenario="actions" />);
+
+    await component.getByTitle('View Company').click();
+    await component.getByRole('button', { name: /Detail/ }).click();
+    await expect(component.getByPlaceholder('Amount')).toHaveAttribute('step', '0.01');
+
+    await component.getByPlaceholder('Amount').fill('0');
+    await component.getByRole('button', { name: /Apply refund/ }).click();
+    await expect(component.getByLabel('toast')).toHaveText(
+      'error: Enter a refund amount greater than zero, or leave it empty for a full refund.',
+    );
+
+    // Empty amount = full refund: only after the admin confirms it.
+    await component.getByPlaceholder('Amount').fill('');
+    await component.getByRole('button', { name: /Apply refund/ }).click();
+    await expect(component.getByTestId('confirm-dialog-message')).toHaveText(
+      'No amount entered: refund everything still paid on this payment?',
+    );
+    await component.getByTestId('confirm-dialog-cancel').click();
+    await expect(component.getByTestId('confirm-dialog')).toHaveCount(0);
+    await expect(component.getByPlaceholder('Amount')).toBeVisible(); // still open: nothing requested
+
+    await component.getByRole('button', { name: /Apply refund/ }).click();
+    await component.getByTestId('confirm-dialog-ok').click();
+    await expect(component.getByLabel('toast')).toHaveText('success: Refund requested');
+  });
+
+  test('an ISK refund is typed in whole units (Stripe refuses fractions)', async ({ mount }) => {
+    const component = await mount(<CompaniesHarness scenario="actions" paymentCurrency="ISK" />);
+    await component.getByTitle('View Company').click();
+    await component.getByRole('button', { name: /Detail/ }).click();
+    await expect(component.getByPlaceholder('Amount')).toHaveAttribute('step', '1');
+    await component.getByPlaceholder('Amount').fill('5.5');
+    await component.getByRole('button', { name: /Apply refund/ }).click();
+    await expect(component.getByLabel('toast')).toHaveText('error: ISK refunds must be in whole units.');
+  });
+
+  test('Company 360 totals are per currency and net of refunds', async ({ mount }) => {
+    const history: MockedResponse = {
+      ...historyMock,
+      result: {
+        data: {
+          adminCompanyPaymentHistory: [
+            { ...payment, paymentIntentId: 'pi_usd', amount: 2500, currency: 'USD', refundedAmount: 500 },
+            { ...payment, paymentIntentId: 'pi_eur', amount: 4000, currency: 'EUR', refundedAmount: 0 },
+            { ...payment, paymentIntentId: 'pi_back', amount: 1000, currency: 'USD', status: 'refunded', refundedAmount: 0 },
+          ],
+        },
+      },
+    };
+    const component = await mount(<CompaniesHarness mocks={[companiesMock([company]), history]} />);
+    await component.getByTitle('View Company').click();
+    // The totals sit on the Company 360 Subscription tab.
+    await component.getByRole('button', { name: 'Subscription', exact: true }).click();
+    const totals = component.getByTestId('company-total-paid');
+    await expect(totals).toHaveCount(2);
+    // One line per currency (in the order the payments came), net of refunds.
+    await expect(totals.filter({ hasText: '€40.00' })).toHaveCount(1);
+    const usd = totals.filter({ hasText: '$20.00' });
+    await expect(usd).toHaveCount(1);
+    await expect(usd).toContainText('$15.00 refunded');
+  });
+
+  test('payment history never offers "refunded" (refunds go through Refund) and sends one status change at a time', async ({ mount }) => {
+    const pending = { ...payment, status: 'pending' };
+    const component = await mount(
+      <CompaniesHarness
+        mocks={[
+          companiesMock([company]),
+          { ...historyMock, maxUsageCount: 3, result: { data: { adminCompanyPaymentHistory: [pending] } } },
+          {
+            request: { query: ADMIN_UPDATE_PAYMENT_STATUS_MUTATION, variables: { paymentIntentId: 'pi_acme', status: 'failed', reason: 'manual_update_failed' } },
+            delay: 800,
+            result: { data: { adminUpdatePaymentStatus: { success: true, message: 'ok', payment: { paymentIntentId: 'pi_acme', status: 'failed' } } } },
+          },
+        ]}
+      />,
+    );
+    await component.getByTitle('View Company').click();
+    await component.getByRole('button', { name: 'Payment History' }).click();
+    const select = component.getByLabel('Update status for pi_acme');
+    await expect(select.locator('option[value="refunded"]')).toHaveCount(0);
+    await select.selectOption('failed');
+    // In flight: the control is disabled, a second change cannot be sent.
+    await expect(select).toBeDisabled();
+    await expect(select).toBeEnabled();
+  });
+
+  test('a status change is saved with its reason and only the changed fields', async ({ mount }) => {
+    const component = await mount(
+      <CompaniesHarness
+        mocks={[
+          companiesMock([company]),
+          {
+            request: {
+              query: ADMIN_UPDATE_COMPANY_DETAIL_MUTATION,
+              variables: { input: { id: 7, company: 'Acme Labs', subscriptionStatus: 'past_due', isMultiLocationEnabled: false, reason: 'Card declined twice' } },
+            },
+            delay: 500,
+            result: { data: { adminUpdateCompanyDetail: { success: true, message: 'ok', company: null } } },
+          },
+        ]}
+      />,
+    );
+    await component.getByTitle('Edit Company').click();
+    // Suspension is not set here (it has its own action).
+    await expect(component.getByLabel('Subscription Status').locator('option[value="suspended"]')).toHaveCount(0);
+    await component.getByLabel('Subscription Status').selectOption('past_due');
+    const save = component.getByRole('button', { name: /Save changes/ });
+    await expect(save).toBeDisabled(); // a reason is required
+    await component.getByLabel('Reason for change').fill('Card declined twice');
+    await save.dblclick();
+    await expect(save).toBeDisabled(); // in flight
+    await expect(component.getByLabel('toast')).toHaveText('success: Company detail updated');
+  });
+
+  test('editing a company on another package keeps it and accepts equal trial dates', async ({ mount }) => {
+    // A registration sets both dates to the end of the trial.
+    const shiftsCompany = {
+      ...company,
+      planId: 'shifts-only',
+      planName: 'Shifts Only',
+      subscriptionDueDate: '2026-12-03T16:41:00.000Z',
+      subscriptionRecurringDate: '2026-12-03T16:41:00.000Z',
+    };
+    const component = await mount(<CompaniesHarness mocks={[companiesMock([shiftsCompany])]} />);
+    await component.getByTitle('Edit Company').click();
+    const plan = component.getByLabel('Subscription Plan');
+    await expect(plan).toHaveValue('shifts-only');
+    await expect(plan.locator('option[value="shifts-only"]')).toHaveText('Shifts Only');
+    await component.getByLabel('Subscription Status').selectOption('trial');
+    await expect(plan).toHaveValue('shifts-only');
+    await expect(component.getByText(/Recurring date must/)).toHaveCount(0);
+  });
+
+  test('pages through companies by the server total', async ({ mount }) => {
+    const component = await mount(
+      <CompaniesHarness
+        mocks={[
+          companiesMock([company], undefined, { totalCount: 75 }),
+          {
+            request: { query: ADMIN_COMPANIES_FEED_QUERY, variables: companyFeedVariables({}, 1) },
+            result: feedResult('adminCompaniesFeed', [{ ...company, id: 8, company: 'Beta Works' }], { totalCount: 75 }),
+          },
+        ]}
+      />,
+    );
+    await expect(component.getByTestId('pager-summary')).toHaveText(/1–50 of 75 companies/);
+    await component.getByRole('button', { name: 'Next page' }).click();
+    await expect(component.getByText('Beta Works', { exact: true })).toBeVisible();
+    await expect(component.getByTestId('pager-summary')).toHaveText(/51–75 of 75 companies/);
+  });
+
+  test('a double click sends one refund and one manual action', async ({ mount, page }) => {
+    // Each answer is mocked once and takes 800 ms: a second request would fail.
+    const component = await mount(<CompaniesHarness scenario="slow-actions" />);
+    await component.getByTitle('View Company').click();
+    await component.getByRole('button', { name: /Detail/ }).click();
+    await component.getByPlaceholder('Refund reason').fill('Duplicate charge');
+    await component.getByPlaceholder('Amount').fill('10');
+
+    await component.getByRole('button', { name: /Apply refund/ }).dblclick();
+    // Asked once, not once per click.
+    await expect(component.getByTestId('confirm-dialog')).toHaveCount(1);
+    await component.getByTestId('confirm-dialog-ok').click();
+    await expect(component.getByRole('button', { name: /Requesting refund/ })).toBeDisabled();
+    await expect(component.getByLabel('toast')).toHaveText('success: Refund requested');
+
+    await component.getByRole('button', { name: /Detail/ }).click();
+    await component.getByPlaceholder('Receiver medium').fill('merchant-7');
+    await component.getByPlaceholder('Sender medium').fill('customer-7');
+    await component.getByPlaceholder('Reason / notes').fill('Bank verified');
+    await component.getByRole('button', { name: /Trigger Manual/ }).dblclick();
+    await expect(component.getByRole('button', { name: /Submitting/ })).toBeDisabled();
+    await expect(component.getByLabel('toast')).toHaveText('success: Manual subscription action submitted');
+    await expect(component.getByRole('button', { name: /Trigger Manual/ })).toBeEnabled();
   });
 });

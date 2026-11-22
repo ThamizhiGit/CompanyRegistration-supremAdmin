@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Building2,
   ChevronLeft,
+  Coins,
   ChevronRight,
   ChevronUp,
   CreditCard,
@@ -17,8 +18,8 @@ import {
 } from 'lucide-react';
 
 interface AdminLayoutProps {
-  currentPage: 'dashboard' | 'packages' | 'companies' | 'subscriptions' | 'users' | 'accounts';
-  onPageChange: (page: 'dashboard' | 'packages' | 'companies' | 'subscriptions' | 'users' | 'accounts') => void;
+  currentPage: 'dashboard' | 'packages' | 'companies' | 'subscriptions' | 'currencies' | 'users' | 'accounts';
+  onPageChange: (page: 'dashboard' | 'packages' | 'companies' | 'subscriptions' | 'currencies' | 'users' | 'accounts') => void;
   onLogout: () => void;
   username: string;
   children: React.ReactNode;
@@ -36,7 +37,6 @@ export const AdminLayout: React.FC<AdminLayoutProps> = ({
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [profileSectionOpen, setProfileSectionOpen] = useState(false);
-  const [sessionRemaining, setSessionRemaining] = useState('00:00:00');
   const [isDesktop, setIsDesktop] = useState(() => window.matchMedia('(min-width: 768px)').matches);
   const sidebarRef = useRef<HTMLElement>(null);
   const mobileMenuButtonRef = useRef<HTMLButtonElement>(null);
@@ -53,6 +53,7 @@ export const AdminLayout: React.FC<AdminLayoutProps> = ({
     { id: 'packages', label: 'Plans', icon: Package },
     { id: 'companies', label: 'Companies', icon: Building2 },
     { id: 'subscriptions', label: 'Subscriptions', icon: CreditCard },
+    { id: 'currencies', label: 'Currencies', icon: Coins },
     { id: 'users', label: 'Users', icon: UsersRound },
     { id: 'accounts', label: 'Accounts', icon: WalletCards },
   ] as const;
@@ -122,31 +123,6 @@ export const AdminLayout: React.FC<AdminLayoutProps> = ({
       document.removeEventListener('keydown', handleProfileKeyboard);
     };
   }, [profileMenuOpen]);
-
-  useEffect(() => {
-    const updateSessionRemaining = () => {
-      const expiresAt = window.sessionStorage.getItem('adminExpiresAt');
-      if (!expiresAt) {
-        setSessionRemaining('00:00:00');
-        return;
-      }
-
-      const remainingSeconds = Math.max(
-        0,
-        Math.floor((new Date(expiresAt).getTime() - Date.now()) / 1000)
-      );
-      const hours = Math.floor(remainingSeconds / 3600);
-      const minutes = Math.floor((remainingSeconds % 3600) / 60);
-      const seconds = remainingSeconds % 60;
-      setSessionRemaining(
-        [hours, minutes, seconds].map((value) => String(value).padStart(2, '0')).join(':')
-      );
-    };
-
-    updateSessionRemaining();
-    const intervalId = window.setInterval(updateSessionRemaining, 1000);
-    return () => window.clearInterval(intervalId);
-  }, []);
 
   useEffect(() => {
     if (!mobileSidebarOpen) return;
@@ -264,12 +240,17 @@ export const AdminLayout: React.FC<AdminLayoutProps> = ({
             sidebarCollapsed ? 'md:justify-center md:px-0' : ''
           } px-8`}
         >
-          <UserRound
-            className={`h-11 w-11 text-black transition-[width,height] duration-200 ease-out motion-reduce:transition-none ${
-              sidebarCollapsed ? 'md:h-9 md:w-9' : ''
-            }`}
-            strokeWidth={2.2}
-            aria-hidden="true"
+          {/* Penquee logo (same files as the login page); collapsed: the round mark only. */}
+          <picture className={sidebarCollapsed ? 'md:hidden' : ''}>
+            <source srcSet="/assets/penquee_logo.webp" type="image/webp" />
+            <img src="/assets/penquee_logo.png" width={481} height={150} className="h-11 w-auto object-contain" alt="Penquee" />
+          </picture>
+          <img
+            src="/assets/penquee-favicon.png"
+            width={36}
+            height={36}
+            className={`hidden h-9 w-9 object-contain ${sidebarCollapsed ? 'md:block' : ''}`}
+            alt="Penquee"
           />
         </div>
 

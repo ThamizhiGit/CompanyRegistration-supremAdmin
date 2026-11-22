@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { useMutation } from '@apollo/client/react';
+import { useApolloClient, useMutation } from '@apollo/client/react';
 import {
   Users,
   Receipt,
@@ -11,7 +11,8 @@ import {
   EyeOff,
 } from 'lucide-react';
 import { AdminDashboard } from './components/admin';
-import { TOKEN_AUTH_MUTATION } from './lib/graphql';
+import { SUPER_ADMIN_LOGOUT_MUTATION, TOKEN_AUTH_MUTATION } from './lib/graphql';
+import { abortAdminPageLoops } from './lib/useAllPagesQuery';
 
 const STORAGE = window.sessionStorage;
 const TOKEN_KEY = 'token';
@@ -49,6 +50,17 @@ export default function App() {
   const [adminUsername, setAdminUsername] = useState('');
   const [error, setError] = useState('');
   const [hide, setHide] = useState(true);
+  const client = useApolloClient();
+  // Signing out (or an expired session) must not leave the previous admin's
+  // data in the Apollo cache for whoever signs in next in this tab.
+  const endSession = (message = '') => {
+    // Stop page loops (lists still loading, exports) before the token goes.
+    abortAdminPageLoops();
+    clearAdminSession();
+    setAdminUsername('');
+    setError(message);
+    client.clearStore().catch(() => undefined);
+  };
 
   const [loginUser, { loading }] = useMutation<{
     superAdminTokenAuth: {
@@ -72,9 +84,7 @@ export default function App() {
     const expiresAt = STORAGE.getItem(ADMIN_EXPIRES_AT_KEY);
 
     if (token && storedUsername && isExpired(expiresAt)) {
-      clearAdminSession();
-      setAdminUsername('');
-      setError('Your session has expired. Please sign in again.');
+      endSession('Your session has expired. Please sign in again.');
       return;
     }
 
@@ -90,16 +100,12 @@ export default function App() {
 
     const delay = new Date(expiresAt).getTime() - Date.now();
     if (!Number.isFinite(delay) || delay <= 0) {
-      clearAdminSession();
-      setAdminUsername('');
-      setError('Your session has expired. Please sign in again.');
+      endSession('Your session has expired. Please sign in again.');
       return;
     }
 
     const timeoutId = window.setTimeout(() => {
-      clearAdminSession();
-      setAdminUsername('');
-      setError('Your session has expired. Please sign in again.');
+      endSession('Your session has expired. Please sign in again.');
     }, delay);
 
     return () => window.clearTimeout(timeoutId);
@@ -107,9 +113,7 @@ export default function App() {
 
   useEffect(() => {
     const handleExpiredSession = () => {
-      clearAdminSession();
-      setAdminUsername('');
-      setError('Your session has expired. Please sign in again.');
+      endSession('Your session has expired. Please sign in again.');
     };
 
     window.addEventListener('admin-session-expired', handleExpiredSession);
@@ -165,8 +169,15 @@ export default function App() {
   };
 
   const handleLogout = () => {
-    clearAdminSession();
-    setAdminUsername('');
+    // The server ends the token too (it would stay valid until it expires);
+    // sent with the token explicitly, as the session is cleared right away.
+    const token = STORAGE.getItem(TOKEN_KEY);
+    if (token) {
+      client
+        .mutate({ mutation: SUPER_ADMIN_LOGOUT_MUTATION, context: { headers: { 'X-SuperAdmin-Authorization': token } } })
+        .catch(() => undefined);
+    }
+    endSession();
   };
 
   if (adminUsername) {
@@ -194,7 +205,10 @@ export default function App() {
 
           {/* Upper: logo + headline + bento grid */}
           <div className="relative z-10 flex flex-col gap-6 lg:gap-8 max-w-lg">
-            <img src="/assets/penquee_logo.png" className="h-16 md:h-[72px] w-auto object-contain" alt="Penquee" />
+            <picture>
+              <source srcSet="/assets/penquee_logo.webp" type="image/webp" />
+              <img src="/assets/penquee_logo.png" width={481} height={150} className="h-16 md:h-[72px] w-auto object-contain" alt="Penquee" />
+            </picture>
             <div className="space-y-3">
               <h2 className="text-3xl lg:text-4xl xl:text-[42px] font-black leading-[1.1] tracking-tight text-slate-900">
                 Seamless registration for modern enterprises.
@@ -245,7 +259,10 @@ export default function App() {
           <div className="w-full max-w-lg py-6 relative lg:mt-20">
             <div className="space-y-8">
               <div className="space-y-2 lg:hidden mb-6">
-                <img src="/assets/penquee_logo.png" className="h-12 w-auto object-contain" alt="Penquee" />
+                <picture>
+                  <source srcSet="/assets/penquee_logo.webp" type="image/webp" />
+                  <img src="/assets/penquee_logo.png" width={481} height={150} className="h-12 w-auto object-contain" alt="Penquee" />
+                </picture>
               </div>
               <div className="space-y-2">
                 <h3 className="text-3xl font-black text-slate-900">Welcome back</h3>

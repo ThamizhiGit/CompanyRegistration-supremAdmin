@@ -19,7 +19,8 @@ test('company filters, detail edit, and payment history popups', async ({
   await expect(page.getByText('Acme Labs')).toBeVisible();
   await search.fill('no matching tenant');
   await expect(page.getByText('No companies match your filters')).toBeVisible();
-  await page.getByRole('button', { name: 'Clear' }).click();
+  // The toolbar's Clear (the empty table row has its own Clear too).
+  await page.getByRole('button', { name: 'Clear' }).first().click();
   await expect(search).toHaveValue('');
 
   await page.locator('[title="Edit Company"]').click();
@@ -40,7 +41,7 @@ test('company filters, detail edit, and payment history popups', async ({
   await expect(page.getByText('Payment Detail')).toBeVisible();
   await expect(page.getByPlaceholder('Refund reason')).toBeVisible();
   await expect(page.getByRole('button', { name: /Apply refund/i })).toBeVisible();
-  await expect(page.getByText('Manual subscription trigger')).toBeVisible();
+  await expect(page.getByText('Manual subscription action')).toBeVisible();
   await expect(page.getByPlaceholder('Payment method')).toBeVisible();
   await expect(page.getByRole('button', { name: /Trigger Manual/i })).toBeVisible();
 });
@@ -50,7 +51,7 @@ test('companies page shows plan billing context and assigns plan', async ({
   mockApi,
 }) => {
   await page.getByRole('button', { name: 'Companies' }).click();
-  await expect(page.getByText('Premium')).toBeVisible();
+  await expect(page.getByText('Premium').first()).toBeVisible();
   await expect(page.getByText('42 employees')).toBeVisible();
 
   await page.locator('[title="Edit Company"]').click();
@@ -63,4 +64,131 @@ test('companies page shows plan billing context and assigns plan', async ({
     .poll(() => mockApi.lastVariables('AdminAssignCompanyPlan')?.planId)
     .toBe('free');
   expect(mockApi.lastVariables('AdminAssignCompanyPlan')?.companyId).toBe(12);
+});
+
+test('companies page shows each package and changes it with a module diff', async ({
+  adminPage: page,
+  mockApi,
+}) => {
+  await page.getByRole('button', { name: 'Companies' }).click();
+  await expect(page.getByRole('columnheader', { name: 'Package' })).toBeVisible();
+  const cell = page.getByTestId('package-cell-12');
+  await expect(cell).toContainText('Premium');
+  await expect(cell).toContainText('v1');
+  await expect(page.getByTestId('package-update-12')).toBeVisible();
+  await expect.poll(() => mockApi.lastVariables('AdminCompanyPackages')?.companyIds).toEqual([12]);
+
+  await page.getByTestId('change-package-12').click();
+  const dialog = page.getByTestId('change-package-dialog');
+  await dialog.getByTestId('change-package-plan').selectOption('premium_yearly');
+  await expect(dialog.getByTestId('change-package-interval')).toHaveValue('yearly');
+  await expect(dialog.getByTestId('change-package-diff')).toContainText('+ Invoicing & Statement of Accounts');
+  await expect(dialog.getByTestId('change-package-losses')).toContainText('Core HR & Employee Management');
+  await dialog.getByTestId('change-package-reason').fill('Customer upgraded');
+  await dialog.getByTestId('change-package-submit').click();
+
+  await expect.poll(() => mockApi.lastVariables('AdminAssignCompanyPlan')).toMatchObject({
+    companyId: 12,
+    planId: 'premium_yearly',
+    billingInterval: 'yearly',
+    reason: 'Customer upgraded',
+  });
+});
+
+test('changing the package of a pre-package company warns about what it loses', async ({
+  adminPage: page,
+  mockApi,
+}) => {
+  mockApi.companyPackages.set(12, {
+    companyId: 12, planId: 'premium', planName: 'Premium', billingInterval: 'monthly', planVersion: 0,
+    latestVersion: 2, updateAvailable: true, activeModules: [], unrestricted: true, access: 'legacy',
+    __typename: 'AdminCompanyPackage',
+  });
+  await page.getByRole('button', { name: 'Companies' }).click();
+  await expect(page.getByTestId('package-cell-12')).toContainText('All modules (legacy)');
+  await page.getByTestId('change-package-12').click();
+  const dialog = page.getByTestId('change-package-dialog');
+  await dialog.getByTestId('change-package-plan').selectOption('free');
+  await expect(dialog.getByTestId('change-package-legacy-warning')).toBeVisible();
+  // Everything outside the Free package is listed as lost (not only gains).
+  await expect(dialog.getByTestId('change-package-losses')).toContainText('Project Management');
+  await expect(dialog.getByTestId('change-package-losses')).toContainText('AI Workforce Intelligence');
+});
+
+test('the package dialog reuses the module and package lists instead of downloading them each time', async ({
+  adminPage: page,
+  mockApi,
+}) => {
+  await page.getByRole('button', { name: 'Companies' }).click();
+  const dialog = page.getByTestId('change-package-dialog');
+  const countOf = (operation: string) => mockApi.requests.get(operation)?.length ?? 0;
+
+  await page.getByTestId('change-package-12').click();
+  await expect(dialog.getByTestId('change-package-plan')).toBeVisible();
+  await expect.poll(() => countOf('AdminPlansPackaging')).toBeGreaterThan(0);
+  const modules = countOf('AdminPackageModules');
+  const plans = countOf('AdminPlansPackaging');
+  await dialog.getByRole('button', { name: 'Cancel' }).click();
+  await expect(dialog).toHaveCount(0);
+
+  await page.getByTestId('change-package-12').click();
+  await expect(dialog.getByTestId('change-package-plan')).toBeVisible();
+  await dialog.getByTestId('change-package-plan').selectOption('premium_yearly');
+  await expect(dialog.getByTestId('change-package-diff')).toContainText('+ Invoicing & Statement of Accounts');
+  expect(countOf('AdminPackageModules')).toBe(modules);
+  expect(countOf('AdminPlansPackaging')).toBe(plans);
+});
+
+test('the package dialog shows the price and does not pre-select a package for a company without one', async ({
+  adminPage: page,
+  mockApi,
+}) => {
+  mockApi.companies.push({ ...mockApi.companies[0], id: 13, company: 'Legacy Co', planId: null as any, planName: null as any });
+  await page.getByRole('button', { name: 'Companies' }).click();
+  await page.getByTestId('change-package-13').click();
+  const dialog = page.getByTestId('change-package-dialog');
+  // No silent "first package": the admin has to pick one.
+  await expect(dialog.getByTestId('change-package-plan')).toHaveValue('');
+  await expect(dialog.getByTestId('change-package-diff-pending')).toContainText('Choose a package');
+  await dialog.getByTestId('change-package-reason').fill('Move to a package');
+  await expect(dialog.getByTestId('change-package-submit')).toBeDisabled();
+
+  await dialog.getByTestId('change-package-plan').selectOption('premium');
+  await expect(dialog.getByTestId('change-package-price')).toHaveText('$12.00 / month per employee');
+  await dialog.getByTestId('change-package-plan').selectOption('premium_yearly');
+  await expect(dialog.getByTestId('change-package-price')).toHaveText('$120.00 / year');
+  await expect(dialog.getByTestId('change-package-submit')).toBeEnabled();
+});
+
+test('the package dialog waits for the module list before it previews or submits a change', async ({
+  adminPage: page,
+  mockApi,
+}) => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  mockApi.setOverride('AdminPackageModules', async (_payload, api) => {
+    await gate;
+    return { data: { adminModules: api.modules } };
+  });
+  await page.getByRole('button', { name: 'Companies' }).click();
+  await page.getByTestId('change-package-12').click();
+  const dialog = page.getByTestId('change-package-dialog');
+  await dialog.getByTestId('change-package-plan').selectOption('premium_yearly');
+  await dialog.getByTestId('change-package-reason').fill('Customer upgraded');
+  await expect(dialog.getByTestId('change-package-diff-pending')).toHaveText('Loading the change preview…');
+  await expect(dialog.getByTestId('change-package-submit')).toBeDisabled();
+  release();
+  await expect(dialog.getByTestId('change-package-losses')).toContainText('Core HR & Employee Management');
+  await expect(dialog.getByTestId('change-package-submit')).toBeEnabled();
+});
+
+test('the next billing amount is shown in the company billing currency', async ({ adminPage: page, mockApi }) => {
+  Object.assign(mockApi.companies[0], { currency: 'EUR', nextBillingAmountCents: 50400, latestPaymentCurrency: 'USD' });
+  await page.getByRole('button', { name: 'Companies' }).click();
+  await page.locator('[title="View Company"]').click();
+  await page.getByRole('button', { name: 'Subscription', exact: true }).click();
+  const row = page.locator('dl > div').filter({ hasText: 'Next billing amount' });
+  await expect(row.locator('dd')).toHaveText('€504.00');
 });

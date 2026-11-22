@@ -3,27 +3,49 @@ import { useQuery } from '@apollo/client/react';
 import { ADMIN_REVENUE_SUMMARY_QUERY } from '../../../lib/graphql';
 import { formatPrice } from '../../../lib/admin-utils';
 import { Building2, CreditCard, ReceiptText, TrendingUp, Users, WalletCards, type LucideIcon } from 'lucide-react';
+import { DataTable } from '../ui/DataTable';
 
 interface RevenueStatusSummary {
   status: string;
+  currency?: string | null;
   count: number;
   amount: number;
+}
+
+/** Exact money in one currency (minor units). */
+interface CurrencyTotal {
+  currency: string;
+  gross: number;
+  refunded: number;
+  net: number;
 }
 
 interface RevenueSummary {
   totalCompanies: number;
   totalUsers: number;
   totalPayments: number;
+  /** Approximate USD (converted at stored rates), net of refunds. */
   grossRevenue: number;
+  refundedRevenue?: number | null;
   totalExpenses?: number | null;
   netRevenue?: number | null;
+  approximate?: boolean | null;
+  unconvertedCurrencies?: string[] | null;
+  revenueByCurrency?: CurrencyTotal[] | null;
+  expensesByCurrency?: CurrencyTotal[] | null;
   byStatus: RevenueStatusSummary[];
 }
+
+/** One line per currency; amounts in different currencies are never added up. */
+const currencyLines = (rows: CurrencyTotal[] | null | undefined, key: 'net' | 'gross' = 'net') =>
+  (rows || []).filter((row) => row[key]).map((row) => formatPrice(row[key], row.currency));
 
 interface DashboardCard {
   label: string;
   eyebrow: string;
   value: string | number;
+  /** Per-currency lines under the value. */
+  lines?: string[];
   icon: LucideIcon;
   panel: string;
   textColor: string;
@@ -65,6 +87,12 @@ export const Dashboard: React.FC = () => {
 
   const totalExpenses = summary.totalExpenses ?? 0;
   const netRevenue = summary.netRevenue ?? (summary.grossRevenue - totalExpenses);
+  // The single figures add currencies at stored rates: say so, and show the
+  // exact amount per currency under them.
+  const approx = summary.approximate ? '≈ ' : '';
+  const usd = (amount: number) => `${approx}${formatPrice(amount, 'USD')}`;
+  const revenueLines = currencyLines(summary.revenueByCurrency);
+  const expenseLines = currencyLines(summary.expensesByCurrency);
 
   const cards: DashboardCard[] = [
     {
@@ -99,8 +127,9 @@ export const Dashboard: React.FC = () => {
     },
     {
       label: 'Gross Revenue',
-      eyebrow: 'Total Amount',
-      value: formatPrice(summary.grossRevenue),
+      eyebrow: summary.approximate ? 'Net of refunds · approx. USD' : 'Net of refunds',
+      value: usd(summary.grossRevenue),
+      lines: revenueLines.length > 1 || summary.approximate ? revenueLines : undefined,
       icon: TrendingUp,
       panel: 'linear-gradient(135deg, #fff0f6 0%, #f8efff 100%)',
       textColor: '#c41463',
@@ -109,8 +138,9 @@ export const Dashboard: React.FC = () => {
     },
     {
       label: 'Total Expenses',
-      eyebrow: 'Total Amount',
-      value: formatPrice(totalExpenses),
+      eyebrow: summary.approximate ? 'Total Amount · approx. USD' : 'Total Amount',
+      value: usd(totalExpenses),
+      lines: expenseLines.length > 1 || summary.approximate ? expenseLines : undefined,
       icon: ReceiptText,
       panel: 'linear-gradient(135deg, #f7f0ff 0%, #eef2ff 100%)',
       textColor: '#6b2de6',
@@ -119,8 +149,8 @@ export const Dashboard: React.FC = () => {
     },
     {
       label: 'Net Revenue',
-      eyebrow: 'Net Amount',
-      value: formatPrice(netRevenue),
+      eyebrow: summary.approximate ? 'Net Amount · approx. USD' : 'Net Amount',
+      value: usd(netRevenue),
       icon: WalletCards,
       panel: netRevenue >= 0
         ? 'linear-gradient(135deg, #eefdf3 0%, #e7fbec 100%)'
@@ -170,46 +200,45 @@ export const Dashboard: React.FC = () => {
                 <p className="mt-1 truncate text-2xl font-black leading-7" style={{ color: card.textColor }} title={String(card.value)}>
                   {card.value}
                 </p>
+                {card.lines?.length ? (
+                  <ul className="mt-1 space-y-0.5 text-xs font-semibold" style={{ color: card.textColor }} data-testid={`currency-lines-${card.label}`}>
+                    {card.lines.map((line) => (
+                      <li key={line} className="truncate">{line}</li>
+                    ))}
+                  </ul>
+                ) : null}
               </div>
             </div>
           );
         })}
       </div>
 
+      {summary.approximate || summary.unconvertedCurrencies?.length ? (
+        <p className="text-xs text-slate-500" data-testid="fx-note">
+          USD totals are approximate: other currencies are converted at the stored exchange rates.
+          {summary.unconvertedCurrencies?.length
+            ? ` Not included (no rate): ${summary.unconvertedCurrencies.join(', ')}.`
+            : ''}
+        </p>
+      ) : null}
+
       {/* Payment Status Breakdown */}
       {summary.byStatus && summary.byStatus.length > 0 && (
-        <div className="bg-white rounded-lg border border-slate-200 p-6">
-          <h3 className="text-lg font-semibold text-slate-800 mb-4">Payment Status Breakdown</h3>
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr className="border-b border-slate-200">
-                  <th className="text-left py-3 px-4 font-semibold text-slate-700">Status</th>
-                  <th className="text-left py-3 px-4 font-semibold text-slate-700">Count</th>
-                  <th className="text-left py-3 px-4 font-semibold text-slate-700">Amount</th>
-                </tr>
-              </thead>
-              <tbody>
-                {summary.byStatus.map((row: any) => (
-                  <tr key={row.status} className="border-b border-slate-100 hover:bg-slate-50">
-                    <td className="py-3 px-4">
-                      <span className={`inline-block px-3 py-1 rounded-full text-sm font-medium ${
-                        row.status === 'succeeded' ? 'bg-emerald-50 text-emerald-700' :
-                        row.status === 'pending' ? 'bg-yellow-50 text-yellow-700' :
-                        row.status === 'failed' ? 'bg-red-50 text-red-700' :
-                        'bg-slate-50 text-slate-700'
-                      }`}>
-                        {row.status}
-                      </span>
-                    </td>
-                    <td className="py-3 px-4 font-medium text-slate-800">{row.count}</td>
-                    <td className="py-3 px-4 text-slate-700">{formatPrice(row.amount)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
+        <DataTable<NonNullable<typeof summary.byStatus>[number]>
+          testId="payment-status-table"
+          title="Payment Status Breakdown"
+          rows={summary.byStatus}
+          rowKey={(row) => `${row.status}-${row.currency || ''}`}
+          searchPlaceholder="Search status"
+          exportName="Payment status breakdown"
+          hidePagination
+          pageSize={0}
+          columns={[
+            { key: 'status', header: 'Status', sortable: true, filterable: true, status: true },
+            { key: 'count', header: 'Count', sortable: true, render: (row) => <span className="font-semibold">{row.count}</span> },
+            { key: 'amount', header: 'Amount', sortable: true, value: (row) => row.amount, exportValue: (row) => formatPrice(row.amount, row.currency || 'USD'), render: (row) => formatPrice(row.amount, row.currency || 'USD') },
+          ]}
+        />
       )}
 
     </div>

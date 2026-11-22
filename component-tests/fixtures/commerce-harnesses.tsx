@@ -1,27 +1,30 @@
 import React, { useState } from 'react';
 // Shared Apollo harnesses for commerce component scenarios.
 import { type MockedResponse } from '@apollo/client/testing';
-import { MockedProvider } from '@apollo/client/testing/react';
+import { SchemaMockedProvider } from './schema-mocks';
+import { companyFeedVariables, feedResult, paged, paymentFeedVariables } from './paging';
 import { Companies } from '../../src/components/admin/pages/Companies';
 import { Plans } from '../../src/components/admin/pages/Plans';
 import { Subscriptions } from '../../src/components/admin/pages/Subscriptions';
 import {
-  ADMIN_COMPANIES_QUERY,
+  ADMIN_COMPANIES_FEED_QUERY,
   ADMIN_COMPANY_PAYMENT_HISTORY_QUERY,
   ADMIN_DELETE_PLAN_MUTATION,
   ADMIN_MANUAL_SUBSCRIPTION_MUTATION,
-  ADMIN_PAYMENTS_QUERY,
+  ADMIN_PAYMENTS_FEED_QUERY,
   ADMIN_PLANS_QUERY,
   ADMIN_PROMO_CODES_QUERY,
   ADMIN_REQUEST_REFUND_MUTATION,
   ADMIN_SAVE_PROMO_CODE_MUTATION,
 } from '../../src/lib/graphql';
 
-type HarnessProps = { mocks?: MockedResponse[]; scenario?: 'loading' | 'error' | 'empty' | 'data' | 'actions' };
-
-const companyVariables = {
-  search: null, status: null, subscriptionStatus: null, dueDateFrom: null,
-  dueDateTo: null, recurringDateFrom: null, recurringDateTo: null,
+// 'slow-actions': like 'actions', but the refund / manual action answers take
+// a moment (a second request while one is in flight finds no mock and fails).
+type HarnessProps = {
+  mocks?: MockedResponse[];
+  scenario?: 'loading' | 'error' | 'empty' | 'data' | 'actions' | 'slow-actions';
+  /** Currency of the company's payment (default USD). */
+  paymentCurrency?: string;
 };
 
 export function PlansHarness({ mocks = [], scenario }: HarnessProps) {
@@ -33,19 +36,19 @@ export function PlansHarness({ mocks = [], scenario }: HarnessProps) {
   };
   const scenarioMocks: MockedResponse[] = scenario ? [
     {
-      request: { query: ADMIN_PLANS_QUERY, variables: { includeInactive: true, search: null, active: null } },
+      request: { query: ADMIN_PLANS_QUERY, variables: paged({ includeInactive: true, search: null, active: null }) },
       maxUsageCount: scenario === 'actions' ? 3 : 1,
       ...(scenario === 'loading' ? { delay: 60_000, result: { data: { adminPlans: [] } } } :
         scenario === 'error' ? { error: new Error('plans unavailable') } :
         { result: { data: { adminPlans: scenario === 'empty' ? [] : [plan] } } }),
     },
     {
-      request: { query: ADMIN_PROMO_CODES_QUERY, variables: { includeInactive: true, search: null, active: null, planId: null } },
+      request: { query: ADMIN_PROMO_CODES_QUERY, variables: paged({ includeInactive: true, search: null, active: null, planId: null }) },
       maxUsageCount: scenario === 'actions' ? 3 : 1,
       result: { data: { adminPromoCodes: [] } },
     },
     ...(scenario === 'data' ? [{
-      request: { query: ADMIN_PLANS_QUERY, variables: { includeInactive: true, search: 'does-not-exist', active: null } },
+      request: { query: ADMIN_PLANS_QUERY, variables: paged({ includeInactive: true, search: 'does-not-exist', active: null }) },
       result: { data: { adminPlans: [plan] } },
     }] : []),
     ...(scenario === 'actions' ? [
@@ -53,6 +56,7 @@ export function PlansHarness({ mocks = [], scenario }: HarnessProps) {
         request: {
           query: ADMIN_SAVE_PROMO_CODE_MUTATION,
           variables: { input: {
+            id: undefined, createOnly: true,
             code: 'SAVE20', name: '', discountType: 'percent', discountValue: 20, currency: 'USD',
             active: true, startsAt: null, endsAt: null, maxRedemptions: null, perEmailLimit: null,
             perCompanyLimit: null, firstTimeCustomerOnly: false, minimumAmountCents: null,
@@ -68,16 +72,16 @@ export function PlansHarness({ mocks = [], scenario }: HarnessProps) {
     ] : []),
   ] : mocks;
   return (
-    <MockedProvider mocks={scenarioMocks}>
+    <SchemaMockedProvider mocks={scenarioMocks}>
       <>
         <Plans onToast={(type, message) => setToast(`${type}: ${message}`)} />
         <output aria-label="toast">{toast}</output>
       </>
-    </MockedProvider>
+    </SchemaMockedProvider>
   );
 }
 
-export function CompaniesHarness({ mocks = [], scenario }: HarnessProps) {
+export function CompaniesHarness({ mocks = [], scenario, paymentCurrency = 'USD' }: HarnessProps) {
   const [toast, setToast] = useState('');
   const company = {
     id: 7, company: 'Acme Labs', planId: 'premium', planName: 'Premium', employeeCount: 12,
@@ -90,32 +94,40 @@ export function CompaniesHarness({ mocks = [], scenario }: HarnessProps) {
   const payment = {
     paymentIntentId: 'pi_acme', email: 'billing@acme.test', planId: 'premium', planName: 'Premium',
     employeeCountSnapshot: 12, originalAmountCents: 2500, finalAmountCents: 2500, status: 'succeeded',
-    amount: 2500, currency: 'USD', companyId: 7, companyName: 'Acme Labs', source: 'portal',
+    amount: 2500, currency: paymentCurrency, companyId: 7, companyName: 'Acme Labs', source: 'portal',
     createdAt: '2026-01-02T00:00:00.000Z', dueDate: '2026-08-01T12:00:00.000Z',
     recurringDate: '2026-09-01T12:00:00.000Z', deniedReason: null, gatewayMethod: 'card',
     gatewayRefReceiverMedium: 'merchant-7', gatewayRefSenderMedium: 'customer-7',
-    gatewayPayload: '{}', paymentGatewayStatus: 'settled',
+    gatewayPayload: '{}', paymentGatewayStatus: 'settled', refundedAmount: 0,
   };
+  const actions = scenario === 'actions' || scenario === 'slow-actions';
+  const actionDelay = scenario === 'slow-actions' ? { delay: 800 } : {};
   const scenarioMocks: MockedResponse[] = scenario ? [
     {
-      request: { query: ADMIN_COMPANIES_QUERY, variables: companyVariables },
-      maxUsageCount: scenario === 'actions' ? 3 : 1,
-      ...(scenario === 'loading' ? { delay: 60_000, result: { data: { adminCompanies: [] } } } :
+      request: { query: ADMIN_COMPANIES_FEED_QUERY, variables: companyFeedVariables() },
+      maxUsageCount: actions ? 3 : 1,
+      ...(scenario === 'loading' ? { delay: 60_000, result: feedResult('adminCompaniesFeed', []) } :
         scenario === 'error' ? { error: new Error('company service unavailable') } :
-        { result: { data: { adminCompanies: scenario === 'empty' ? [] : [company] } } }),
+        { result: feedResult('adminCompaniesFeed', scenario === 'empty' ? [] : [company]) }),
     },
     ...(scenario === 'data' ? [{
-      request: { query: ADMIN_COMPANIES_QUERY, variables: { ...companyVariables, search: 'missing' } },
-      result: { data: { adminCompanies: [company] } },
+      // The server searched: nothing matches.
+      request: { query: ADMIN_COMPANIES_FEED_QUERY, variables: companyFeedVariables({ search: 'missing' }) },
+      result: feedResult('adminCompaniesFeed', []),
     }] : []),
-    ...(scenario === 'actions' ? [
+    ...(actions ? [
       {
-        request: { query: ADMIN_COMPANY_PAYMENT_HISTORY_QUERY, variables: { companyId: 7, dateFrom: null, dateTo: null, status: null } },
+        request: { query: ADMIN_COMPANY_PAYMENT_HISTORY_QUERY, variables: paged({ companyId: 7, dateFrom: null, dateTo: null, status: null }) },
         maxUsageCount: 3,
         result: { data: { adminCompanyPaymentHistory: [payment] } },
       },
       {
         request: { query: ADMIN_REQUEST_REFUND_MUTATION, variables: { paymentIntentId: 'pi_acme', reason: 'Duplicate charge', amount: 1000 } },
+        ...actionDelay,
+        result: { data: { adminRequestRefund: { success: true, message: 'queued' } } },
+      },
+      {
+        request: { query: ADMIN_REQUEST_REFUND_MUTATION, variables: { paymentIntentId: 'pi_acme', reason: 'Admin requested refund', amount: null } },
         result: { data: { adminRequestRefund: { success: true, message: 'queued' } } },
       },
       {
@@ -124,21 +136,22 @@ export function CompaniesHarness({ mocks = [], scenario }: HarnessProps) {
           variables: {
             companyId: 7, subscriptionId: 'pi_acme', source: 'portal', paymentMethod: 'card',
             receiverMedium: 'merchant-7', senderMedium: 'customer-7',
-            gatewayPayload: JSON.stringify({ paymentIntentId: 'pi_acme', method: 'card', reason: 'Bank verified', source: 'portal' }),
+            gatewayPayload: { paymentIntentId: 'pi_acme', method: 'card', reason: 'Bank verified', source: 'portal' },
             reason: 'Bank verified',
           },
         },
-        result: { data: { adminManualSubscription: { success: true, message: 'recorded' } } },
+        ...actionDelay,
+        result: { data: { adminManualSubscriptionAction: { success: true, message: 'recorded', payment: null } } },
       },
     ] : []),
   ] : mocks;
   return (
-    <MockedProvider mocks={scenarioMocks}>
+    <SchemaMockedProvider mocks={scenarioMocks}>
       <>
         <Companies onToast={(type, message) => setToast(`${type}: ${message}`)} />
         <output aria-label="toast">{toast}</output>
       </>
-    </MockedProvider>
+    </SchemaMockedProvider>
   );
 }
 
@@ -154,25 +167,25 @@ export function SubscriptionsHarness({ mocks = [], scenario }: HarnessProps) {
     gatewayMethod: 'paypal', gatewayRefReceiverMedium: 'merchant@orbit.test',
     gatewayRefSenderMedium: 'payer@orbit.test', paymentGatewayStatus: 'pending',
   };
+  // No adminCompanies request any more: the payment row carries its company's name.
   const scenarioMocks: MockedResponse[] = scenario ? [
     {
-      request: { query: ADMIN_PAYMENTS_QUERY, variables: { status: null, companyId: null, dateFrom: null, dateTo: null, search: null } },
-      ...(scenario === 'loading' ? { delay: 60_000, result: { data: { adminPayments: [] } } } :
+      request: { query: ADMIN_PAYMENTS_FEED_QUERY, variables: paymentFeedVariables() },
+      ...(scenario === 'loading' ? { delay: 60_000, result: feedResult('adminPaymentsFeed', []) } :
         scenario === 'error' ? { error: new Error('payments unavailable') } :
-        { result: { data: { adminPayments: scenario === 'empty' ? [] : [payment] } } }),
+        { result: feedResult('adminPaymentsFeed', scenario === 'empty' ? [] : [payment]) }),
     },
     ...(scenario === 'data' ? [{
-      request: { query: ADMIN_PAYMENTS_QUERY, variables: { status: null, companyId: null, dateFrom: null, dateTo: null, search: 'unknown' } },
-      result: { data: { adminPayments: [payment] } },
+      request: { query: ADMIN_PAYMENTS_FEED_QUERY, variables: paymentFeedVariables({ search: 'unknown' }) },
+      result: feedResult('adminPaymentsFeed', []),
     }] : []),
-    { request: { query: ADMIN_COMPANIES_QUERY, variables: companyVariables }, result: { data: { adminCompanies: scenario === 'empty' ? [] : [{ id: 42, company: 'Orbit Works' }] } } },
   ] : mocks;
   return (
-    <MockedProvider mocks={scenarioMocks}>
+    <SchemaMockedProvider mocks={scenarioMocks}>
       <>
         <Subscriptions onToast={(type, message) => setToast(`${type}: ${message}`)} />
         <output aria-label="toast">{toast}</output>
       </>
-    </MockedProvider>
+    </SchemaMockedProvider>
   );
 }

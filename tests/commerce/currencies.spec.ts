@@ -1,0 +1,119 @@
+import { test, expect } from '../fixtures/graphql.fixture';
+
+test('currencies page lists rates with a checkout-rounded preview', async ({ adminPage: page }) => {
+  await page.getByRole('button', { name: 'Currencies' }).click();
+  await expect(page.getByRole('heading', { name: 'Currencies' })).toBeVisible();
+  await expect(page.getByTestId('currency-preview-LKR')).toHaveText('LKR 3,600.00');
+  // Zero-decimal currencies are whole units: 12 USD = ¥1,800, not ¥18.
+  await expect(page.getByTestId('currency-preview-JPY')).toHaveText('¥1,800');
+  await expect(page.getByTestId('currency-row-JPY')).toContainText('Placeholder (not checked yet)');
+  await expect(page.getByTestId('currency-toggle-USD')).toBeDisabled();
+});
+
+test('switching a currency on and refreshing rates', async ({ adminPage: page, mockApi }) => {
+  await page.getByRole('button', { name: 'Currencies' }).click();
+  // JPY still has its placeholder (seed) rate: switching it on asks first.
+  await page.getByTestId('currency-toggle-JPY').click();
+  await expect(page.getByTestId('confirm-dialog-message')).toContainText('JPY still has a placeholder rate (1 USD = 150 JPY)');
+  await page.getByTestId('confirm-dialog-ok').click();
+  await expect.poll(() => mockApi.lastVariables('AdminSaveCurrencyRate')).toMatchObject({
+    code: 'JPY',
+    active: true,
+    confirmed: true,
+  });
+
+  await page.getByTestId('currencies-refresh').click();
+  await expect(page.getByText('Updated 1 currency(s).')).toBeVisible();
+});
+
+test('switching a currency off asks first', async ({ adminPage: page, mockApi }) => {
+  await page.getByRole('button', { name: 'Currencies' }).click();
+
+  await page.getByTestId('currency-toggle-LKR').click();
+  await page.getByTestId('confirm-dialog-cancel').click();
+  await expect(page.getByTestId('currency-toggle-LKR')).toHaveText('On');
+  expect(mockApi.lastVariables('AdminSaveCurrencyRate')).toBeUndefined();
+
+  await page.getByTestId('currency-toggle-LKR').click();
+  await expect(page.getByTestId('confirm-dialog-message')).toContainText('Switch LKR off?');
+  await page.getByTestId('confirm-dialog-ok').click();
+  await expect.poll(() => mockApi.lastVariables('AdminSaveCurrencyRate')).toMatchObject({ code: 'LKR', active: false });
+});
+
+test('a placeholder rate is not switched on when the admin cancels', async ({ adminPage: page, mockApi }) => {
+  await page.getByRole('button', { name: 'Currencies' }).click();
+  await page.getByTestId('currency-toggle-JPY').click();
+  await page.getByTestId('confirm-dialog-cancel').click();
+  await expect(page.getByTestId('currency-toggle-JPY')).toHaveText('Off');
+  expect(mockApi.lastVariables('AdminSaveCurrencyRate')).toBeUndefined();
+
+  // Same from the edit form (rate left as it is, "offered" ticked).
+  await page.getByTestId('currency-edit-JPY').click();
+  await page.getByTestId('currency-active').check();
+  await page.getByTestId('currency-save').click();
+  await page.getByTestId('confirm-dialog-cancel').click();
+  await expect(page.getByTestId('currency-save')).toBeVisible();
+  expect(mockApi.lastVariables('AdminSaveCurrencyRate')).toBeUndefined();
+});
+
+test('a typed rate far from the current one asks first, showing old and new', async ({ adminPage: page, mockApi }) => {
+  await page.getByRole('button', { name: 'Currencies' }).click();
+  await page.getByTestId('currency-edit-LKR').click();
+  // 3.0 typed instead of 300: checkout would be 100 times cheaper.
+  await page.getByTestId('currency-rate').fill('3.0');
+  await page.getByTestId('currency-save').click();
+  const question = page.getByTestId('confirm-dialog-message');
+  await expect(question).toContainText('-99%');
+  await expect(question).toContainText('Current: 1 USD = 300 LKR');
+  await expect(question).toContainText('New: 1 USD = 3.0 LKR');
+  await page.getByTestId('confirm-dialog-cancel').click();
+  expect(mockApi.lastVariables('AdminSaveCurrencyRate')).toBeUndefined();
+
+  await page.getByTestId('currency-save').click();
+  await page.getByTestId('confirm-dialog-ok').click();
+  // The server asks for the confirmation too.
+  await expect.poll(() => mockApi.lastVariables('AdminSaveCurrencyRate')).toMatchObject({
+    code: 'LKR',
+    ratePerUsd: '3.0',
+    confirmed: true,
+  });
+});
+
+test('a typed rate is pinned', async ({ adminPage: page, mockApi }) => {
+  await page.getByRole('button', { name: 'Currencies' }).click();
+  await page.getByTestId('currency-edit-LKR').click();
+  // Within 20% of the current 300: saved without a question.
+  await page.getByTestId('currency-rate').fill('301.5');
+  await expect(page.getByTestId('currency-pinned')).toBeChecked();
+  await page.getByTestId('currency-save').click();
+  await expect.poll(() => mockApi.lastVariables('AdminSaveCurrencyRate')).toMatchObject({
+    code: 'LKR',
+    ratePerUsd: '301.5',
+    isManual: true,
+    confirmed: false,
+  });
+  await expect(page.getByTestId('confirm-dialog')).toHaveCount(0);
+});
+
+test('adding a currency that is already listed does not overwrite it', async ({ adminPage: page, mockApi }) => {
+  await page.getByRole('button', { name: 'Currencies' }).click();
+  await page.getByRole('button', { name: /Add currency/i }).click();
+  await page.getByTestId('currency-code').fill('LKR');
+  await page.getByTestId('currency-rate').fill('1');
+  await page.getByTestId('currency-save').click();
+  await expect(page.getByText('LKR is already in the list. Edit that row instead.')).toBeVisible();
+  expect(mockApi.lastVariables('AdminSaveCurrencyRate')).toBeUndefined();
+});
+
+test('a decimal "round up to" is refused before it reaches the API (an Int there)', async ({ adminPage: page, mockApi }) => {
+  await page.getByRole('button', { name: 'Currencies' }).click();
+  await page.getByTestId('currency-edit-LKR').click();
+  await page.getByTestId('currency-round-to').fill('2.5');
+  await page.getByTestId('currency-save').click();
+  await expect(page.getByText('Round prices up to must be a whole number (0 or more).')).toBeVisible();
+  expect(mockApi.lastVariables('AdminSaveCurrencyRate')).toBeUndefined();
+
+  await page.getByTestId('currency-round-to').fill('5');
+  await page.getByTestId('currency-save').click();
+  await expect.poll(() => mockApi.lastVariables('AdminSaveCurrencyRate')).toMatchObject({ code: 'LKR', roundTo: 5 });
+});

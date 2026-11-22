@@ -1,10 +1,11 @@
 import React, { useMemo, useState } from 'react';
 import { useQuery } from '@apollo/client/react';
-import { BarChart3, CalendarDays, Download, FileText, ReceiptText, WalletCards } from 'lucide-react';
+import { BarChart3, CalendarDays, FileText, ReceiptText, WalletCards } from 'lucide-react';
 import { ADMIN_ACCOUNTS_REPORT_QUERY } from '../../../lib/graphql';
 import { formatPrice } from '../../../lib/admin-utils';
 import { Infrastructure } from './Infrastructure';
 import { Expenses } from './Expenses';
+import { DataTable } from '../ui/DataTable';
 
 type AccountsTab = 'overview' | 'expenses' | 'monthly' | 'annual';
 type ReportSortKey = 'label' | 'income' | 'expense' | 'net';
@@ -102,27 +103,6 @@ const AccountsReportTable: React.FC<{ period: 'monthly' | 'annual' }> = ({ perio
     });
   }, [report?.rows, sortKey, sortDirection]);
 
-  const cycleSort = (key: ReportSortKey) => {
-    if (sortKey !== key) {
-      setSortKey(key);
-      setSortDirection('asc');
-      return;
-    }
-    setSortDirection((current) => current === 'asc' ? 'desc' : current === 'desc' ? null : 'asc');
-  };
-
-  const SortHeader = ({ label, column, numeric = false }: { label: string; column: ReportSortKey; numeric?: boolean }) => (
-    <button
-      type="button"
-      onClick={() => cycleSort(column)}
-      className={`inline-flex w-full items-center gap-1 text-sm font-semibold ${
-        numeric ? 'justify-end text-right' : 'justify-start text-left'
-      } ${sortKey === column && sortDirection ? 'text-cyan-700' : 'text-slate-700'}`}
-    >
-      <span>{label}</span>
-      <span className="text-[10px]">{sortKey === column && sortDirection ? (sortDirection === 'asc' ? '▲' : '▼') : '↕'}</span>
-    </button>
-  );
 
   const exportRows = () => {
     if (!report) return [];
@@ -157,7 +137,7 @@ const AccountsReportTable: React.FC<{ period: 'monthly' | 'annual' }> = ({ perio
     const tableRows = rows.map((row) => (
       `<tr><td>${escapeHtml(row.Period)}</td><td>${row.Income.toFixed(2)}</td><td>${row.Expense.toFixed(2)}</td><td>${row.Net.toFixed(2)}</td></tr>`
     )).join('');
-    const printWindow = window.open('', '_blank', 'noopener,noreferrer,width=1024,height=768');
+    const printWindow = window.open('', '_blank', 'width=1024,height=768');
     if (!printWindow) return;
     printWindow.document.write(`
       <!doctype html>
@@ -193,22 +173,22 @@ const AccountsReportTable: React.FC<{ period: 'monthly' | 'annual' }> = ({ perio
     <div className="space-y-6">
       <div className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-3 lg:flex-row lg:items-end lg:justify-between">
         <div className="grid flex-1 grid-cols-1 gap-3 sm:grid-cols-3">
-          <label className="text-sm font-semibold text-slate-700">
+          <label className="text-[11.5px] font-semibold uppercase tracking-[0.02em] text-slate-500">
             Year
             <input
               type="number"
               value={year}
               onChange={(event) => setYear(Number(event.target.value) || now.getFullYear())}
-              className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
+              className="mt-1 w-full min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
             />
           </label>
           {period === 'monthly' && (
-            <label className="text-sm font-semibold text-slate-700">
+            <label className="text-[11.5px] font-semibold uppercase tracking-[0.02em] text-slate-500">
               Month
               <select
                 value={month}
                 onChange={(event) => setMonth(Number(event.target.value))}
-                className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
+                className="mt-1 w-full min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
               >
                 {months.map((label, index) => (
                   <option key={label} value={index + 1}>{label}</option>
@@ -216,41 +196,17 @@ const AccountsReportTable: React.FC<{ period: 'monthly' | 'annual' }> = ({ perio
               </select>
             </label>
           )}
-          <label className="text-sm font-semibold text-slate-700">
+          <label className="text-[11.5px] font-semibold uppercase tracking-[0.02em] text-slate-500">
             Group
             <select
               value={groupBy}
               onChange={(event) => setGroupBy(event.target.value as 'default' | 'week')}
-              className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
+              className="mt-1 w-full min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
             >
               <option value="default">{period === 'monthly' ? 'Day wise' : 'Month wise'}</option>
               <option value="week">Week wise</option>
             </select>
           </label>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <button
-            onClick={() => refetch(variables)}
-            className="inline-flex h-9 items-center rounded-lg border border-slate-200 px-4 text-sm font-bold text-slate-700 hover:bg-slate-50"
-          >
-            Refresh
-          </button>
-          <button
-            onClick={exportExcel}
-            disabled={!report}
-            className="inline-flex h-9 items-center gap-2 rounded-lg border border-slate-200 px-4 text-sm font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-          >
-            <Download className="h-4 w-4" />
-            Excel
-          </button>
-          <button
-            onClick={exportPdf}
-            disabled={!report}
-            className="inline-flex h-9 items-center gap-2 rounded-lg border border-slate-200 px-4 text-sm font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-          >
-            <FileText className="h-4 w-4" />
-            PDF
-          </button>
         </div>
       </div>
 
@@ -279,34 +235,50 @@ const AccountsReportTable: React.FC<{ period: 'monthly' | 'annual' }> = ({ perio
             </div>
           </div>
 
-          <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
-            <div className="overflow-x-auto">
-            <table className="w-full min-w-[680px]">
-              <thead className="bg-slate-50">
-                <tr>
-                  <th className="px-4 py-3"><SortHeader label="Period" column="label" /></th>
-                  <th className="px-4 py-3"><SortHeader label="Income" column="income" numeric /></th>
-                  <th className="px-4 py-3"><SortHeader label="Expense" column="expense" numeric /></th>
-                  <th className="px-4 py-3"><SortHeader label="Net" column="net" numeric /></th>
-                </tr>
-              </thead>
-              <tbody>
-                {sortedRows.length === 0 ? (
-                  <tr>
-                    <td colSpan={4} className="px-4 py-10 text-center text-slate-500">No report rows available</td>
-                  </tr>
-                ) : sortedRows.map((row) => (
-                  <tr key={row.label} className="border-t border-slate-100">
-                    <td className="px-4 py-3 text-slate-800">{row.label}</td>
-                    <td className="px-4 py-3 text-right text-slate-700">{formatPrice(row.income)}</td>
-                    <td className="px-4 py-3 text-right text-slate-700">{formatPrice(row.expense)}</td>
-                    <td className={`px-4 py-3 text-right font-semibold ${row.net >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>{formatPrice(row.net)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            </div>
-          </div>
+          <DataTable<ReportRow>
+            testId="accounts-report-table"
+            title={`${title} · ${subtitle}`}
+            rows={sortedRows}
+            rowKey={(row) => row.label}
+            searchPlaceholder="Search periods"
+            sort={sortDirection ? { key: sortKey, dir: sortDirection } : null}
+            onSortChange={(next) => {
+              if (next) {
+                setSortKey(next.key as ReportSortKey);
+                setSortDirection(next.dir);
+              } else {
+                setSortDirection(null);
+              }
+            }}
+            onRefresh={() => refetch(variables)}
+            onExport={exportExcel}
+            headerActions={(
+              <button
+                type="button"
+                onClick={exportPdf}
+                className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-slate-200/60 bg-slate-50 px-3 text-[13px] font-medium text-slate-500 transition-all hover:bg-slate-100 hover:text-slate-700"
+              >
+                <FileText className="h-[15px] w-[15px]" />
+                PDF
+              </button>
+            )}
+            emptyMessage="No report rows available"
+            pageSize={0}
+            hidePagination
+            minWidth="680px"
+            columns={[
+              { key: 'label', header: 'Period', sortable: true, render: (row) => <span className="font-semibold">{row.label}</span> },
+              { key: 'income', header: 'Income', sortable: true, align: 'right', render: (row) => formatPrice(row.income) },
+              { key: 'expense', header: 'Expense', sortable: true, align: 'right', render: (row) => formatPrice(row.expense) },
+              {
+                key: 'net',
+                header: 'Net',
+                sortable: true,
+                align: 'right',
+                render: (row) => <span className={`font-semibold ${row.net >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>{formatPrice(row.net)}</span>,
+              },
+            ]}
+          />
         </>
       ) : null}
     </div>
@@ -319,7 +291,7 @@ export const Accounts: React.FC<AccountsProps> = ({ onToast }) => {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-2xl font-bold text-slate-800">Accounts</h2>
+        <h2 className="text-2xl font-semibold text-gray-700">Accounts</h2>
         <p className="text-slate-600">Infrastructure, expenses, and period reports in one place</p>
       </div>
 

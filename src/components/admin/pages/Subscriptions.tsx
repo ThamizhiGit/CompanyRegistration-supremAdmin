@@ -1,9 +1,8 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { useQuery, useMutation } from '@apollo/client/react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useMutation } from '@apollo/client/react';
 import {
-  ADMIN_PAYMENTS_QUERY,
+  ADMIN_PAYMENTS_FEED_QUERY,
   ADMIN_UPDATE_PAYMENT_STATUS_MUTATION,
-  ADMIN_COMPANIES_QUERY,
   ADMIN_UPDATE_COMPANY_SUBSCRIPTION_MUTATION,
   ADMIN_SUSPEND_COMPANY_MUTATION,
   ADMIN_RESUME_COMPANY_MUTATION,
@@ -18,28 +17,44 @@ import {
   Download,
   Edit2,
   Eye,
-  Filter,
   Landmark,
-  Printer,
-  RefreshCw,
-  Search,
+  Layers,
   X,
 } from 'lucide-react';
-import { buildColumnFilterOptions, ColumnFilter, matchesColumnFilter } from '../ColumnFilter';
+import { ColumnFilter } from '../ColumnFilter';
+import { ChangePackageDialog, PackageCell, useCompanyPackages } from './PackageBuilder';
+import { EXPORT_ROW_CAP, facetOptions, InlineSpinner, isAbortError, Pager, useFeedExport, usePagedQuery } from '../../../lib/useAllPagesQuery';
+import { DataTable, RowActionButton, StatusBadge, type DataTableSort } from '../ui/DataTable';
+
+const filterInputClass =
+  'h-8 w-full rounded-lg border border-slate-200 bg-white px-2 text-xs text-slate-700 outline-none focus:border-sky-400 focus:ring-2 focus:ring-sky-100';
+
+/** The payload of an admin mutation: `success: false` is a refusal, not a success. */
+type ActionPayload = { success?: boolean | null; message?: string | null } | null | undefined;
+const refusal = (payload: ActionPayload, fallback: string) =>
+  payload && payload.success === false ? payload.message || fallback : null;
 
 type PaymentStatus = 'pending' | 'succeeded' | 'failed' | 'refunded' | null;
 type SortDirection = 'asc' | 'desc' | null;
 type PaymentSortKey = 'displayCompanyName' | 'email' | 'planName' | 'amount' | 'dueDate' | 'trialEndsAt' | 'status' | 'createdAt';
 
 interface PaymentType {
+  invoiceNumber?: string | null;
+  receiptNumber?: string | null;
   paymentIntentId: string;
   email: string;
   planId?: string | null;
   planName?: string | null;
   employeeCountSnapshot?: number | null;
   originalAmountCents?: number | null;
+  discountAmountCents?: number | null;
   finalAmountCents?: number | null;
+  billingInterval?: string | null;
+  promoCode?: string | null;
+  promoLabel?: string | null;
+  trialStartsAt?: string | null;
   trialEndsAt?: string | null;
+  nextBillingDate?: string | null;
   amount: number;
   currency: string;
   status: string;
@@ -54,8 +69,25 @@ interface PaymentType {
   gatewayMethod?: string | null;
   gatewayRefReceiverMedium?: string | null;
   gatewayRefSenderMedium?: string | null;
+  gatewayPayload?: Record<string, unknown> | string | null;
   paymentGatewayStatus?: string | null;
 }
+
+const getCardSummary = (payload: PaymentType['gatewayPayload']) => {
+  let parsed: unknown = payload;
+  if (typeof payload === 'string') {
+    try {
+      parsed = JSON.parse(payload);
+    } catch {
+      return '';
+    }
+  }
+  const card = parsed && typeof parsed === 'object' ? (parsed as { card?: Record<string, unknown> }).card : null;
+  if (!card || typeof card !== 'object' || !card.last4) return '';
+  const brand = String(card.brand || 'Card');
+  const expiry = card.exp_month && card.exp_year ? ` · exp ${card.exp_month}/${card.exp_year}` : '';
+  return `${brand.charAt(0).toUpperCase()}${brand.slice(1)} •••• ${card.last4}${expiry}`;
+};
 
 interface IndexedPaymentType extends PaymentType {
   searchableText: string;
@@ -126,15 +158,14 @@ export const Subscriptions: React.FC<{
   initialCompanyId?: number | null;
   initialCompanySearch?: string;
 }> = ({ onToast, initialCompanyId = null, initialCompanySearch = '' }) => {
-  const [companySelections, setCompanySelections] = useState<string[]>([]);
-  const [emailSelections, setEmailSelections] = useState<string[]>([]);
   const [planSelections, setPlanSelections] = useState<string[]>([]);
-  const [amountSelections, setAmountSelections] = useState<string[]>([]);
-  const [dueDateSelections, setDueDateSelections] = useState<string[]>([]);
-  const [trialEndSelections, setTrialEndSelections] = useState<string[]>([]);
   const [statusSelections, setStatusSelections] = useState<string[]>([]);
   const [gatewaySelections, setGatewaySelections] = useState<string[]>([]);
-  const [createdSelections, setCreatedSelections] = useState<string[]>([]);
+  // Amount (in major units, as typed) and created-date ranges, filtered by the server.
+  const [amountMin, setAmountMin] = useState('');
+  const [amountMax, setAmountMax] = useState('');
+  const [createdFrom, setCreatedFrom] = useState('');
+  const [createdTo, setCreatedTo] = useState('');
   const [companyIdFilter, setCompanyIdFilter] = useState<number | null>(initialCompanyId);
   const [companySearch, setCompanySearch] = useState(initialCompanySearch);
   const [statusOverrides, setStatusOverrides] = useState<Record<string, string>>({});
@@ -166,43 +197,82 @@ export const Subscriptions: React.FC<{
     setCompanySearch(initialCompanySearch || '');
   }, [initialCompanySearch]);
 
-  const paymentQueryVariables = {
-    status: null,
-    companyId: companyIdFilter,
-    dateFrom: null,
-    dateTo: null,
-    search: companySearch.trim() || null,
+  const toIsoDay = (value: string, endOfDay = false) => {
+    if (!value) return null;
+    const date = new Date(`${value}T${endOfDay ? '23:59:59.999' : '00:00:00'}`);
+    return Number.isNaN(date.getTime()) ? null : date.toISOString();
+  };
+  const toMinor = (value: string) => {
+    const amount = Number(value);
+    return value.trim() && Number.isFinite(amount) && amount >= 0 ? Math.round(amount * 100) : null;
+  };
+  const SERVER_SORT: Record<PaymentSortKey, string> = {
+    displayCompanyName: 'companyName',
+    email: 'email',
+    planName: 'planName',
+    amount: 'amount',
+    dueDate: 'dueDate',
+    trialEndsAt: 'trialEndsAt',
+    status: 'status',
+    createdAt: 'createdAt',
   };
 
-  const { data, loading, error, refetch } = useQuery<
-    { adminPayments: PaymentType[] },
-    { status: PaymentStatus; companyId: number | null; dateFrom: string | null; dateTo: string | null; search: string | null },
-    any
-  >(ADMIN_PAYMENTS_QUERY, {
-    variables: paymentQueryVariables,
-  });
-
-  const { data: companiesData } = useQuery<
-    { adminCompanies: CompanyType[] },
-    { search: string | null; status: string | null; subscriptionStatus: string | null; dueDateFrom: string | null; dueDateTo: string | null; recurringDateFrom: string | null; recurringDateTo: string | null },
-    any
-  >(ADMIN_COMPANIES_QUERY, {
-    variables: {
-      search: null,
-      status: null,
-      subscriptionStatus: null,
-      dueDateFrom: null,
-      dueDateTo: null,
-      recurringDateFrom: null,
-      recurringDateTo: null,
+  // One page of payments at a time: the server searches (company, email,
+  // intent id, invoice number), filters, sorts and counts.
+  const {
+    rows: paymentRows,
+    totalCount: paymentsTotal,
+    facets: paymentFacets,
+    page: paymentsPage,
+    setPage: setPaymentsPage,
+    pageSize: paymentsPageSize,
+    loading,
+    refreshing: paymentsRefreshing,
+    error,
+    refetch,
+    setSort: setServerSort,
+    variables: paymentFeedVariables,
+  } = usePagedQuery<PaymentType>(ADMIN_PAYMENTS_FEED_QUERY, 'adminPaymentsFeed', {
+    filter: {
+      companyId: companyIdFilter,
+      status: statusSelections,
+      planId: planSelections,
+      gateway: gatewaySelections,
+      amountMin: toMinor(amountMin),
+      amountMax: toMinor(amountMax),
+      dueOnly: dueOnly || null,
+      dateFrom: toIsoDay(createdFrom),
+      dateTo: toIsoDay(createdTo, true),
     },
+    textFilters: { search: companySearch },
+    initialSort: { field: 'createdAt', direction: 'desc' },
   });
+  const paymentExport = useFeedExport<PaymentType>(ADMIN_PAYMENTS_FEED_QUERY, 'adminPaymentsFeed', paymentFeedVariables);
 
-  const [updatePaymentStatus] = useMutation(ADMIN_UPDATE_PAYMENT_STATUS_MUTATION);
-  const [updateCompanySubscription] = useMutation(ADMIN_UPDATE_COMPANY_SUBSCRIPTION_MUTATION);
-  const [suspendCompany] = useMutation(ADMIN_SUSPEND_COMPANY_MUTATION);
-  const [resumeCompany] = useMutation(ADMIN_RESUME_COMPANY_MUTATION);
-  const [manualSubscriptionAction] = useMutation(ADMIN_MANUAL_SUBSCRIPTION_MUTATION);
+  const [updatePaymentStatus] = useMutation<{ adminUpdatePaymentStatus: ActionPayload }, Record<string, unknown>, any, any>(ADMIN_UPDATE_PAYMENT_STATUS_MUTATION);
+  const [updateCompanySubscription] = useMutation<{ adminUpdateCompanySubscription: ActionPayload }, Record<string, unknown>, any, any>(
+    ADMIN_UPDATE_COMPANY_SUBSCRIPTION_MUTATION,
+  );
+  const [suspendCompany] = useMutation<{ adminSuspendCompany: ActionPayload }, Record<string, unknown>, any, any>(ADMIN_SUSPEND_COMPANY_MUTATION);
+  const [resumeCompany] = useMutation<{ adminResumeCompany: ActionPayload }, Record<string, unknown>, any, any>(ADMIN_RESUME_COMPANY_MUTATION);
+  const [manualSubscriptionAction] = useMutation<{ adminManualSubscriptionAction: ActionPayload }, Record<string, unknown>, any, any>(
+    ADMIN_MANUAL_SUBSCRIPTION_MUTATION,
+  );
+  // Admin actions: one request at a time. The ref blocks a second click before
+  // React re-renders; `savingAction` disables the buttons meanwhile.
+  const actionInFlight = useRef(false);
+  const [savingAction, setSavingAction] = useState<string | null>(null);
+  const runAction = async (name: string, action: () => Promise<void>) => {
+    if (actionInFlight.current) return;
+    actionInFlight.current = true;
+    setSavingAction(name);
+    try {
+      await action();
+    } finally {
+      actionInFlight.current = false;
+      setSavingAction(null);
+    }
+  };
 
   const openEditPayment = (payment: IndexedPaymentType) => {
     setEditingPayment(payment);
@@ -233,47 +303,32 @@ export const Subscriptions: React.FC<{
 
   const handleStatusChange = async (paymentIntentId: string, newStatus: string) => {
     setStatusOverrides((current) => ({ ...current, [paymentIntentId]: newStatus }));
+    const dropOverride = () =>
+      setStatusOverrides((current) => {
+        const next = { ...current };
+        delete next[paymentIntentId];
+        return next;
+      });
     try {
-      await updatePaymentStatus({
+      const result = await updatePaymentStatus({
         variables: {
           paymentIntentId,
           status: newStatus,
           reason: newStatus === 'failed' ? 'manual_update_failed' : null,
         },
-        refetchQueries: [
-          {
-            query: ADMIN_PAYMENTS_QUERY,
-            variables: paymentQueryVariables,
-          },
-          {
-            query: ADMIN_COMPANIES_QUERY,
-            variables: {
-              search: null,
-              status: null,
-              subscriptionStatus: null,
-              dueDateFrom: null,
-              dueDateTo: null,
-              recurringDateFrom: null,
-              recurringDateTo: null,
-            },
-          },
-        ],
-        awaitRefetchQueries: true,
       });
+      const refused = refusal(result.data?.adminUpdatePaymentStatus, 'Payment status could not be updated');
+      if (refused) {
+        dropOverride();
+        onToast('error', refused);
+        return false;
+      }
       onToast('success', 'Payment status updated');
-      await refetch(paymentQueryVariables);
-      setStatusOverrides((current) => {
-        const next = { ...current };
-        delete next[paymentIntentId];
-        return next;
-      });
+      await refetch();
+      dropOverride();
       return true;
     } catch (err: any) {
-      setStatusOverrides((current) => {
-        const next = { ...current };
-        delete next[paymentIntentId];
-        return next;
-      });
+      dropOverride();
       onToast('error', err.message || 'Failed to update payment status');
       return false;
     }
@@ -294,7 +349,7 @@ export const Subscriptions: React.FC<{
       return;
     }
     try {
-      await updateCompanySubscription({
+      const result = await updateCompanySubscription({
         variables: {
           input: {
             companyId: payment.companyId,
@@ -303,8 +358,13 @@ export const Subscriptions: React.FC<{
           },
         },
       });
+      const refused = refusal(result.data?.adminUpdateCompanySubscription, 'Due date could not be updated');
+      if (refused) {
+        onToast('error', refused);
+        return;
+      }
       onToast('success', 'Due date updated');
-      await refetch(paymentQueryVariables);
+      await refetch();
       closeEditPayment();
     } catch (err: any) {
       onToast('error', err.message || 'Failed to update due date');
@@ -330,7 +390,7 @@ export const Subscriptions: React.FC<{
       return;
     }
     try {
-      await suspendCompany({
+      const result = await suspendCompany({
         variables: {
           companyId: payment.companyId,
           scope: scope.trim(),
@@ -338,8 +398,13 @@ export const Subscriptions: React.FC<{
           suspendedUntil,
         },
       });
+      const refused = refusal(result.data?.adminSuspendCompany, 'Company could not be suspended');
+      if (refused) {
+        onToast('error', refused);
+        return;
+      }
       onToast('success', 'Company suspended');
-      await refetch(paymentQueryVariables);
+      await refetch();
       closeEditPayment();
     } catch (err: any) {
       onToast('error', err.message || 'Failed to suspend company');
@@ -356,42 +421,52 @@ export const Subscriptions: React.FC<{
       return;
     }
     try {
-      await resumeCompany({
+      const result = await resumeCompany({
         variables: {
           companyId: payment.companyId,
           reason: reason.trim(),
         },
       });
+      const refused = refusal(result.data?.adminResumeCompany, 'Company could not be resumed');
+      if (refused) {
+        onToast('error', refused);
+        return;
+      }
       onToast('success', 'Company resumed');
-      await refetch(paymentQueryVariables);
+      await refetch();
       closeEditPayment();
     } catch (err: any) {
       onToast('error', err.message || 'Failed to resume company');
     }
   };
 
-  const submitStatusChange = async () => {
-    if (!editingPayment) return;
-    const updated = await handleStatusChange(editingPayment.paymentIntentId, editStatus);
-    if (updated) closeEditPayment();
-  };
+  const submitStatusChange = () =>
+    runAction('status', async () => {
+      if (!editingPayment) return;
+      const updated = await handleStatusChange(editingPayment.paymentIntentId, editStatus);
+      if (updated) closeEditPayment();
+    });
 
-  const submitDueDateChange = async () => {
-    if (!editingPayment) return;
-    await handleDueDateChange(editingPayment, editDueDate, editDueReason);
-  };
+  const submitDueDateChange = () =>
+    runAction('due', async () => {
+      if (!editingPayment) return;
+      await handleDueDateChange(editingPayment, editDueDate, editDueReason);
+    });
 
-  const submitSuspendCompany = async () => {
-    if (!editingPayment) return;
-    await handleSuspendCompany(editingPayment, suspendScope, suspendReason, suspendUntil);
-  };
+  const submitSuspendCompany = () =>
+    runAction('suspend', async () => {
+      if (!editingPayment) return;
+      await handleSuspendCompany(editingPayment, suspendScope, suspendReason, suspendUntil);
+    });
 
-  const submitResumeCompany = async () => {
-    if (!editingPayment) return;
-    await handleResumeCompany(editingPayment, resumeReason);
-  };
+  const submitResumeCompany = () =>
+    runAction('resume', async () => {
+      if (!editingPayment) return;
+      await handleResumeCompany(editingPayment, resumeReason);
+    });
 
-  const submitManualPayment = async () => {
+  const submitManualPayment = () => runAction('manual', recordManualPayment);
+  const recordManualPayment = async () => {
     if (!editingPayment) return;
     if (!editingPayment.companyId) {
       onToast('error', 'This payment is not linked to a company yet');
@@ -406,7 +481,7 @@ export const Subscriptions: React.FC<{
       return;
     }
     try {
-      await manualSubscriptionAction({
+      const result = await manualSubscriptionAction({
         variables: {
           companyId: editingPayment.companyId,
           subscriptionId: editingPayment.paymentIntentId,
@@ -414,7 +489,7 @@ export const Subscriptions: React.FC<{
           paymentMethod: manualPaymentMethod,
           receiverMedium: manualReceiver.trim() || null,
           senderMedium: manualSender.trim() || null,
-          gatewayPayload: JSON.stringify({
+          gatewayPayload: {
             method: manualPaymentMethod,
             source: manualSource,
             receiverMedium: manualReceiver.trim() || null,
@@ -422,187 +497,102 @@ export const Subscriptions: React.FC<{
             note: manualNote.trim(),
             paymentIntentId: editingPayment.paymentIntentId,
             recordedFrom: 'supreme_dashboard',
-          }),
+          },
           reason: manualReason.trim(),
         },
-        refetchQueries: [
-          {
-            query: ADMIN_PAYMENTS_QUERY,
-            variables: paymentQueryVariables,
-          },
-          {
-            query: ADMIN_COMPANIES_QUERY,
-            variables: {
-              search: null,
-              status: null,
-              subscriptionStatus: null,
-              dueDateFrom: null,
-              dueDateTo: null,
-              recurringDateFrom: null,
-              recurringDateTo: null,
-            },
-          },
-        ],
-        awaitRefetchQueries: true,
       });
+      // The server answers success: false when it refuses (e.g. an unknown
+      // payment): that is not a recorded payment.
+      const refused = refusal(result.data?.adminManualSubscriptionAction, 'Manual payment could not be recorded');
+      if (refused) {
+        onToast('error', refused);
+        return;
+      }
       onToast('success', 'Manual payment recorded');
-      await refetch(paymentQueryVariables);
+      await refetch();
       closeEditPayment();
     } catch (err: any) {
       onToast('error', err.message || 'Failed to record manual payment');
     }
   };
 
-  const payments = data?.adminPayments || [];
-  const companyNameById = useMemo(() => new Map(
-    (companiesData?.adminCompanies || [])
-      .filter((company) => company.company?.trim())
-      .map((company) => [company.id, company.company.trim()] as const)
-  ), [companiesData]);
+  const payments = paymentRows || [];
+  // Current package per company on screen (the payment row shows what was paid for).
+  const paymentCompanyIds = useMemo(
+    () => payments.map((payment) => Number(payment.companyId)).filter((id) => Number.isFinite(id) && id > 0),
+    [payments],
+  );
+  const { packages, failedIds: packageFailedIds, refetch: refetchPackages } = useCompanyPackages(paymentCompanyIds);
+  const [changingPackageFor, setChangingPackageFor] = useState<{ id: number; name: string } | null>(null);
   const getGatewayLabel = (payment: PaymentType) =>
     paymentMethodLabel(payment.gatewayMethod) || paymentMethodLabel(payment.source) || '-';
-  const getAmountFilterValue = (payment: PaymentType) =>
-    formatPrice(payment.finalAmountCents ?? payment.amount ?? 0, payment.currency || 'USD');
   const getPaymentStatus = (payment: PaymentType) => statusOverrides[payment.paymentIntentId] || payment.status;
+  // The payment row carries its company's name (no second list of every company).
   const getCompanyName = (payment: PaymentType) => {
     const paymentCompanyName = payment.companyName?.trim();
     if (paymentCompanyName && paymentCompanyName !== '-') return paymentCompanyName;
-    if (payment.companyId !== undefined && payment.companyId !== null) {
-      return companyNameById.get(payment.companyId) || `Company #${payment.companyId}`;
-    }
+    if (payment.companyId !== undefined && payment.companyId !== null) return `Company #${payment.companyId}`;
     return 'Unknown company';
   };
-  const normalizedCompanySearch = companySearch.trim().toLowerCase();
-  const indexedPayments = useMemo<IndexedPaymentType[]>(() => payments.map((payment) => {
+  const indexPayment = (payment: PaymentType): IndexedPaymentType => {
     const displayCompanyName = getCompanyName(payment);
     const effectiveStatus = getPaymentStatus(payment);
-    const planText = [payment.planId, payment.planName, payment.employeeCountSnapshot]
-      .filter(Boolean)
-      .join(' ');
-    const searchableText = [
-      displayCompanyName,
-      payment.email,
-      payment.paymentIntentId,
-      effectiveStatus,
-      planText,
-      payment.gatewayMethod,
-      payment.source,
-      payment.paymentGatewayStatus,
-    ]
-      .filter(Boolean)
-      .join(' ')
-      .toLowerCase();
-
     return {
       ...payment,
       status: effectiveStatus,
       displayCompanyName,
-      searchableText,
+      searchableText: [displayCompanyName, payment.email, payment.paymentIntentId].filter(Boolean).join(' ').toLowerCase(),
     };
-  }), [payments, companyNameById, statusOverrides]);
-  const companyOptions = useMemo(
-    () => buildColumnFilterOptions(indexedPayments, (payment) => payment.displayCompanyName),
-    [indexedPayments],
+  };
+  const indexedPayments = useMemo<IndexedPaymentType[]>(
+    () => payments.map(indexPayment),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [payments, statusOverrides],
   );
-  const emailOptions = useMemo(
-    () => buildColumnFilterOptions(indexedPayments, (payment) => payment.email || '-'),
-    [indexedPayments],
-  );
-  const planOptions = useMemo(
-    () => buildColumnFilterOptions(indexedPayments, (payment) => payment.planName || payment.planId || '-'),
-    [indexedPayments],
-  );
-  const amountOptions = useMemo(
-    () => buildColumnFilterOptions(indexedPayments, (payment) => getAmountFilterValue(payment)),
-    [indexedPayments],
-  );
-  const dueDateOptions = useMemo(
-    () => buildColumnFilterOptions(indexedPayments, (payment) => formatDate(payment.dueDate)),
-    [indexedPayments],
-  );
-  const trialEndOptions = useMemo(
-    () => buildColumnFilterOptions(indexedPayments, (payment) => formatDate(payment.trialEndsAt)),
-    [indexedPayments],
-  );
-  const statusOptions = useMemo(
-    () => buildColumnFilterOptions(indexedPayments, (payment) => payment.status),
-    [indexedPayments],
-  );
+  // Filter options come from the server (counts over every matching payment).
+  const planOptions = useMemo(() => facetOptions(paymentFacets, 'planId'), [paymentFacets]);
+  const statusOptions = useMemo(() => facetOptions(paymentFacets, 'status'), [paymentFacets]);
   const gatewayOptions = useMemo(
-    () => buildColumnFilterOptions(indexedPayments, (payment) => getGatewayLabel(payment)),
-    [indexedPayments],
-  );
-  const createdOptions = useMemo(
-    () => buildColumnFilterOptions(indexedPayments, (payment) => formatDate(payment.createdAt)),
-    [indexedPayments],
+    () => facetOptions(paymentFacets, 'gateway', (facet) => paymentMethodLabel(facet.value) || '-'),
+    [paymentFacets],
   );
 
   const filteredPayments = useMemo(() => {
     const seen = new Set<string>();
-    const dedupedPayments = indexedPayments.filter((payment) => {
+    return indexedPayments.filter((payment) => {
       if (seen.has(payment.paymentIntentId)) return false;
       seen.add(payment.paymentIntentId);
       return true;
     });
+  }, [indexedPayments]);
 
-    const searched = normalizedCompanySearch
-      ? dedupedPayments.filter((payment) => payment.searchableText.includes(normalizedCompanySearch))
-      : dedupedPayments;
-    const statusFiltered = searched.filter((payment) => (
-      matchesColumnFilter(companySelections, payment.displayCompanyName) &&
-      matchesColumnFilter(emailSelections, payment.email || '-') &&
-      matchesColumnFilter(planSelections, payment.planName || payment.planId || '-') &&
-      matchesColumnFilter(amountSelections, getAmountFilterValue(payment)) &&
-      matchesColumnFilter(dueDateSelections, formatDate(payment.dueDate)) &&
-      matchesColumnFilter(trialEndSelections, formatDate(payment.trialEndsAt)) &&
-      matchesColumnFilter(statusSelections, payment.status) &&
-      matchesColumnFilter(gatewaySelections, getGatewayLabel(payment)) &&
-      matchesColumnFilter(createdSelections, formatDate(payment.createdAt))
-    ));
-    const dueFiltered = !dueOnly ? statusFiltered : statusFiltered.filter((payment) => {
-      if (!payment.dueDate) return false;
-      return new Date(payment.dueDate).getTime() <= Date.now() && payment.status !== 'succeeded';
-    });
-    if (!sortDirection) return dueFiltered;
-    return [...dueFiltered].sort((a, b) => {
-      const left = sortKey === 'amount' ? (a.finalAmountCents ?? a.amount ?? 0) : a[sortKey];
-      const right = sortKey === 'amount' ? (b.finalAmountCents ?? b.amount ?? 0) : b[sortKey];
-      const leftValue = typeof left === 'string' ? left.toLowerCase() : Number(left ?? 0);
-      const rightValue = typeof right === 'string' ? right.toLowerCase() : Number(right ?? 0);
-      if (leftValue < rightValue) return sortDirection === 'asc' ? -1 : 1;
-      if (leftValue > rightValue) return sortDirection === 'asc' ? 1 : -1;
-      return 0;
-    });
-  }, [indexedPayments, normalizedCompanySearch, companySelections, emailSelections, planSelections, amountSelections, dueDateSelections, trialEndSelections, statusSelections, gatewaySelections, createdSelections, dueOnly, sortKey, sortDirection]);
-
-  const cycleSort = (key: PaymentSortKey) => {
-    if (sortKey !== key) {
-      setSortKey(key);
-      setSortDirection('asc');
+  // The server sorts (every page); no sort = newest first.
+  const changePaymentSort = (next: DataTableSort | null) => {
+    if (!next) {
+      setSortDirection(null);
+      setServerSort({ field: 'createdAt', direction: 'desc' });
       return;
     }
-    setSortDirection((current) => current === 'asc' ? 'desc' : current === 'desc' ? null : 'asc');
+    const key = next.key as PaymentSortKey;
+    setSortKey(key);
+    setSortDirection(next.dir);
+    setServerSort({ field: SERVER_SORT[key], direction: next.dir });
   };
 
-  const SortHeader = ({ label, column }: { label: string; column: PaymentSortKey }) => (
-    <button
-      type="button"
-      onClick={() => cycleSort(column)}
-      className={`inline-flex w-full items-center gap-1 text-left text-sm font-semibold ${
-        sortKey === column && sortDirection ? 'text-cyan-700' : 'text-slate-700'
-      }`}
-    >
-      <span>{label}</span>
-      <span className="text-[10px]">{sortKey === column && sortDirection ? (sortDirection === 'asc' ? '▲' : '▼') : '↕'}</span>
-    </button>
-  );
-
-  const exportPayments = () => {
-    if (!filteredPayments.length) {
+  // Every payment of the current filter (not only this page), up to EXPORT_ROW_CAP.
+  const exportPayments = async () => {
+    let exported: Awaited<ReturnType<typeof paymentExport.exportAll>>;
+    try {
+      exported = await paymentExport.exportAll();
+    } catch (err) {
+      if (!isAbortError(err)) onToast('error', (err as Error)?.message || 'Export failed');
+      return;
+    }
+    if (!exported.rows.length) {
       onToast('error', 'No data available to download');
       return;
     }
-    const rows = filteredPayments.map((payment) => (
+    const rows = exported.rows.map(indexPayment).map((payment) => (
       `<tr><td>${escapeHtml(payment.displayCompanyName)}</td><td>${escapeHtml(payment.email)}</td><td>${escapeHtml(payment.planName || payment.planId || '-')}</td><td>${escapeHtml(formatPrice(payment.finalAmountCents ?? payment.amount, payment.currency))}</td><td>${escapeHtml(payment.status)}</td><td>${escapeHtml(formatDate(payment.dueDate || null))}</td><td>${escapeHtml(formatDate(payment.createdAt))}</td></tr>`
     )).join('');
     downloadTextFile(
@@ -610,9 +600,15 @@ export const Subscriptions: React.FC<{
       `<!doctype html><html><head><meta charset="utf-8" /></head><body><table><thead><tr><th>Company</th><th>Email</th><th>Plan</th><th>Amount</th><th>Status</th><th>Due Date</th><th>Created</th></tr></thead><tbody>${rows}</tbody></table></body></html>`,
       'application/vnd.ms-excel;charset=utf-8',
     );
-    onToast('success', 'Excel file downloaded successfully!');
+    onToast(
+      'success',
+      exported.truncated
+        ? `Downloaded the first ${EXPORT_ROW_CAP} of ${exported.totalCount} payments; narrow the filters for the rest.`
+        : 'Excel file downloaded successfully!',
+    );
   };
 
+  // Prints the page on screen.
   const printPayments = () => {
     if (!filteredPayments.length) {
       onToast('error', 'No data available to print');
@@ -621,7 +617,7 @@ export const Subscriptions: React.FC<{
     const rows = filteredPayments.map((payment) => (
       `<tr><td>${escapeHtml(payment.displayCompanyName)}</td><td>${escapeHtml(payment.email)}</td><td>${escapeHtml(payment.planName || payment.planId || '-')}</td><td>${escapeHtml(formatPrice(payment.finalAmountCents ?? payment.amount, payment.currency))}</td><td>${escapeHtml(payment.status)}</td><td>${escapeHtml(formatDate(payment.dueDate || null))}</td></tr>`
     )).join('');
-    const printWindow = window.open('', '_blank', 'noopener,noreferrer,width=1024,height=768');
+    const printWindow = window.open('', '_blank', 'width=1024,height=768');
     if (!printWindow) return;
     printWindow.document.write(`<!doctype html><html><head><title>Subscriptions</title><style>body{font-family:Arial,sans-serif;padding:28px;color:#0f172a}table{border-collapse:collapse;width:100%}th,td{border:1px solid #cbd5e1;padding:8px 10px;text-align:left}th{background:#f1f5f9}</style></head><body><h1>Subscriptions & Payments</h1><table><thead><tr><th>Company</th><th>Email</th><th>Plan</th><th>Amount</th><th>Status</th><th>Due Date</th></tr></thead><tbody>${rows}</tbody></table></body></html>`);
     printWindow.document.close();
@@ -629,28 +625,57 @@ export const Subscriptions: React.FC<{
     printWindow.print();
   };
 
-  if (loading) return <div className="text-center py-12 text-slate-500">Loading subscriptions...</div>;
-  if (error) return <div className="text-center py-12 text-red-600">Error: {error.message}</div>;
-
   return (
     <div className="space-y-8">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h2 className="text-2xl font-bold text-slate-800">Subscriptions & Payments</h2>
+          <h2 className="text-2xl font-semibold text-gray-700">Subscriptions & Payments</h2>
           <p className="text-slate-600">Monitor plan billing, trial snapshots, and payment transactions</p>
         </div>
-        <button
-          onClick={() => refetch()}
-          className="flex items-center gap-2 px-4 py-2 hover:bg-slate-100 rounded-lg font-medium transition-colors"
-        >
-          <RefreshCw className="w-4 h-4" />
-          Refresh
-        </button>
       </div>
+      {error ? (
+        <p role="alert" className="flex flex-wrap items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          Error: {error.message}
+          <button type="button" onClick={() => refetch()} className="font-semibold underline">Try again</button>
+        </p>
+      ) : null}
 
-      <div className="rounded-xl border border-slate-200 bg-white p-3 space-y-3">
-        {companyIdFilter !== null && (
-          <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 flex items-center justify-between gap-3 text-sm text-blue-700">
+      <DataTable<IndexedPaymentType>
+        testId="payments-table"
+        rows={filteredPayments}
+        rowKey={(payment) => payment.paymentIntentId}
+        searchPlaceholder="Search company, plan, email..."
+        searchValue={companySearch}
+        onSearchChange={setCompanySearch}
+        filtersOpen={filtersOpen}
+        onFiltersToggle={(open) => {
+          if (!open) {
+            setPlanSelections([]);
+            setAmountMin('');
+            setAmountMax('');
+            setStatusSelections([]);
+            setGatewaySelections([]);
+            setCreatedFrom('');
+            setCreatedTo('');
+            setDueOnly(false);
+          }
+          setFiltersOpen(open);
+        }}
+        sort={sortDirection ? { key: sortKey, dir: sortDirection } : null}
+        onSortChange={changePaymentSort}
+        onRefresh={() => refetch()}
+        onPrint={printPayments}
+        headerActions={paymentExport.exporting ? (
+          <button type="button" onClick={paymentExport.cancel} className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-3 text-[13px] font-medium text-amber-800">
+            <X className="h-[15px] w-[15px]" /> Cancel export
+          </button>
+        ) : (
+          <button type="button" onClick={exportPayments} title="Export every matching payment" className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-slate-200/60 bg-slate-50 px-3 text-[13px] font-medium text-slate-500 transition-all hover:bg-slate-100 hover:text-slate-700">
+            <Download className="h-[15px] w-[15px]" /> Export all
+          </button>
+        )}
+        notice={companyIdFilter !== null ? (
+          <div className="flex items-center justify-between gap-3 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-[13px] text-sky-700">
             <div>Filtering subscriptions for Company ID: {companyIdFilter}</div>
             <button
               type="button"
@@ -658,246 +683,178 @@ export const Subscriptions: React.FC<{
                 setCompanyIdFilter(null);
                 setCompanySearch('');
               }}
-              className="inline-flex items-center gap-1 px-3 py-1 text-blue-700 border border-blue-200 rounded-lg hover:bg-blue-100"
+              className="inline-flex items-center gap-1 rounded-lg border border-sky-200 px-3 py-1 text-sky-700 hover:bg-sky-100"
             >
-              <X className="w-3.5 h-3.5" /> Clear company filter
+              <X className="h-3.5 w-3.5" /> Clear company filter
             </button>
           </div>
+        ) : null}
+        loading={loading}
+        loadingText={<InlineSpinner label="Loading subscriptions..." />}
+        emptyMessage={companySearch.trim() || planSelections.length || statusSelections.length || gatewaySelections.length || amountMin || amountMax || createdFrom || createdTo || dueOnly
+          ? 'No payments match your filters'
+          : 'No payments found'}
+        minWidth="1100px"
+        footer={(
+          <Pager
+            page={paymentsPage}
+            pageSize={paymentsPageSize}
+            totalCount={paymentsTotal}
+            onPage={setPaymentsPage}
+            refreshing={paymentsRefreshing}
+            what="payments"
+          />
         )}
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="relative min-w-[220px] max-w-[320px] flex-1">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-            <input
-              type="text"
-              value={companySearch}
-              onChange={(event) => setCompanySearch(event.target.value)}
-              placeholder="Search company, plan, email..."
-              className="h-9 w-full rounded-lg border border-slate-200 bg-slate-50 pl-9 pr-3 text-[13px] outline-none transition focus:border-cyan-400 focus:bg-white focus:ring-2 focus:ring-cyan-50"
-            />
-          </div>
-          <button
-            type="button"
-            onClick={() => setFiltersOpen((open) => {
-              if (open) {
-                setCompanySelections([]);
-                setEmailSelections([]);
-                setPlanSelections([]);
-                setAmountSelections([]);
-                setDueDateSelections([]);
-                setTrialEndSelections([]);
-                setStatusSelections([]);
-                setGatewaySelections([]);
-                setCreatedSelections([]);
-                setDueOnly(false);
-              }
-              return !open;
-            })}
-            aria-pressed={filtersOpen}
-            title="Filters"
-            className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border transition ${
-              filtersOpen
-                ? 'border-cyan-400 bg-cyan-50 text-cyan-600'
-                : 'border-slate-200 bg-slate-50 text-slate-400 hover:border-cyan-300 hover:text-cyan-500'
-            }`}
-          >
-            <Filter className="h-4 w-4" />
-          </button>
-          <button onClick={exportPayments} className="inline-flex h-9 items-center gap-2 rounded-lg border border-slate-200 px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">
-            <Download className="h-4 w-4" /> Excel
-          </button>
-          <button onClick={printPayments} className="inline-flex h-9 items-center gap-2 rounded-lg border border-slate-200 px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">
-            <Printer className="h-4 w-4" /> Print
-          </button>
-        </div>
-      </div>
-
-      <div className="bg-white rounded-lg border border-slate-200">
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[1020px]">
-              <thead className="bg-slate-50 border-b border-slate-200">
-                <tr>
-                  <th className="py-3 px-3"><SortHeader label="Company" column="displayCompanyName" /></th>
-                  <th className="py-3 px-3"><SortHeader label="Email" column="email" /></th>
-                  <th className="py-3 px-3"><SortHeader label="Plan" column="planName" /></th>
-                  <th className="py-3 px-3"><SortHeader label="Amount" column="amount" /></th>
-                  <th className="py-3 px-3"><SortHeader label="Due Date" column="dueDate" /></th>
-                  <th className="py-3 px-3"><SortHeader label="Trial End" column="trialEndsAt" /></th>
-                  <th className="py-3 px-3"><SortHeader label="Status" column="status" /></th>
-                  <th className="text-left py-3 px-3 font-semibold text-slate-700">Gateway</th>
-                  <th className="py-3 px-3"><SortHeader label="Created" column="createdAt" /></th>
-                  <th className="text-right py-3 px-3 font-semibold text-slate-700">Action</th>
-                </tr>
-                {filtersOpen ? (
-                <tr className="border-t border-slate-200 bg-white">
-                  <th className="px-3 py-2">
-                    <ColumnFilter
-                      label="Company"
-                      options={companyOptions}
-                      selectedValues={companySelections}
-                      onChange={setCompanySelections}
-                    />
-                  </th>
-                  <th className="px-3 py-2">
-                    <ColumnFilter
-                      label="Email"
-                      options={emailOptions}
-                      selectedValues={emailSelections}
-                      onChange={setEmailSelections}
-                    />
-                  </th>
-                  <th className="px-3 py-2">
-                    <ColumnFilter
-                      label="Plan"
-                      options={planOptions}
-                      selectedValues={planSelections}
-                      onChange={setPlanSelections}
-                    />
-                  </th>
-                  <th className="px-3 py-2">
-                    <ColumnFilter
-                      label="Amount"
-                      options={amountOptions}
-                      selectedValues={amountSelections}
-                      onChange={setAmountSelections}
-                    />
-                  </th>
-                  <th className="px-3 py-2">
-                    <div className="space-y-2">
-                      <ColumnFilter
-                        label="Due Date"
-                        options={dueDateOptions}
-                        selectedValues={dueDateSelections}
-                        onChange={setDueDateSelections}
-                      />
-                      <label className="inline-flex items-center gap-2 text-xs font-semibold text-slate-700">
-                        <input
-                          type="checkbox"
-                          checked={dueOnly}
-                          onChange={(event) => setDueOnly(event.target.checked)}
-                        />
-                        Due only
-                      </label>
-                    </div>
-                  </th>
-                  <th className="px-3 py-2">
-                    <ColumnFilter
-                      label="Trial End"
-                      options={trialEndOptions}
-                      selectedValues={trialEndSelections}
-                      onChange={setTrialEndSelections}
-                    />
-                  </th>
-                  <th className="px-3 py-2">
-                    <ColumnFilter
-                      label="Status"
-                      options={statusOptions}
-                      selectedValues={statusSelections}
-                      onChange={setStatusSelections}
-                    />
-                  </th>
-                  <th className="px-3 py-2">
-                    <ColumnFilter
-                      label="Gateway"
-                      options={gatewayOptions}
-                      selectedValues={gatewaySelections}
-                      onChange={setGatewaySelections}
-                    />
-                  </th>
-                  <th className="px-3 py-2">
-                    <ColumnFilter
-                      label="Created"
-                      options={createdOptions}
-                      selectedValues={createdSelections}
-                      onChange={setCreatedSelections}
-                    />
-                  </th>
-                  <th className="px-3 py-2"></th>
-                </tr>
+        columns={[
+          {
+            key: 'displayCompanyName',
+            header: 'Company',
+            sortable: true,
+            render: (payment) => (
+              <>
+                <div className="max-w-[160px] truncate font-semibold" title={payment.displayCompanyName}>{payment.displayCompanyName}</div>
+                <div className="max-w-[160px] truncate font-mono text-xs font-semibold text-sky-700" title={payment.invoiceNumber || payment.paymentIntentId}>
+                  {payment.invoiceNumber ? payment.invoiceNumber : payment.paymentIntentId}
+                </div>
+              </>
+            ),
+          },
+          {
+            key: 'email',
+            header: 'Email',
+            sortable: true,
+            render: (payment) => <div className="max-w-[170px] truncate" title={payment.email}>{payment.email}</div>,
+          },
+          {
+            key: 'planName',
+            header: 'Plan',
+            sortable: true,
+            filterCell: <ColumnFilter label="Plan" options={planOptions} selectedValues={planSelections} onChange={setPlanSelections} />,
+            render: (payment) => (
+              <>
+                <div className="font-semibold">{payment.planName || payment.planId || '-'}</div>
+                {payment.employeeCountSnapshot !== null && payment.employeeCountSnapshot !== undefined ? (
+                  <div className="text-xs text-slate-500">{payment.employeeCountSnapshot} employees</div>
                 ) : null}
-              </thead>
-              <tbody>
-                {filteredPayments.length === 0 ? (
-                  <tr>
-                    <td colSpan={10} className="px-4 py-12 text-center text-slate-500">
-                      {payments.length === 0 ? 'No payments found' : 'No payments match your filters'}
-                    </td>
-                  </tr>
-                ) : filteredPayments.map((payment) => (
-                    <tr key={payment.paymentIntentId} className="border-b border-slate-100 hover:bg-slate-50">
-                      <td className="py-3 px-3 font-medium text-slate-800">
-                        <div className="max-w-[150px] truncate" title={payment.displayCompanyName}>{payment.displayCompanyName}</div>
-                        <div className="max-w-[150px] truncate text-xs text-slate-500" title={payment.paymentIntentId}>{payment.paymentIntentId}</div>
-                      </td>
-                      <td className="py-3 px-3 text-slate-700"><div className="max-w-[160px] truncate" title={payment.email}>{payment.email}</div></td>
-                      <td className="py-3 px-3 text-slate-700">
-                        <div className="font-semibold text-slate-800">{payment.planName || payment.planId || '-'}</div>
-                        {payment.employeeCountSnapshot !== null && payment.employeeCountSnapshot !== undefined ? (
-                          <div className="text-xs text-slate-500">{payment.employeeCountSnapshot} employees</div>
-                        ) : null}
-                      </td>
-                      <td className="py-3 px-3 font-semibold text-slate-800">
-                        <div>{formatPrice(payment.finalAmountCents ?? payment.amount, payment.currency)}</div>
-                        {payment.originalAmountCents !== null && payment.originalAmountCents !== undefined && payment.originalAmountCents !== (payment.finalAmountCents ?? payment.amount) ? (
-                          <div className="text-xs font-normal text-slate-500">
-                            Original {formatPrice(payment.originalAmountCents, payment.currency)}
-                          </div>
-                        ) : null}
-                      </td>
-                      <td className="py-3 px-3 text-slate-600 text-sm">
-                        <div>{formatDate(payment.dueDate || null)}</div>
-                        <div className="text-xs text-slate-400">Recurring {formatDate(payment.recurringDate || null)}</div>
-                      </td>
-                      <td className="py-3 px-3 text-slate-600 text-sm">
-                        {formatDate(payment.trialEndsAt || null)}
-                      </td>
-                      <td className="py-3 px-3">
-                        <span className={`inline-block px-3 py-1 rounded-full text-sm font-medium ${getPaymentStatusClass(payment.status)}`}>
-                          {payment.status}
-                        </span>
-                      </td>
-                      <td className="py-3 px-3 text-slate-700">
-                        <div>{getGatewayLabel(payment)}</div>
-                        <div className="text-xs text-slate-500">{payment.paymentGatewayStatus || '-'}</div>
-                      </td>
-                      <td className="py-3 px-3 text-slate-600 text-sm">
-                        {formatDate(payment.createdAt)}
-                      </td>
-                      <td className="py-3 px-3 text-right">
-                        <div className="flex items-center justify-end gap-1 whitespace-nowrap">
-                          <button
-                            type="button"
-                            onClick={() => setViewingPayment(payment)}
-                            title="View subscription"
-                            className="rounded-lg p-2 text-blue-600 hover:bg-blue-50"
-                          >
-                            <Eye className="h-4 w-4" />
-                            <span className="sr-only">View subscription</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => openEditPayment(payment)}
-                            title="Edit subscription"
-                            className="rounded-lg p-2 text-cyan-700 hover:bg-cyan-50"
-                          >
-                            <Edit2 className="h-4 w-4" />
-                            <span className="sr-only">Edit subscription</span>
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-      </div>
+              </>
+            ),
+          },
+          {
+            key: 'package',
+            header: 'Package',
+            noExport: true,
+            render: (payment) => (payment.companyId ? (
+              <PackageCell info={packages.get(Number(payment.companyId))} companyId={Number(payment.companyId)} failed={packageFailedIds.has(Number(payment.companyId))} />
+            ) : (
+              <span className="text-xs text-slate-400">-</span>
+            )),
+          },
+          {
+            key: 'amount',
+            header: 'Amount',
+            sortable: true,
+            filterCell: (
+              <div className="flex gap-1">
+                <input type="number" min={0} step="0.01" value={amountMin} onChange={(event) => setAmountMin(event.target.value)} placeholder="Min" aria-label="Minimum amount" className={filterInputClass} />
+                <input type="number" min={0} step="0.01" value={amountMax} onChange={(event) => setAmountMax(event.target.value)} placeholder="Max" aria-label="Maximum amount" className={filterInputClass} />
+              </div>
+            ),
+            render: (payment) => (
+              <>
+                <div className="font-semibold">{formatPrice(payment.finalAmountCents ?? payment.amount, payment.currency)}</div>
+                {payment.originalAmountCents !== null && payment.originalAmountCents !== undefined && payment.originalAmountCents !== (payment.finalAmountCents ?? payment.amount) ? (
+                  <div className="text-xs text-slate-500">Original {formatPrice(payment.originalAmountCents, payment.currency)}</div>
+                ) : null}
+              </>
+            ),
+          },
+          {
+            key: 'dueDate',
+            header: 'Due Date',
+            sortable: true,
+            filterCell: (
+              <label className="inline-flex items-center gap-2 text-xs font-semibold text-slate-600">
+                <input type="checkbox" className="h-4 w-4 cursor-pointer rounded accent-sky-500" checked={dueOnly} onChange={(event) => setDueOnly(event.target.checked)} />
+                Due only
+              </label>
+            ),
+            render: (payment) => (
+              <>
+                <div>{formatDate(payment.dueDate || null)}</div>
+                <div className="text-xs text-slate-400">Recurring {formatDate(payment.recurringDate || null)}</div>
+              </>
+            ),
+          },
+          { key: 'trialEndsAt', header: 'Trial End', sortable: true, render: (payment) => formatDate(payment.trialEndsAt || null) },
+          {
+            key: 'status',
+            header: 'Status',
+            sortable: true,
+            filterCell: <ColumnFilter label="Status" options={statusOptions} selectedValues={statusSelections} onChange={setStatusSelections} />,
+            render: (payment) => <StatusBadge value={payment.status} />,
+          },
+          {
+            key: 'gateway',
+            header: 'Gateway',
+            filterCell: <ColumnFilter label="Gateway" options={gatewayOptions} selectedValues={gatewaySelections} onChange={setGatewaySelections} />,
+            render: (payment) => (
+              <>
+                <div>{getGatewayLabel(payment)}</div>
+                <div className="text-xs text-slate-500">{payment.paymentGatewayStatus || '-'}</div>
+              </>
+            ),
+          },
+          {
+            key: 'createdAt',
+            header: 'Created',
+            sortable: true,
+            filterCell: (
+              <div className="flex flex-col gap-1">
+                <input type="date" value={createdFrom} onChange={(event) => setCreatedFrom(event.target.value)} aria-label="Created from" className={filterInputClass} />
+                <input type="date" value={createdTo} onChange={(event) => setCreatedTo(event.target.value)} aria-label="Created to" className={filterInputClass} />
+              </div>
+            ),
+            render: (payment) => formatDate(payment.createdAt),
+          },
+        ]}
+        rowActions={(payment) => (
+          <>
+            <RowActionButton title="View subscription" icon={<Eye />} onClick={() => setViewingPayment(payment)} />
+            <RowActionButton title="Edit subscription" icon={<Edit2 />} onClick={() => openEditPayment(payment)} />
+            {payment.companyId ? (
+              <RowActionButton
+                title="Change package"
+                icon={<Layers />}
+                testId={`change-package-${payment.paymentIntentId}`}
+                onClick={() => setChangingPackageFor({ id: Number(payment.companyId), name: payment.displayCompanyName })}
+              />
+            ) : null}
+          </>
+        )}
+      />
+
+      {changingPackageFor ? (
+        <ChangePackageDialog
+          companyId={changingPackageFor.id}
+          companyName={changingPackageFor.name}
+          current={packages.get(changingPackageFor.id)}
+          onClose={() => setChangingPackageFor(null)}
+          onDone={(message) => {
+            setChangingPackageFor(null);
+            onToast('success', message);
+            refetchPackages();
+          }}
+          onError={(message) => onToast('error', message)}
+        />
+      ) : null}
 
       {viewingPayment ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 backdrop-blur-sm p-3 sm:p-6">
+        <div onMouseDown={(event) => { if (event.target === event.currentTarget) setViewingPayment(null); }} className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 backdrop-blur-sm p-3 sm:p-6">
           <div
             role="dialog"
             aria-modal="true"
             aria-labelledby="subscription-payment-detail-title"
-            className="max-h-[92vh] w-full max-w-5xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl flex flex-col"
+            className="max-h-[92vh] w-full max-w-5xl overflow-hidden rounded-xl bg-white shadow-2xl shadow-2xl flex flex-col"
           >
             <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-5 py-4 sm:px-6 sm:py-5">
               <div className="min-w-0">
@@ -967,8 +924,11 @@ export const Subscriptions: React.FC<{
                     icon: CreditCard,
                     iconClass: 'bg-pink-100 text-pink-600',
                     rows: [
+                      ['Invoice / Receipt #', viewingPayment.invoiceNumber || viewingPayment.paymentIntentId],
                       ['Payment ID', viewingPayment.paymentIntentId],
                       ['Original amount', viewingPayment.originalAmountCents !== null && viewingPayment.originalAmountCents !== undefined ? formatPrice(viewingPayment.originalAmountCents, viewingPayment.currency) : '-'],
+                      ['Discount', viewingPayment.discountAmountCents ? formatPrice(viewingPayment.discountAmountCents, viewingPayment.currency) : '-'],
+                      ['Promo code', viewingPayment.promoCode ? `${viewingPayment.promoCode}${viewingPayment.promoLabel && viewingPayment.promoLabel !== viewingPayment.promoCode ? ` (${viewingPayment.promoLabel})` : ''}` : '-'],
                       ['Created', formatDateTime(viewingPayment.createdAt || null)],
                       ['Updated', formatDateTime(viewingPayment.updatedAt || null)],
                     ],
@@ -979,9 +939,12 @@ export const Subscriptions: React.FC<{
                     icon: CalendarDays,
                     iconClass: 'bg-amber-100 text-amber-600',
                     rows: [
+                      ['Billing interval', viewingPayment.billingInterval || '-'],
                       ['Due date', formatDateTime(viewingPayment.dueDate || null)],
                       ['Recurring date', formatDateTime(viewingPayment.recurringDate || null)],
+                      ['Trial start', formatDateTime(viewingPayment.trialStartsAt || null)],
                       ['Trial end', formatDateTime(viewingPayment.trialEndsAt || null)],
+                      ['Next billing date', formatDateTime(viewingPayment.nextBillingDate || null)],
                     ],
                   },
                   {
@@ -991,6 +954,7 @@ export const Subscriptions: React.FC<{
                     iconClass: 'bg-violet-100 text-violet-600',
                     rows: [
                       ['Method', getGatewayLabel(viewingPayment)],
+                      ['Card', getCardSummary(viewingPayment.gatewayPayload) || '-'],
                       ['Gateway status', viewingPayment.paymentGatewayStatus || '-'],
                       ['Receiver reference', viewingPayment.gatewayRefReceiverMedium || '-'],
                       ['Sender reference', viewingPayment.gatewayRefSenderMedium || '-'],
@@ -1053,20 +1017,13 @@ export const Subscriptions: React.FC<{
       ) : null}
 
       {editingPayment ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
+        <div onMouseDown={(event) => { if (event.target === event.currentTarget) closeEditPayment(); }} className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
           <div className="max-h-[90vh] w-full max-w-4xl overflow-y-auto rounded-xl bg-white p-6 shadow-xl">
             <div className="mb-5 flex items-center justify-between gap-3">
               <div>
-                <h3 className="text-lg font-bold text-slate-800">Edit Subscription Payment</h3>
+                <h3 className="m-0 text-[22px] font-bold tracking-[-0.3px] text-slate-800">Edit Subscription Payment</h3>
                 <p className="text-sm text-slate-500">{editingPayment.displayCompanyName} / {editingPayment.paymentIntentId}</p>
               </div>
-              <button
-                type="button"
-                onClick={closeEditPayment}
-                className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"
-              >
-                <X className="h-5 w-5" />
-              </button>
             </div>
 
             <div className="grid gap-4 lg:grid-cols-2">
@@ -1077,17 +1034,21 @@ export const Subscriptions: React.FC<{
                   <select
                     value={editStatus}
                     onChange={(event) => setEditStatus(event.target.value)}
-                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-100"
+                    className="mt-1 w-full min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                   >
-                    {paymentStatusOptions.map((status) => (
-                      <option key={status} value={status}>{status}</option>
-                    ))}
+                    {paymentStatusOptions
+                      // A card payment is refunded through Stripe (Refund), never marked by hand.
+                      .filter((status) => status !== 'refunded' || (editingPayment.source || '').toLowerCase() !== 'stripe' || editStatus === 'refunded')
+                      .map((status) => (
+                        <option key={status} value={status}>{status}</option>
+                      ))}
                   </select>
                 </label>
                 <button
                   type="button"
                   onClick={submitStatusChange}
-                  className="rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-700"
+                  disabled={savingAction !== null}
+                  className="inline-flex h-[42px] items-center justify-center gap-2 rounded-[10px] bg-gradient-to-r from-sky-500 to-cyan-400 px-9 text-sm font-bold text-white shadow-[0_2px_8px_rgba(14,165,233,0.25)] transition hover:from-sky-600 hover:to-cyan-500 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Save status
                 </button>
@@ -1101,7 +1062,7 @@ export const Subscriptions: React.FC<{
                     type="datetime-local"
                     value={editDueDate}
                     onChange={(event) => setEditDueDate(event.target.value)}
-                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-100"
+                    className="mt-1 w-full min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                   />
                 </label>
                 <label className="mb-3 block text-sm font-medium text-slate-700">
@@ -1110,14 +1071,15 @@ export const Subscriptions: React.FC<{
                     value={editDueReason}
                     onChange={(event) => setEditDueReason(event.target.value)}
                     rows={3}
-                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-100"
+                    className="mt-1 w-full min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                     placeholder="Reason for due date change"
                   />
                 </label>
                 <button
                   type="button"
                   onClick={submitDueDateChange}
-                  className="rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-700"
+                  disabled={savingAction !== null}
+                  className="inline-flex h-[42px] items-center justify-center gap-2 rounded-[10px] bg-gradient-to-r from-sky-500 to-cyan-400 px-9 text-sm font-bold text-white shadow-[0_2px_8px_rgba(14,165,233,0.25)] transition hover:from-sky-600 hover:to-cyan-500 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Save due date
                 </button>
@@ -1130,7 +1092,7 @@ export const Subscriptions: React.FC<{
                   <select
                     value={suspendScope}
                     onChange={(event) => setSuspendScope(event.target.value)}
-                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-100"
+                    className="mt-1 w-full min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                   >
                     <option value="billing_only">billing_only</option>
                     <option value="feature_limited">feature_limited</option>
@@ -1143,7 +1105,7 @@ export const Subscriptions: React.FC<{
                     type="datetime-local"
                     value={suspendUntil}
                     onChange={(event) => setSuspendUntil(event.target.value)}
-                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-100"
+                    className="mt-1 w-full min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                   />
                 </label>
                 <label className="mb-3 block text-sm font-medium text-slate-700">
@@ -1152,14 +1114,15 @@ export const Subscriptions: React.FC<{
                     value={suspendReason}
                     onChange={(event) => setSuspendReason(event.target.value)}
                     rows={3}
-                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-100"
+                    className="mt-1 w-full min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                     placeholder="Reason for suspension"
                   />
                 </label>
                 <button
                   type="button"
                   onClick={submitSuspendCompany}
-                  className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-700"
+                  disabled={savingAction !== null}
+                  className="disabled:opacity-50 rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-700"
                 >
                   Suspend
                 </button>
@@ -1173,14 +1136,15 @@ export const Subscriptions: React.FC<{
                     value={resumeReason}
                     onChange={(event) => setResumeReason(event.target.value)}
                     rows={3}
-                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-100"
+                    className="mt-1 w-full min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                     placeholder="Reason for resuming company"
                   />
                 </label>
                 <button
                   type="button"
                   onClick={submitResumeCompany}
-                  className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
+                  disabled={savingAction !== null}
+                  className="disabled:opacity-50 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
                 >
                   Resume
                 </button>
@@ -1204,7 +1168,7 @@ export const Subscriptions: React.FC<{
                     <input
                       value={manualSource}
                       onChange={(event) => setManualSource(event.target.value)}
-                      className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-100"
+                      className="mt-1 w-full min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                       placeholder="manual"
                     />
                   </label>
@@ -1213,7 +1177,7 @@ export const Subscriptions: React.FC<{
                     <select
                       value={manualPaymentMethod}
                       onChange={(event) => setManualPaymentMethod(event.target.value)}
-                      className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-100"
+                      className="mt-1 w-full min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                     >
                       {manualPaymentMethodOptions.map((method) => (
                         <option key={method.value} value={method.value}>
@@ -1227,7 +1191,7 @@ export const Subscriptions: React.FC<{
                     <input
                       value={manualReceiver}
                       onChange={(event) => setManualReceiver(event.target.value)}
-                      className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-100"
+                      className="mt-1 w-full min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                       placeholder="PayPal account, check number, register"
                     />
                   </label>
@@ -1236,7 +1200,7 @@ export const Subscriptions: React.FC<{
                     <input
                       value={manualSender}
                       onChange={(event) => setManualSender(event.target.value)}
-                      className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-100"
+                      className="mt-1 w-full min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                       placeholder="Customer account, check issuer, payer"
                     />
                   </label>
@@ -1246,7 +1210,7 @@ export const Subscriptions: React.FC<{
                       value={manualReason}
                       onChange={(event) => setManualReason(event.target.value)}
                       rows={2}
-                      className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-100"
+                      className="mt-1 w-full min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                       placeholder="Reason for recording this payment"
                     />
                   </label>
@@ -1256,7 +1220,7 @@ export const Subscriptions: React.FC<{
                       value={manualNote}
                       onChange={(event) => setManualNote(event.target.value)}
                       rows={2}
-                      className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-100"
+                      className="mt-1 w-full min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                       placeholder="Optional admin note"
                     />
                   </label>
@@ -1265,10 +1229,11 @@ export const Subscriptions: React.FC<{
                   <button
                     type="button"
                     onClick={submitManualPayment}
-                    className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700"
+                    disabled={savingAction !== null}
+                    className="disabled:opacity-50 inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700"
                   >
                     <Clipboard className="h-4 w-4" />
-                    Record manual payment
+                    {savingAction === 'manual' ? 'Recording…' : 'Record manual payment'}
                   </button>
                 </div>
               </section>
@@ -1278,7 +1243,7 @@ export const Subscriptions: React.FC<{
               <button
                 type="button"
                 onClick={closeEditPayment}
-                className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                className="h-[42px] rounded-[10px] border-[1.5px] border-slate-300 bg-white px-8 text-sm font-semibold text-slate-600 transition hover:border-slate-400 hover:bg-slate-50 hover:text-slate-800 disabled:cursor-not-allowed disabled:opacity-55"
               >
                 Close
               </button>

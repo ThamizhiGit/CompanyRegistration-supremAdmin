@@ -1,5 +1,7 @@
 import { ApolloClient, InMemoryCache, HttpLink, ApolloLink } from '@apollo/client';
+import { CombinedGraphQLErrors, ServerError, ServerParseError } from '@apollo/client/errors';
 import { ErrorLink } from '@apollo/client/link/error';
+import { abortAdminPageLoops } from './useAllPagesQuery';
 
 const STORAGE = window.sessionStorage;
 const SESSION_TOKEN_KEY = 'token';
@@ -40,18 +42,27 @@ const authLink = new ApolloLink((operation, forward) => {
   return forward(operation);
 });
 
-const isAuthError = (message: string) => {
-  const normalized = message.toLowerCase();
-  return (
-    normalized.includes('expired') ||
-    normalized.includes('unauthorized') ||
-    normalized.includes('unauthenticated') ||
-    normalized.includes('authentication credentials') ||
-    normalized.includes('invalid token')
-  );
+// The backend marks every super-admin auth failure with this code. Older
+// backends sent only the message: the exact messages are still accepted, but
+// never a word inside another message (a "promo code expired" error must not
+// sign the admin out).
+const UNAUTHENTICATED_CODE = 'UNAUTHENTICATED';
+const LEGACY_AUTH_MESSAGES = new Set(['authentication required', 'token expired', 'invalid token']);
+
+const isAuthGraphQLError = (graphQLError: { message?: string; extensions?: Record<string, unknown> }) =>
+  graphQLError.extensions?.code === UNAUTHENTICATED_CODE
+  || LEGACY_AUTH_MESSAGES.has((graphQLError.message || '').trim().toLowerCase());
+
+/** True when `error` (Apollo 4) says the super-admin session is gone. */
+export const isSessionError = (error: unknown) => {
+  if (CombinedGraphQLErrors.is(error)) return error.errors.some(isAuthGraphQLError);
+  if (ServerError.is(error) || ServerParseError.is(error)) return error.statusCode === 401 || error.statusCode === 403;
+  return false;
 };
 
 const logoutExpiredSession = () => {
+  // Page loops (all-rows lists, exports) must not keep reading as nobody.
+  abortAdminPageLoops();
   STORAGE.removeItem(SESSION_TOKEN_KEY);
   STORAGE.removeItem(SESSION_USERNAME_KEY);
   STORAGE.removeItem(SESSION_EXPIRES_AT_KEY);
@@ -60,14 +71,7 @@ const logoutExpiredSession = () => {
 
 const errorLink = new ErrorLink(({ error }) => {
   if (!error) return;
-
-  const graphQLErrors = (error as any).graphQLErrors || [];
-  const networkError = (error as any).networkError;
-  const statusCode = networkError?.statusCode || networkError?.response?.status;
-  const hasGraphqlAuthError = graphQLErrors.some((graphQLError: any) => isAuthError(graphQLError.message || ''));
-  const hasNetworkAuthError = statusCode === 401 || statusCode === 403 || isAuthError(error.message || '');
-
-  if (hasGraphqlAuthError || hasNetworkAuthError) {
+  if (isSessionError(error)) {
     logoutExpiredSession();
   }
 });

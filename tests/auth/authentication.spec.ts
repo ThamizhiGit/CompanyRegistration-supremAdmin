@@ -83,7 +83,7 @@ test.describe('Login Flow', () => {
     await page.getByPlaceholder('Enter your password').fill('correct_password');
     await page.locator('button[type="submit"]').click();
 
-    await expect(page.getByRole('button', { name: 'Logout' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Account menu for admin' })).toBeVisible();
     await expect
       .poll(() =>
         page.evaluate(() => ({
@@ -105,10 +105,12 @@ test.describe('Session lifecycle', () => {
     await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible();
   });
 
-  test('should clear session on logout', async ({ page }) => {
+  test('should clear session on logout', async ({ page, mockApi }) => {
     await seedAdminSession(page, { username: 'testadmin' });
     await page.goto('/');
-    await page.getByRole('button', { name: 'Logout' }).click();
+    // Sign out lives in the account menu (the header Logout button was removed).
+    await page.getByRole('button', { name: 'Account menu for testadmin' }).click();
+    await page.locator('#admin-profile-menu').getByRole('menuitem', { name: 'Sign Out' }).click();
     await expect(page.getByRole('heading', { name: 'Welcome back', exact: true })).toBeVisible();
 
     await expect
@@ -119,6 +121,8 @@ test.describe('Session lifecycle', () => {
         })),
       )
       .toEqual({ token: null, username: null });
+    // The token is ended on the server too, not only forgotten here.
+    await expect.poll(() => mockApi.lastVariables('SuperAdminLogout')).toBeDefined();
   });
 
   test('should auto expire session when token expires', async ({ page }) => {
@@ -130,5 +134,51 @@ test.describe('Session lifecycle', () => {
 
     await expect(page.getByRole('heading', { name: 'Welcome back', exact: true })).toBeVisible();
     await expect(page.getByText('Your session has expired. Please sign in again.')).toBeVisible();
+  });
+});
+
+test.describe('Session errors', () => {
+  test('only the UNAUTHENTICATED code (or 401/403) signs the admin out', async ({ adminPage: page, mockApi }) => {
+    // An unrelated error that mentions "expired" keeps the session.
+    mockApi.setOverride('AdminUsersFeed', { errors: [{ message: 'Promo code expired', path: ['adminUsersFeed'] }], data: null });
+    await page.getByRole('button', { name: 'Users' }).click();
+    await expect(page.getByRole('alert')).toContainText('Promo code expired');
+    await expect(page.getByRole('heading', { name: 'Welcome back', exact: true })).toHaveCount(0);
+
+    mockApi.setOverride('AdminCompaniesFeed', {
+      errors: [{ message: 'Token expired', path: ['adminCompaniesFeed'], extensions: { code: 'UNAUTHENTICATED' } }],
+      data: null,
+    });
+    await page.getByRole('button', { name: 'Companies' }).click();
+    await expect(page.getByRole('heading', { name: 'Welcome back', exact: true })).toBeVisible();
+    await expect(page.getByText('Your session has expired. Please sign in again.')).toBeVisible();
+    await expect.poll(() => page.evaluate(() => sessionStorage.getItem('token'))).toBeNull();
+  });
+});
+
+test.describe('Signing out', () => {
+  test('clears the cached admin data, so the next sign-in reads it again', async ({ adminPage: page, mockApi }) => {
+    const packagingReads = () => mockApi.requests.get('AdminPlansPackaging')?.length ?? 0;
+    await page.getByRole('button', { name: 'Plans' }).click();
+    await page.getByRole('button', { name: 'Board View' }).click(); // the page opens in Table View
+    await expect(page.getByTestId('plan-subscribers-premium')).toBeVisible();
+    const before = packagingReads();
+    expect(before).toBeGreaterThan(0);
+
+    await page.getByRole('button', { name: 'Account menu for admin' }).click();
+    await page.locator('#admin-profile-menu').getByRole('menuitem', { name: 'Sign Out' }).click();
+    await expect(page.getByRole('heading', { name: 'Welcome back', exact: true })).toBeVisible();
+
+    await page.getByPlaceholder('Enter your username').fill('admin');
+    await page.getByPlaceholder('Enter your password').fill('pass');
+    await page.locator('button[type="submit"]').click();
+    // Sign-in returns to the page in the address (#/plans), which has its own
+    // "Plans" tab: use the sidebar link.
+    await page.getByLabel('Admin navigation').getByRole('button', { name: 'Plans' }).click();
+    await page.getByRole('button', { name: 'Board View' }).click(); // the page opens in Table View
+    await expect(page.getByTestId('plan-subscribers-premium')).toBeVisible();
+    // Within the 30 s reuse window the package list would have been reused
+    // from the previous session; signing out dropped it.
+    await expect.poll(packagingReads).toBeGreaterThan(before);
   });
 });

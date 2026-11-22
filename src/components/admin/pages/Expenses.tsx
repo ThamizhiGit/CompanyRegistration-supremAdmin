@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useMutation } from '@apollo/client/react';
-import { Plus, Pencil, Eye, Save, X, Search, RotateCcw, ChevronDown, ChevronUp, Filter } from 'lucide-react';
+import { Pencil, Eye, Save, X, RotateCcw, ChevronDown, ChevronUp } from 'lucide-react';
 import {
   ADMIN_EXPENSES_QUERY,
   ADMIN_EXPENSE_DETAIL_QUERY,
@@ -8,9 +8,11 @@ import {
   ADMIN_UPDATE_EXPENSE_MUTATION,
   ADMIN_SET_EXPENSE_STATUS_MUTATION,
 } from '../../../lib/graphql';
-import { formatPrice, centsFromDollars } from '../../../lib/admin-utils';
+import { centsFromDollars } from '../../../lib/admin-utils';
 import { useDebouncedValue } from '../../../lib/useDebouncedValue';
 import { buildColumnFilterOptions, ColumnFilter, matchesColumnFilter } from '../ColumnFilter';
+import { dataTableClass } from '../ui/FormKit';
+import { DataTable, RowActionButton, StatusBadge } from '../ui/DataTable';
 
 type ExpenseStatus = 'draft' | 'pending' | 'approved' | 'paid' | 'rejected' | 'archived';
 type ExpenseCategory = 'hosting' | 'service' | 'integration' | 'llm' | 'other';
@@ -227,11 +229,19 @@ const statusClasses: Record<ExpenseStatus, string> = {
 
 const normalizeCurrencyValue = (currency: string) => sanitizeCurrency(currency) || 'USD';
 
+/**
+ * Expenses keep every currency in hundredths (the form sends amount x 100 for
+ * JPY too, and saved rows are stored that way), so they are shown as /100.
+ * formatPrice reads zero-decimal currencies (JPY...) as whole units and
+ * showed JPY expenses 100x too large.
+ */
 const toMoney = (value: number, currency = 'USD') => {
+  const code = normalizeCurrencyValue(currency);
+  const amount = (Number(value) || 0) / 100;
   try {
-    return formatPrice(value, normalizeCurrencyValue(currency));
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency: code }).format(amount);
   } catch {
-    return `$${(value / 100).toFixed(2)}`;
+    return `${code} ${amount.toFixed(2)}`;
   }
 };
 
@@ -490,18 +500,18 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
     () =>
       editing.lineItems.map((line) => {
         const quantity = Number.parseFloat(line.quantity || '0');
-        const unitPrice = Number.parseFloat(line.unitPriceCents || '0');
+        const unitPrice = centsFromDollars(line.unitPriceCents || '0');
         const quantityValue = Number.isNaN(quantity) ? 0 : quantity;
-        const priceValue = Number.isNaN(unitPrice) ? 0 : unitPrice;
-        const cost = Math.max(0, Math.round(quantityValue * centsFromDollars(priceValue)));
+        const priceCents = Number.isNaN(unitPrice) ? 0 : unitPrice;
+        const cost = Math.max(0, Math.round(quantityValue * priceCents));
         return cost;
       }),
     [editing.lineItems],
   );
 
   const subtotal = computedRows.reduce((acc, value) => acc + value, 0);
-  const taxCents = Number.parseFloat(editing.taxInput || '0') * 100;
-  const validTax = Number.isNaN(taxCents) ? 0 : Math.max(0, Math.round(taxCents));
+  const taxCents = centsFromDollars(editing.taxInput || '0');
+  const validTax = Number.isNaN(taxCents) ? 0 : Math.max(0, taxCents);
   const total = Math.max(0, subtotal + validTax);
   const displayCurrency = normalizeCurrencyValue(editing.currency);
   const currencyOptions = useMemo(() => Array.from(new Set([displayCurrency, ...CURRENCY_OPTIONS])), [displayCurrency]);
@@ -584,7 +594,7 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
       .filter((line) => line.label.trim())
       .map((line) => {
         const quantity = Math.max(0, Number.parseFloat(line.quantity || '0'));
-        const unitPriceCents = Math.max(0, centsFromDollars(Number.parseFloat(line.unitPriceCents || '0')));
+        const unitPriceCents = Math.max(0, centsFromDollars(line.unitPriceCents || '0') || 0);
         const payload: ExpenseLineItemInput = {
           lineType: line.lineType,
           label: line.label.trim(),
@@ -626,7 +636,7 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
       referenceLink: editing.referenceLink.trim() || undefined,
       metadata,
       lineItems,
-      taxCents: Number.isFinite(parsedTax) ? Math.max(0, Math.round(parsedTax * 100)) : 0,
+      taxCents: Number.isFinite(parsedTax) ? Math.max(0, centsFromDollars(editing.taxInput || '0')) : 0,
     };
   };
 
@@ -649,22 +659,35 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
     try {
       if (editing.id) {
         const originalExpense = expenses.find((expense) => expense.id === editing.id) || selectedExpense;
-        await updateExpense({ variables: { input: buildUpdateInput() } });
+        const updated: any = await updateExpense({ variables: { input: buildUpdateInput() } });
+        // success: false is a refusal (validation): say so and keep the form.
+        if (updated?.data?.adminUpdateExpense?.success === false) {
+          onToast('error', updated.data.adminUpdateExpense.message || 'Expense could not be updated');
+          return;
+        }
         if (originalExpense && originalExpense.status !== editing.status) {
-          await setExpenseStatus({
+          const statusResult: any = await setExpenseStatus({
             variables: {
               input: {
                 id: editing.id,
                 status: editing.status,
                 reason: '',
-                actor: originalExpense.createdBy || 'admin',
               },
             },
           });
+          if (statusResult?.data?.adminSetExpenseStatus?.success === false) {
+            onToast('error', statusResult.data.adminSetExpenseStatus.message || 'The status could not be changed');
+            await refetch();
+            return;
+          }
         }
         onToast('success', 'Expense updated');
       } else {
-        await createExpense({ variables: { input: buildCreateInput() } });
+        const created: any = await createExpense({ variables: { input: buildCreateInput() } });
+        if (created?.data?.adminCreateExpense?.success === false) {
+          onToast('error', created.data.adminCreateExpense.message || 'Expense could not be created');
+          return;
+        }
         onToast('success', 'Expense created');
       }
       await refetch();
@@ -687,16 +710,19 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
   const handleStatusChange = async (expense: Expense, nextStatus: ExpenseStatus) => {
     if (expense.status === nextStatus) return;
     try {
-      await setExpenseStatus({
+      const result: any = await setExpenseStatus({
         variables: {
           input: {
             id: expense.id,
             status: nextStatus,
             reason: '',
-            actor: expense.createdBy || 'admin',
           },
         },
       });
+      if (result?.data?.adminSetExpenseStatus?.success === false) {
+        onToast('error', result.data.adminSetExpenseStatus.message || 'The status could not be changed');
+        return;
+      }
       onToast('success', `Status updated to ${statusLabel(nextStatus)}`);
       await refetch();
     } catch (err: any) {
@@ -704,46 +730,6 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
     }
   };
 
-  const renderPager = () => {
-    const pageCount = Math.max(1, Math.ceil(totalCount / limit));
-    return (
-      <div className="flex items-center justify-between gap-3 pt-2">
-        <div className="text-sm text-slate-600">
-          Showing {totalCount === 0 ? 0 : (page * limit) + 1} - {Math.min((page + 1) * limit, totalCount)} of {totalCount}
-        </div>
-        <div className="flex items-center gap-2">
-          <select
-            aria-label="Expenses per page"
-            className="px-3 py-2 border border-slate-300 rounded-lg"
-            value={limit}
-            onChange={(event) => {
-              setLimit(Number(event.target.value));
-              setPage(0);
-            }}
-          >
-            {PAGE_SIZES.map((value) => (
-              <option key={value} value={value}>{value} / page</option>
-            ))}
-          </select>
-          <button
-            className="px-3 py-2 border border-slate-300 rounded-lg disabled:opacity-50"
-            disabled={page === 0}
-            onClick={() => setPage((prev) => Math.max(0, prev - 1))}
-          >
-            Previous
-          </button>
-          <span className="text-sm text-slate-700">Page {Math.min(page + 1, pageCount)} / {pageCount}</span>
-          <button
-            className="px-3 py-2 border border-slate-300 rounded-lg disabled:opacity-50"
-            disabled={page >= pageCount - 1}
-            onClick={() => setPage((prev) => prev + 1)}
-          >
-            Next
-          </button>
-        </div>
-      </div>
-    );
-  };
 
   if (loading && !data) return <div className="text-center py-12 text-slate-500">Loading expenses...</div>;
   if (error) return <div className="text-center py-12 text-red-600">Error: {error.message}</div>;
@@ -752,18 +738,8 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
     <div className="space-y-8">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div>
-          <h2 className="text-2xl font-bold text-slate-800">Expenses</h2>
+          <h2 className="text-2xl font-semibold text-gray-700">Expenses</h2>
           <p className="text-slate-600">Track spending and allocate cost breakdown by line item</p>
-        </div>
-        <div className="flex items-center gap-3">
-          <button
-            onClick={openCreateForm}
-            className="flex items-center gap-2 px-4 py-2 text-white rounded-lg font-semibold"
-            style={{ background: 'linear-gradient(135deg, #00cbd6 0%, #10b981 100%)' }}
-          >
-            <Plus className="w-4 h-4" />
-            New Expense
-          </button>
         </div>
       </div>
 
@@ -790,52 +766,40 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
         </div>
       </div>
 
-      <div className="bg-white rounded-lg border border-slate-200 p-4">
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6 gap-3">
-          <div className="flex items-center gap-2 border border-slate-200 rounded-lg px-3">
-            <Search className="w-4 h-4 text-slate-500" />
-            <input
-              aria-label="Search expenses"
-              className="flex-1 border-0 p-2 outline-none"
-              value={search}
-              onChange={(event) => {
-                setPage(0);
-                setSearch(event.target.value);
-              }}
-              placeholder="Search"
-            />
-          </div>
+      <DataTable<Expense>
+        testId="expenses-table"
+        title="Expense list"
+        rows={displayedExpenses}
+        rowKey={(expense) => String(expense.id)}
+        searchPlaceholder="Search"
+        searchValue={search}
+        onSearchChange={(value) => {
+          setPage(0);
+          setSearch(value);
+        }}
+        filtersOpen={filtersOpen}
+        onFiltersToggle={(open) => {
+          if (!open) {
+            setCategorySelections([]);
+            setStatusSelections([]);
+            setVendorSelections([]);
+            setProjectSelections([]);
+            setCurrencySelections([]);
+            setDateSelections([]);
+          }
+          setFiltersOpen(open);
+        }}
+        sort={{ key: sortBy, dir: sortDir }}
+        onSortChange={(next) => {
+          setSortBy(next ? next.key : 'incurredAt');
+          setSortDir(next ? next.dir : 'desc');
+          setPage(0);
+        }}
+        onRefresh={() => refetch()}
+        headerActions={(
           <button
             type="button"
-            onClick={() => setFiltersOpen((open) => {
-              if (open) {
-                setCategorySelections([]);
-                setStatusSelections([]);
-                setVendorSelections([]);
-                setProjectSelections([]);
-                setCurrencySelections([]);
-                setDateSelections([]);
-              }
-              return !open;
-            })}
-            aria-pressed={filtersOpen}
-            title="Filters"
-            className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border transition ${
-              filtersOpen
-                ? 'border-cyan-400 bg-cyan-50 text-cyan-600'
-                : 'border-slate-200 bg-slate-50 text-slate-400 hover:border-cyan-300 hover:text-cyan-500'
-            }`}
-          >
-            <Filter className="h-4 w-4" />
-          </button>
-        </div>
-      </div>
-
-      <div className="bg-white rounded-lg border border-slate-200 overflow-hidden">
-        <div className="p-4 border-b border-slate-100 flex items-center justify-between">
-          <h3 className="font-bold text-slate-700">Expense list</h3>
-          <button
-            className="text-sm px-3 py-2 border border-slate-200 rounded-lg"
+            className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-slate-200/60 bg-slate-50 px-3 text-[13px] font-medium text-slate-500 transition-all hover:bg-slate-100 hover:text-slate-700"
             onClick={() => {
               setSearch('');
               setCategorySelections([]);
@@ -851,146 +815,74 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
           >
             Clear filters
           </button>
-        </div>
-        {displayedExpenses.length === 0 ? (
-          <div className="py-12 text-center text-slate-600">
-            <p className="font-semibold text-slate-800">No expenses recorded yet</p>
-            <p className="mt-1 text-sm">Create an expense here after the backend expense APIs are connected.</p>
-            <button
-              onClick={openCreateForm}
-              className="mt-4 inline-flex items-center gap-2 px-4 py-2 text-white rounded-lg font-semibold"
-              style={{ background: 'linear-gradient(135deg, #00cbd6 0%, #10b981 100%)' }}
-            >
-              <Plus className="w-4 h-4" />
-              New Expense
-            </button>
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead className="bg-slate-50">
-                <tr>
-                  <th className="text-left px-4 py-3 text-sm font-semibold text-slate-700">Ref</th>
-                  <th className="text-left px-4 py-3 text-sm font-semibold text-slate-700">Title</th>
-                  <th className="text-left px-4 py-3 text-sm font-semibold text-slate-700">Category</th>
-                  <th className="text-left px-4 py-3 text-sm font-semibold text-slate-700">Vendor</th>
-                  <th className="text-left px-4 py-3 text-sm font-semibold text-slate-700">Total</th>
-                  <th className="text-left px-4 py-3 text-sm font-semibold text-slate-700">Status</th>
-                  <th className="text-left px-4 py-3 text-sm font-semibold text-slate-700">Date</th>
-                  <th className="text-right px-4 py-3 text-sm font-semibold text-slate-700">Actions</th>
-                </tr>
-                {filtersOpen ? (
-                <tr className="border-t border-slate-200 bg-white">
-                  <th className="px-4 py-2">
-                    <ColumnFilter
-                      label="Project"
-                      options={projectOptions}
-                      selectedValues={projectSelections}
-                      onChange={setProjectSelections}
-                    />
-                  </th>
-                  <th className="px-4 py-2"></th>
-                  <th className="px-4 py-2">
-                    <ColumnFilter
-                      label="Category"
-                      options={categoryOptions}
-                      selectedValues={categorySelections}
-                      onChange={setCategorySelections}
-                    />
-                  </th>
-                  <th className="px-4 py-2">
-                    <ColumnFilter
-                      label="Vendor"
-                      options={vendorOptions}
-                      selectedValues={vendorSelections}
-                      onChange={setVendorSelections}
-                    />
-                  </th>
-                  <th className="px-4 py-2">
-                    <ColumnFilter
-                      label="Currency"
-                      options={currencyFilterOptions}
-                      selectedValues={currencySelections}
-                      onChange={setCurrencySelections}
-                    />
-                  </th>
-                  <th className="px-4 py-2">
-                    <ColumnFilter
-                      label="Status"
-                      options={statusOptions}
-                      selectedValues={statusSelections}
-                      onChange={setStatusSelections}
-                    />
-                  </th>
-                  <th className="px-4 py-2">
-                    <ColumnFilter
-                      label="Date"
-                      options={dateOptions}
-                      selectedValues={dateSelections}
-                      onChange={setDateSelections}
-                    />
-                  </th>
-                  <th className="px-4 py-2">
-                    <select
-                      aria-label="Expense sort field"
-                      className="h-9 w-full rounded-lg border border-slate-300 px-2 text-xs font-medium text-slate-700 focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-100"
-                      value={sortBy}
-                      onChange={(event) => {
-                        setSortBy(event.target.value);
-                      }}
-                    >
-                      <option value="incurredAt">Sort: Date</option>
-                      <option value="totalCents">Sort: Total</option>
-                      <option value="status">Sort: Status</option>
-                    </select>
-                  </th>
-                </tr>
-                ) : null}
-              </thead>
-              <tbody>
-                {displayedExpenses.map((expense) => (
-                  <tr key={expense.id} className="border-t border-slate-100">
-                    <td className="px-4 py-3 text-slate-700">{expense.expenseRef}</td>
-                    <td className="px-4 py-3 text-slate-700">{expense.title}</td>
-                    <td className="px-4 py-3 text-slate-700">{expense.category}</td>
-                    <td className="px-4 py-3 text-slate-700">{expense.vendor || '-'}</td>
-                      <td className="px-4 py-3 text-slate-700">{toMoney(expense.totalCents, expense.currency)}</td>
-                    <td className="px-4 py-3">
-                      <span className={`px-3 py-1 rounded-full text-xs font-medium ${statusClasses[expense.status]}`}>
-                        {expense.status}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-slate-700">{expense.incurredAt?.slice(0, 10) || '-'}</td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center justify-end gap-1 whitespace-nowrap">
-                        <button
-                          className="p-2 hover:bg-blue-50 text-blue-600 rounded-lg"
-                          onClick={() => setSelectedExpense(expense)}
-                          title="View"
-                        >
-                          <Eye className="w-4 h-4" />
-                        </button>
-                        <button
-                          className="p-2 hover:bg-emerald-50 text-emerald-600 rounded-lg"
-                          onClick={() => openEditForm(expense)}
-                          title="Edit"
-                        >
-                          <Pencil className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
         )}
-      </div>
-
-      {renderPager()}
+        createLabel="New Expense"
+        onCreate={openCreateForm}
+        emptyMessage="No expenses recorded yet"
+        pageSizeOptions={PAGE_SIZES}
+        pagination={{
+          page,
+          pageSize: limit,
+          total: totalCount,
+          onPageChange: setPage,
+          onPageSizeChange: (size) => {
+            setLimit(size);
+            setPage(0);
+          },
+        }}
+        columns={[
+          {
+            key: 'expenseRef',
+            header: 'Ref',
+            filterCell: <ColumnFilter label="Project" options={projectOptions} selectedValues={projectSelections} onChange={setProjectSelections} />,
+            render: (expense) => <span className="font-semibold">{expense.expenseRef}</span>,
+          },
+          { key: 'title', header: 'Title', render: (expense) => expense.title },
+          {
+            key: 'category',
+            header: 'Category',
+            filterCell: <ColumnFilter label="Category" options={categoryOptions} selectedValues={categorySelections} onChange={setCategorySelections} />,
+            render: (expense) => expense.category,
+          },
+          {
+            key: 'vendor',
+            header: 'Vendor',
+            filterCell: <ColumnFilter label="Vendor" options={vendorOptions} selectedValues={vendorSelections} onChange={setVendorSelections} />,
+            render: (expense) => expense.vendor || '-',
+          },
+          {
+            key: 'totalCents',
+            header: 'Total',
+            sortable: true,
+            filterCell: <ColumnFilter label="Currency" options={currencyFilterOptions} selectedValues={currencySelections} onChange={setCurrencySelections} />,
+            render: (expense) => <span className="font-semibold">{toMoney(expense.totalCents, expense.currency)}</span>,
+          },
+          {
+            key: 'status',
+            header: 'Status',
+            sortable: true,
+            filterCell: <ColumnFilter label="Status" options={statusOptions} selectedValues={statusSelections} onChange={setStatusSelections} />,
+            render: (expense) => <StatusBadge value={expense.status} />,
+          },
+          {
+            key: 'incurredAt',
+            header: 'Date',
+            sortable: true,
+            className: 'whitespace-nowrap',
+            filterCell: <ColumnFilter label="Date" options={dateOptions} selectedValues={dateSelections} onChange={setDateSelections} />,
+            render: (expense) => expense.incurredAt?.slice(0, 10) || '-',
+          },
+        ]}
+        rowActions={(expense) => (
+          <>
+            <RowActionButton title="View" icon={<Eye />} onClick={() => setSelectedExpense(expense)} />
+            <RowActionButton title="Edit" icon={<Pencil />} onClick={() => openEditForm(expense)} />
+          </>
+        )}
+      />
 
       {selectedExpense && detailExpense && (
-        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+        <div onMouseDown={(event) => { if (event.target === event.currentTarget) setSelectedExpense(null); }} className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
           <div className="bg-white rounded-xl border border-slate-200 w-full max-w-5xl max-h-[90vh] flex flex-col overflow-hidden">
             <div className="shrink-0 p-5 border-b border-slate-100 flex items-start justify-between gap-4">
               <div>
@@ -1058,7 +950,7 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
                   <div className="p-4 text-sm text-slate-500">No line items</div>
                 ) : (
                   <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
+                    <table className={`w-full text-sm ${dataTableClass}`}>
                       <thead className="bg-slate-50">
                         <tr>
                           <th className="text-left px-4 py-3 font-semibold text-slate-700">Label</th>
@@ -1109,18 +1001,15 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
       )}
 
       {showForm && (
-        <div ref={formOverlayRef} className="fixed inset-0 bg-black/40 flex items-start justify-center p-4 overflow-y-auto z-40">
+        <div onMouseDown={(event) => {
+          // Not on its scrollbar: only a click on the dimmed area closes the form.
+          if (event.target === event.currentTarget && event.clientX < event.currentTarget.clientWidth) closeForm();
+        }} ref={formOverlayRef} className="fixed inset-0 bg-black/40 flex items-start justify-center p-4 overflow-y-auto z-40">
           <div className="bg-white w-full max-w-5xl rounded-xl border border-slate-200 p-6 my-6">
             <div className="flex items-center justify-between mb-5">
-              <h3 className="text-lg font-bold text-slate-800">
+              <h3 className="m-0 text-[22px] font-bold tracking-[-0.3px] text-slate-800">
                 {editing.id ? 'Edit Expense' : 'Create Expense'}
               </h3>
-              <button
-                onClick={closeForm}
-                className="px-3 py-2 rounded-lg border border-slate-200 text-slate-700"
-              >
-                <X className="w-4 h-4" />
-              </button>
             </div>
 
             {formErrors.duplicate && (
@@ -1160,7 +1049,7 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
                   </FieldLabel>
                   <FieldLabel label="Status">
                     <select
-                      className="px-3 py-2 border border-slate-300 rounded-lg"
+                      className="min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                       value={editing.status}
                       onChange={(event) => setField('status', event.target.value as ExpenseStatus)}
                     >
@@ -1177,7 +1066,7 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
                   </FieldLabel>
                   <FieldLabel label="Currency">
                     <select
-                      className="px-3 py-2 border border-slate-300 rounded-lg"
+                      className="min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                       value={displayCurrency}
                       onChange={(event) => setField('currency', event.target.value)}
                     >
@@ -1215,7 +1104,7 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 border border-slate-200 rounded-lg p-4">
                   <FieldLabel label="Due date">
                     <input
-                      className="px-3 py-2 border border-slate-300 rounded-lg"
+                      className="min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                       value={editing.dueAt}
                       type="datetime-local"
                       onChange={(event) => setField('dueAt', event.target.value)}
@@ -1223,7 +1112,7 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
                   </FieldLabel>
                   <FieldLabel label="Invoice date">
                     <input
-                      className="px-3 py-2 border border-slate-300 rounded-lg"
+                      className="min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                       type="datetime-local"
                       value={editing.invoiceDate}
                       onChange={(event) => setField('invoiceDate', event.target.value)}
@@ -1231,7 +1120,7 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
                   </FieldLabel>
                   <FieldLabel label="Invoice number">
                     <input
-                      className="px-3 py-2 border border-slate-300 rounded-lg"
+                      className="min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                       value={editing.invoiceNumber}
                       onChange={(event) => setField('invoiceNumber', event.target.value)}
                       placeholder="Optional"
@@ -1239,7 +1128,7 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
                   </FieldLabel>
                   <FieldLabel label="Project code">
                     <input
-                      className="px-3 py-2 border border-slate-300 rounded-lg"
+                      className="min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                       value={editing.projectCode}
                       onChange={(event) => setField('projectCode', event.target.value)}
                       placeholder="Optional"
@@ -1247,7 +1136,7 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
                   </FieldLabel>
                   <FieldLabel label="Service code">
                     <input
-                      className="px-3 py-2 border border-slate-300 rounded-lg"
+                      className="min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                       value={editing.serviceCode}
                       onChange={(event) => setField('serviceCode', event.target.value)}
                       placeholder="Optional"
@@ -1255,7 +1144,7 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
                   </FieldLabel>
                   <FieldLabel label="Reference link">
                     <input
-                      className="px-3 py-2 border border-slate-300 rounded-lg"
+                      className="min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                       value={editing.referenceLink}
                       onChange={(event) => setField('referenceLink', event.target.value)}
                       placeholder="Invoice or receipt URL"
@@ -1263,7 +1152,7 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
                   </FieldLabel>
                   <FieldLabel label="Tags">
                     <input
-                      className="px-3 py-2 border border-slate-300 rounded-lg"
+                      className="min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                       value={editing.tags}
                       onChange={(event) => setField('tags', event.target.value)}
                       placeholder="monthly, infra, ai"
@@ -1271,7 +1160,7 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
                   </FieldLabel>
                   <FieldLabel label="Description">
                     <textarea
-                      className="px-3 py-2 border border-slate-300 rounded-lg min-h-[80px]"
+                      className="min-h-[80px] min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                       value={editing.description}
                       onChange={(event) => setField('description', event.target.value)}
                       placeholder="Optional note for finance/audit"
@@ -1301,7 +1190,7 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
                   <div key={line.id} className="grid grid-cols-1 md:grid-cols-12 gap-2 mb-3 pb-3 border-b border-slate-200">
                     <MiniLabel label="Cost type" className="md:col-span-2">
                       <select
-                        className="px-3 py-2 border border-slate-300 rounded-lg"
+                        className="min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                         value={line.lineType}
                         onChange={(event) => setLineItemField(index, 'lineType', event.target.value)}
                       >
@@ -1340,7 +1229,7 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
                     </MiniLabel>
                     <MiniLabel label="Billing unit" className="md:col-span-2">
                       <input
-                        className="px-3 py-2 border border-slate-300 rounded-lg"
+                        className="min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                         value={line.unit}
                         onChange={(event) => setLineItemField(index, 'unit', event.target.value)}
                         placeholder="month, token, seat"
@@ -1348,7 +1237,7 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
                     </MiniLabel>
                     <MiniLabel label="Calculated cost" className="md:col-span-2">
                       <input
-                        className="px-3 py-2 border border-slate-300 rounded-lg bg-white"
+                        className="min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                         readOnly
                         value={toMoney(cost, displayCurrency)}
                       />
@@ -1356,7 +1245,7 @@ export const Expenses: React.FC<{ onToast: (type: 'success' | 'error', msg: stri
 
                     <MiniLabel label="Notes" className="md:col-span-4">
                       <textarea
-                        className="px-3 py-2 border border-slate-300 rounded-lg"
+                        className="min-h-9 rounded-lg border-[1.5px] border-slate-200 bg-white px-2.5 py-[7px] text-[13px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:shadow-[0_0_0_2.5px_rgba(14,165,233,0.08)] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                         value={line.notes}
                         onChange={(event) => setLineItemField(index, 'notes', event.target.value)}
                         placeholder="Optional"

@@ -1,6 +1,8 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery } from '@apollo/client/react';
-import { Check, Download, Edit2, Filter, Plus, Printer, RotateCcw, Save, Search, Trash2, X } from 'lucide-react';
+import { CalendarDays, Check, CreditCard, Download, Edit2, FileText, Filter, Gauge, ListChecks, Plus, Printer, RotateCcw, Save, Search, Trash2 } from 'lucide-react';
+import { FormActions, FormDialog, FormField, FormSection, checkboxClass, formControlClass, useConfirmDialog } from '../ui/FormKit';
+import { DataTable, RowActionButton } from '../ui/DataTable';
 import {
   ADMIN_DELETE_PLAN_MUTATION,
   ADMIN_DEACTIVATE_PROMO_CODE_MUTATION,
@@ -8,13 +10,47 @@ import {
   ADMIN_PROMO_CODES_QUERY,
   ADMIN_SAVE_PROMO_CODE_MUTATION,
   ADMIN_SAVE_PLAN_MUTATION,
+  ADMIN_PLANS_PACKAGING_QUERY,
+  ADMIN_CURRENCY_RATES_QUERY,
 } from '../../../lib/graphql';
-import { centsFromDollars, formatPrice } from '../../../lib/admin-utils';
-import { buildColumnFilterOptions, ColumnFilter, matchesColumnFilter } from '../ColumnFilter';
+import {
+  ApplyToSubscribersDialog,
+  FeatureAreaChips,
+  PackageBuilder,
+  YearlyPricingFields,
+  PackageModuleSelection,
+  PlanPackagingInfo,
+  PricingMode,
+  draftToPlanInputFields,
+  packagePriceLines,
+  useAllAdminPages,
+  usePackageModuleOptions,
+  validatePackageDraft,
+  type YearlyPriceMode,
+} from './PackageBuilder';
+import {
+  amountFromCents,
+  amountInputFromCents,
+  centsFromAmount,
+  currencyDecimals,
+  currencyInputStep,
+  formatPrice,
+  MAX_INT32,
+  moneyInputError,
+  wholeNumberError,
+} from '../../../lib/admin-utils';
+import { PartialListWarning, useAllPagesQuery } from '../../../lib/useAllPagesQuery';
+import { useDebouncedValue } from '../../../lib/useDebouncedValue';
 
-type BillingInterval = 'monthly' | 'yearly';
-type SortDirection = 'asc' | 'desc' | null;
-type PlanSortKey = 'sortOrder' | 'name' | 'basePriceCents' | 'billingInterval' | 'trialMonths' | 'active';
+type BillingInterval = 'monthly' | 'yearly' | 'both';
+
+interface PlanPackaging extends PlanPackagingInfo {
+  pricingMode: PricingMode;
+  bundleDiscountPct: number;
+  yearlyPriceCents: number | null;
+  yearlyDiscountPct: number;
+  companiesCount?: number | null;
+}
 type PlanAdminTab = 'plans' | 'promos';
 type DiscountType = 'percent' | 'amount';
 
@@ -38,6 +74,12 @@ interface EditingPlan {
   id: string;
   name: string;
   description: string;
+  /**
+   * The price as typed. Kept as text and converted only when saved, so
+   * changing the currency never changes it (10.50 USD -> JPY -> USD stays 10.50).
+   */
+  basePriceInput: string;
+  /** Minor units of basePriceInput in `currency` (for the live previews). */
   basePriceCents: number;
   currency: string;
   billingInterval: BillingInterval;
@@ -48,6 +90,15 @@ interface EditingPlan {
   recommended: boolean;
   active: boolean;
   sortOrder: number;
+  // Dynamic package fields
+  pricingMode: PricingMode;
+  bundleDiscountPct: number;
+  yearlyPriceOverride: string;
+  yearlyDiscountPct: number;
+  yearlyMode?: YearlyPriceMode;
+  isPublic: boolean;
+  modules: PackageModuleSelection[];
+  allowEmptyModules?: boolean;
 }
 
 interface PromoCodeType {
@@ -79,7 +130,12 @@ interface EditingPromo {
   code: string;
   name: string;
   discountType: DiscountType;
-  discountValue: number;
+  /**
+   * The discount as typed: a percentage, or an amount in `currency`. Kept as
+   * text and converted to minor units only when saved, so switching the
+   * currency back and forth never changes it.
+   */
+  discountInput: string;
   currency: string;
   active: boolean;
   startsAt: string;
@@ -116,60 +172,6 @@ type DeactivatePromoCodeMutationData = {
   };
 };
 
-const canonicalPlans: PlanType[] = [
-  {
-    id: 'free',
-    name: 'Free',
-    description: 'Everything you need to get started - no credit card, no commitment.',
-    basePriceCents: 0,
-    currency: 'USD',
-    billingInterval: 'monthly',
-    perEmployee: false,
-    trialMonths: 0,
-    employeeLimit: 10,
-    recommended: false,
-    active: true,
-    sortOrder: 1,
-    features: [
-      'Up to 10 employees',
-      'Core HR & Payroll',
-      'Time & Attendance tracking',
-      'Basic reporting (5 templates)',
-      'Employee self-service portal',
-      '2 integrations',
-      'Email support',
-    ],
-  },
-  {
-    id: 'premium',
-    name: 'Premium',
-    description: 'Full AI power across every department. Unlimited scale, zero friction.',
-    basePriceCents: 1200,
-    currency: 'USD',
-    billingInterval: 'monthly',
-    perEmployee: true,
-    trialMonths: 6,
-    employeeLimit: null,
-    recommended: true,
-    active: true,
-    sortOrder: 2,
-    features: [
-      'Unlimited employees',
-      'Full AI Workforce intelligence',
-      'Multi-rate & multi-entity payroll',
-      'AI Talent & ATS (unlimited jobs)',
-      'AI Performance & 360 feedback',
-      'AI Accounting & self-reconciliation',
-      'AI CRM - full pipeline',
-      '100+ analytics report templates',
-      'Unlimited integrations',
-      'Dedicated success manager',
-      '24 / 7 priority support & SLA',
-      'Custom onboarding & training',
-    ],
-  },
-];
-
 const normalizeCurrency = (currency: string) => currency.trim().toUpperCase();
 
 const parseFeatures = (features: PlanType['features']): string[] => {
@@ -186,13 +188,29 @@ const parseFeatures = (features: PlanType['features']): string[] => {
   }
 };
 
-const toEditingPlan = (plan: PlanType): EditingPlan => ({
+/**
+ * The edit form for a plan. Needs its packaging row (modules, visibility,
+ * yearly price): editing without it saved a private plan as public, dropped
+ * its yearly price and its modules -- the caller waits until it is loaded.
+ */
+const toEditingPlan = (plan: PlanType, packaging: PlanPackaging): EditingPlan => ({
+  pricingMode: packaging.pricingMode || 'fixed',
+  bundleDiscountPct: Number(packaging.bundleDiscountPct) || 0,
+  yearlyPriceOverride: amountInputFromCents(packaging.yearlyPriceCents, plan.currency || 'USD'),
+  yearlyDiscountPct: Number(packaging.yearlyDiscountPct) || 0,
+  yearlyMode: packaging.yearlyPriceCents === null || packaging.yearlyPriceCents === undefined ? 'percent' : 'fixed',
+  isPublic: packaging.isPublic ?? true,
+  modules: (packaging.modules || []).map((m) => ({ moduleId: m.moduleId, priceOverride: '' })),
+  // An old plan (or Free) without modules can still be edited and saved as it is.
+  allowEmptyModules: !(packaging.modules || []).length,
   id: plan.id,
   name: plan.name,
   description: plan.description || '',
+  basePriceInput: amountInputFromCents(plan.basePriceCents, plan.currency || 'USD'),
   basePriceCents: plan.basePriceCents,
   currency: normalizeCurrency(plan.currency || 'USD'),
-  billingInterval: plan.billingInterval || 'monthly',
+  // The interval the package is actually sold on (a yearly-only package stays yearly).
+  billingInterval: (packaging.billingInterval as BillingInterval) || plan.billingInterval || 'monthly',
   perEmployee: Boolean(plan.perEmployee),
   trialMonths: plan.trialMonths || 0,
   employeeLimit: plan.employeeLimit === null || plan.employeeLimit === undefined ? '' : String(plan.employeeLimit),
@@ -203,9 +221,16 @@ const toEditingPlan = (plan: PlanType): EditingPlan => ({
 });
 
 const newEditingPlan = (plans: PlanType[]): EditingPlan => ({
+  pricingMode: 'fixed',
+  bundleDiscountPct: 0,
+  yearlyPriceOverride: '',
+  yearlyDiscountPct: 0,
+  isPublic: true,
+  modules: [],
   id: '',
   name: '',
   description: '',
+  basePriceInput: '0',
   basePriceCents: 0,
   currency: 'USD',
   billingInterval: 'monthly',
@@ -222,7 +247,7 @@ const newEditingPromo = (defaultPlanId: string | null = null): EditingPromo => (
   code: '',
   name: '',
   discountType: 'percent',
-  discountValue: 10,
+  discountInput: '10',
   currency: 'USD',
   active: true,
   startsAt: '',
@@ -251,7 +276,10 @@ const toEditingPromo = (promo: PromoCodeType): EditingPromo => ({
   code: promo.code,
   name: promo.name || '',
   discountType: promo.discountType,
-  discountValue: promo.discountValue,
+  discountInput:
+    promo.discountType === 'amount'
+      ? amountInputFromCents(promo.discountValue, promo.currency || 'USD')
+      : String(promo.discountValue ?? ''),
   currency: normalizeCurrency(promo.currency || 'USD'),
   active: promo.active,
   startsAt: toDateTimeLocal(promo.startsAt),
@@ -263,16 +291,26 @@ const toEditingPromo = (promo: PromoCodeType): EditingPromo => ({
   minimumAmountDollars:
     promo.minimumAmountCents === null || promo.minimumAmountCents === undefined
       ? ''
-      : String((promo.minimumAmountCents / 100).toFixed(2)),
+      : // Same currency rule as the save (centsFromAmount), so a JPY minimum isn't cut 100x.
+        amountFromCents(promo.minimumAmountCents, promo.currency || 'USD').toFixed(currencyDecimals(promo.currency || 'USD')),
   appliesToPlanIds: promo.appliesToPlanIds || [],
   applicableBillingIntervals: (promo.applicableBillingIntervals || []).filter((item): item is BillingInterval => item === 'monthly' || item === 'yearly'),
 });
 
-const planToInput = (plan: EditingPlan) => ({
-  id: plan.id,
+// Same rule as the backend (new plan ids only; older ids stay editable).
+const PLAN_ID_PATTERN = /^[a-z0-9][a-z0-9_-]*$/;
+const PLAN_ID_MAX_LENGTH = 50;
+/** As the backend's plan validation (PLAN_MAX_TRIAL_MONTHS in admin_dashboard.py). */
+const PLAN_MAX_TRIAL_MONTHS = 120;
+
+/** `createOnly`: the backend refuses instead of overwriting an existing plan with this id. */
+const planToInput = (plan: EditingPlan, createOnly = false) => ({
+  id: plan.id.trim(),
+  createOnly,
   name: plan.name.trim(),
   description: plan.description.trim(),
-  basePriceCents: plan.basePriceCents,
+  // Converted from the typed text here, once, in the plan's final currency.
+  basePriceCents: centsFromAmount(plan.basePriceInput || '0', plan.currency || 'USD'),
   currency: normalizeCurrency(plan.currency || 'USD'),
   billingInterval: plan.billingInterval,
   perEmployee: plan.perEmployee,
@@ -285,14 +323,21 @@ const planToInput = (plan: EditingPlan) => ({
   recommended: plan.recommended,
   active: plan.active,
   sortOrder: plan.sortOrder,
+  ...draftToPlanInputFields(plan),
 });
 
-const promoToInput = (promo: EditingPromo) => ({
+/** `createOnly`: the backend refuses instead of overwriting an existing promo with this code. */
+const promoToInput = (promo: EditingPromo, createOnly = false) => ({
   id: promo.id,
+  createOnly,
   code: promo.code.trim().toUpperCase(),
   name: promo.name.trim(),
   discountType: promo.discountType,
-  discountValue: Number(promo.discountValue) || 0,
+  // A percentage as typed; an amount converted once, in the promo's final currency.
+  discountValue:
+    promo.discountType === 'amount'
+      ? centsFromAmount(promo.discountInput || '0', promo.currency || 'USD')
+      : Number(promo.discountInput) || 0,
   currency: normalizeCurrency(promo.currency || 'USD'),
   active: promo.active,
   startsAt: fromDateTimeLocal(promo.startsAt),
@@ -301,13 +346,18 @@ const promoToInput = (promo: EditingPromo) => ({
   perEmailLimit: promo.perEmailLimit.trim() ? Number(promo.perEmailLimit) : null,
   perCompanyLimit: promo.perCompanyLimit.trim() ? Number(promo.perCompanyLimit) : null,
   firstTimeCustomerOnly: promo.firstTimeCustomerOnly,
-  minimumAmountCents: promo.minimumAmountDollars.trim() ? centsFromDollars(Number(promo.minimumAmountDollars)) : null,
+  minimumAmountCents: promo.minimumAmountDollars.trim()
+    ? centsFromAmount(promo.minimumAmountDollars, promo.currency || 'USD')
+    : null,
   appliesToPlanIds: promo.appliesToPlanIds,
   applicableBillingIntervals: promo.applicableBillingIntervals,
 });
 
+const monthsLabel = (months: number) => `${months} month${months === 1 ? '' : 's'}`;
+
 const billingCopy = (plan: PlanType) => {
   if (plan.basePriceCents === 0) return 'forever';
+  if (plan.billingInterval === 'both') return plan.perEmployee ? 'per employee / mo or yr' : 'monthly or yearly';
   return plan.perEmployee ? `per employee / ${plan.billingInterval === 'yearly' ? 'yr' : 'mo'}` : `per ${plan.billingInterval}`;
 };
 
@@ -330,126 +380,181 @@ const downloadTextFile = (filename: string, content: string, type: string) => {
 };
 
 export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string) => void }> = ({ onToast }) => {
+  // In-app confirm / reason questions (not the browser's "localhost says").
+  const { confirm, askReason, dialog } = useConfirmDialog();
   const [activeTab, setActiveTab] = useState<PlanAdminTab>('plans');
   const [search, setSearch] = useState('');
   const [activeFilter, setActiveFilter] = useState<'all' | 'active' | 'inactive'>('all');
-  const [planStatusSelections, setPlanStatusSelections] = useState<string[]>([]);
   const [editing, setEditing] = useState<EditingPlan | null>(null);
   const [editingMode, setEditingMode] = useState<'create' | 'edit'>('edit');
-  const [viewMode, setViewMode] = useState<'card' | 'table'>('card');
+  // Table first (as in the portal); Board View is one click away.
+  const [viewMode, setViewMode] = useState<'card' | 'table'>('table');
   const [planFiltersOpen, setPlanFiltersOpen] = useState(true);
-  const [sortKey, setSortKey] = useState<PlanSortKey>('sortOrder');
-  const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
   const [promoSearch, setPromoSearch] = useState('');
-  const [promoStatusSelections, setPromoStatusSelections] = useState<string[]>([]);
-  const [promoFiltersOpen, setPromoFiltersOpen] = useState(true);
   const [editingPromo, setEditingPromo] = useState<EditingPromo | null>(null);
   const [editingPromoMode, setEditingPromoMode] = useState<'create' | 'edit'>('create');
+  const [applyFor, setApplyFor] = useState<{ planId: string; planName: string } | null>(null);
+  const { options: moduleOptions } = usePackageModuleOptions();
+  // Typed searches go to the server once typing pauses: one request per search, not per key.
+  const debouncedSearch = useDebouncedValue(search);
+  const debouncedPromoSearch = useDebouncedValue(promoSearch);
 
-  const { data, loading, error, refetch } = useQuery<
-    { adminPlans: PlanType[] },
-    { includeInactive: boolean; search: string | null; active: boolean | null },
-    any
-  >(ADMIN_PLANS_QUERY, {
-    variables: {
-      includeInactive: true,
-      search: search.trim() || null,
-      active: null,
+  // Every plan, not the API's first page of 50.
+  const {
+    rows: planRows,
+    loading,
+    error,
+    pageError: planPageError,
+    loadingMore: plansLoadingMore,
+    refetch,
+  } = useAllPagesQuery<PlanType, { includeInactive: boolean; search: string | null; active: boolean | null }>(
+    ADMIN_PLANS_QUERY,
+    'adminPlans',
+    {
+      variables: {
+        includeInactive: true,
+        search: debouncedSearch.trim() || null,
+        active: null,
+      },
+      fetchPolicy: 'cache-and-network',
     },
+  );
+  // The plan and promo editors pick their currency from the stored currencies.
+  // Read fresh each time an editor opens: one added on the Currencies page shows up.
+  const { data: currencyData } = useQuery<
+    { adminCurrencyRates: { rates: { code: string; name?: string | null }[] } },
+    { previewUsdCents: number },
+    any
+  >(ADMIN_CURRENCY_RATES_QUERY, {
+    variables: { previewUsdCents: 0 },
+    skip: !editingPromo && !editing,
     fetchPolicy: 'cache-and-network',
   });
-  const { data: promoData, loading: promoLoading, refetch: refetchPromos } = useQuery<
-    { adminPromoCodes: PromoCodeType[] },
-    { includeInactive: boolean; search: string | null; active: boolean | null; planId: string | null },
-    any
-  >(ADMIN_PROMO_CODES_QUERY, {
+  const currencyOptionsWith = (current: string) => {
+    const codes = (currencyData?.adminCurrencyRates?.rates || []).map((rate) => normalizeCurrency(rate.code)).filter(Boolean);
+    return Array.from(new Set(['USD', ...codes, normalizeCurrency(current || 'USD')])).sort();
+  };
+  const promoCurrencyOptions = currencyOptionsWith(editingPromo?.currency || 'USD');
+  const planCurrencyOptions = currencyOptionsWith(editing?.currency || 'USD');
+  const {
+    rows: promoRows,
+    loading: promoLoading,
+    error: promoError,
+    pageError: promoPageError,
+    loadingMore: promosLoadingMore,
+    refetch: refetchPromos,
+  } = useAllPagesQuery<
+    PromoCodeType,
+    { includeInactive: boolean; search: string | null; active: boolean | null; planId: string | null }
+  >(ADMIN_PROMO_CODES_QUERY, 'adminPromoCodes', {
     variables: {
       includeInactive: true,
-      search: promoSearch.trim() || null,
+      search: debouncedPromoSearch.trim() || null,
       active: null,
       planId: null,
     },
     fetchPolicy: 'cache-and-network',
   });
 
-  const [savePlan, { loading: saving }] = useMutation(ADMIN_SAVE_PLAN_MUTATION);
+  // Modules + computed prices live in a separate document so the base plan query stays stable.
+  // Every page of packages (the API returns at most 200 per call).
+  const {
+    rows: packagingRows,
+    loading: packagingLoading,
+    error: packagingError,
+    refetch: refetchPackaging,
+  } = useAllAdminPages<PlanPackaging>(ADMIN_PLANS_PACKAGING_QUERY, 'adminPlans');
+  // Plans deleted here, hidden until the packaging list is read again (so the
+  // id can be used again for a new plan right away).
+  const [deletedPlanIds, setDeletedPlanIds] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    setDeletedPlanIds(new Set());
+  }, [packagingRows]);
+  const packagingById = useMemo(
+    () => new Map((packagingRows || []).filter((item) => !deletedPlanIds.has(item.id)).map((item) => [item.id, item])),
+    [packagingRows, deletedPlanIds],
+  );
+  const [savePlan, { loading: saving }] = useMutation<
+    {
+      adminSavePlan: {
+        success: boolean;
+        message?: string | null;
+        plan?: { id: string; version?: number | null; outdatedSubscribersCount?: number | null } | null;
+      };
+    },
+    { input: ReturnType<typeof planToInput> },
+    any,
+    any
+  >(ADMIN_SAVE_PLAN_MUTATION);
   const [deletePlan, { loading: deleting }] = useMutation<DeletePlanMutationData, { id: string; reason: string }, any, any>(ADMIN_DELETE_PLAN_MUTATION);
+  // One request per action at a time: Apollo's `loading` only disables a
+  // button after a re-render, so a quick double click could send twice.
+  const busy = useRef<Set<string>>(new Set());
+  const once = async (key: string, action: () => Promise<void>) => {
+    if (busy.current.has(key)) return;
+    busy.current.add(key);
+    try {
+      await action();
+    } finally {
+      busy.current.delete(key);
+    }
+  };
   const [savePromoCode, { loading: savingPromo }] = useMutation<SavePromoCodeMutationData, { input: ReturnType<typeof promoToInput> }, any, any>(ADMIN_SAVE_PROMO_CODE_MUTATION);
   const [deactivatePromoCode, { loading: deactivatingPromo }] = useMutation<DeactivatePromoCodeMutationData, { id: string; reason: string }, any, any>(ADMIN_DEACTIVATE_PROMO_CODE_MUTATION);
 
-  const backendPlans = data?.adminPlans || [];
-  const sourcePlans = backendPlans.length > 0 ? backendPlans : canonicalPlans;
-  const backendReady = !error && backendPlans.length > 0;
-  const promoCodes = promoData?.adminPromoCodes || [];
-  const premiumPlans = sourcePlans.filter((plan) => plan.active && plan.basePriceCents > 0);
-  const planStatusOptions = useMemo(
-    () => buildColumnFilterOptions(sourcePlans, (plan) => (plan.active ? 'Active' : 'Inactive')),
-    [sourcePlans],
-  );
-  const promoStatusOptions = useMemo(
-    () => buildColumnFilterOptions(promoCodes, (promo) => (promo.active ? 'Active' : 'Inactive')),
-    [promoCodes],
-  );
-
+  const backendPlans = planRows || [];
+  // Only real plans: when the list can't be loaded the page says so (with
+  // Try again) instead of showing built-in plans that look editable.
+  const sourcePlans = backendPlans;
+  const promoCodes = promoRows || [];
+  // Every active paid plan for the promo form. adminPlans is searched server-side
+  // with the Plans search box, so the unfiltered packaging list is used instead.
+  const premiumPlans = useMemo(() => {
+    const all = packagingRows;
+    if (!all?.length) {
+      return sourcePlans
+        .filter((plan) => plan.active && plan.basePriceCents > 0)
+        .map((plan) => ({ id: plan.id, name: plan.name, billingInterval: plan.billingInterval }));
+    }
+    return all
+      .filter((plan) => plan.active && ((plan.pricing?.monthlyPriceCents || 0) > 0 || (plan.pricing?.yearlyPriceCents || 0) > 0))
+      .map((plan) => ({ id: plan.id, name: plan.name || plan.id, billingInterval: plan.billingInterval || '' }));
+  }, [packagingRows, sourcePlans]);
   const plans = useMemo(() => {
     const needle = search.trim().toLowerCase();
     const filtered = sourcePlans
       .filter((plan) => {
         if (viewMode === 'card' && activeFilter !== 'all' && plan.active !== (activeFilter === 'active')) return false;
-        if (!matchesColumnFilter(planStatusSelections, plan.active ? 'Active' : 'Inactive')) return false;
         if (!needle) return true;
         return [plan.id, plan.name, plan.description, ...parseFeatures(plan.features)]
           .join(' ')
           .toLowerCase()
           .includes(needle);
       });
-    if (!sortDirection) return filtered;
-    return [...filtered].sort((a, b) => {
-      const left = a[sortKey];
-      const right = b[sortKey];
-      const leftValue = typeof left === 'string' ? left.toLowerCase() : Number(left ?? 0);
-      const rightValue = typeof right === 'string' ? right.toLowerCase() : Number(right ?? 0);
-      if (leftValue < rightValue) return sortDirection === 'asc' ? -1 : 1;
-      if (leftValue > rightValue) return sortDirection === 'asc' ? 1 : -1;
-      return (a.sortOrder || 0) - (b.sortOrder || 0);
-    });
-  }, [sourcePlans, search, activeFilter, planStatusSelections, sortKey, sortDirection, viewMode]);
-
-  const displayedPromoCodes = useMemo(
-    () => promoCodes.filter((promo) => matchesColumnFilter(promoStatusSelections, promo.active ? 'Active' : 'Inactive')),
-    [promoCodes, promoStatusSelections],
-  );
-
-  const cycleSort = (key: PlanSortKey) => {
-    if (sortKey !== key) {
-      setSortKey(key);
-      setSortDirection('asc');
-      return;
-    }
-    setSortDirection((current) => current === 'asc' ? 'desc' : current === 'desc' ? null : 'asc');
-  };
-
-  const SortHeader = ({ label, column, align = 'left' }: { label: string; column: PlanSortKey; align?: 'left' | 'right' }) => (
-    <button
-      type="button"
-      onClick={() => cycleSort(column)}
-      className={`inline-flex w-full items-center gap-1 text-[13px] font-extrabold uppercase tracking-wide ${
-        align === 'right' ? 'justify-end text-right' : 'justify-start text-left'
-      } ${sortKey === column && sortDirection ? 'text-sky-700' : 'text-sky-600'}`}
-    >
-      <span>{label}</span>
-      <span className="text-[10px]">{sortKey === column && sortDirection ? (sortDirection === 'asc' ? '▲' : '▼') : '↕'}</span>
-    </button>
-  );
+    return [...filtered].sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0) || a.name.localeCompare(b.name));
+  }, [sourcePlans, search, activeFilter, viewMode]);
 
   const openCreatePlan = () => {
     setEditingMode('create');
     setEditing(newEditingPlan(sourcePlans));
   };
 
+  // Editing needs the plan's packaging row; Edit stays disabled while it loads.
+  const packagingPending = (plan: PlanType) => !packagingById.has(plan.id) && packagingLoading && !packagingError;
   const openEditPlan = (plan: PlanType) => {
+    const packaging = packagingById.get(plan.id);
+    if (!packaging) {
+      onToast(
+        'error',
+        packagingError
+          ? `The package details of "${plan.name}" could not be loaded (${packagingError.message}). Try again.`
+          : `The package details of "${plan.name}" are still loading. Try again in a moment.`,
+      );
+      if (!packagingLoading) refetchPackaging();
+      return;
+    }
     setEditingMode('edit');
-    setEditing(toEditingPlan(plan));
+    setEditing(toEditingPlan(plan, packaging));
   };
 
   const closePlanWindow = () => {
@@ -472,35 +577,104 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
     setEditingPromoMode('create');
   };
 
-  const handleSave = async () => {
+  const handleSave = () => once('save-plan', savePlanNow);
+  const savePlanNow = async () => {
     if (!editing) return;
     if (!editing.id.trim() || !editing.name.trim()) {
       onToast('error', 'Plan id and name are required');
       return;
     }
+    // Checked before the request: the server takes whole numbers (an Int) and
+    // whole units for JPY / ISK / UGX, and refuses the whole save otherwise.
+    const fieldProblem =
+      moneyInputError(editing.basePriceInput, editing.currency || 'USD', 'Package price') ||
+      wholeNumberError(editing.trialMonths, 'Trial months', 0, PLAN_MAX_TRIAL_MONTHS) ||
+      // Blank means unlimited; when set, at least one employee (as the server requires).
+      wholeNumberError(editing.employeeLimit, 'Employee limit', 1, MAX_INT32);
+    if (fieldProblem) {
+      onToast('error', fieldProblem);
+      return;
+    }
+
+    const creating = editingMode === 'create';
+    if (creating) {
+      const id = editing.id.trim();
+      if (id.length > PLAN_ID_MAX_LENGTH) {
+        onToast('error', `Plan ID must be at most ${PLAN_ID_MAX_LENGTH} characters`);
+        return;
+      }
+      if (!PLAN_ID_PATTERN.test(id)) {
+        onToast('error', "Plan ID may only use lowercase letters, numbers, '-' and '_', and must start with a letter or number");
+        return;
+      }
+      if (packagingById.has(id)) {
+        onToast('error', `A plan with ID "${id}" already exists. Choose another ID or edit that plan.`);
+        return;
+      }
+    }
+
+    const problem = validatePackageDraft(editing, moduleOptions);
+    if (problem) {
+      onToast('error', problem);
+      return;
+    }
 
     try {
-      await savePlan({ variables: { input: planToInput(editing) } });
+      const result = await savePlan({ variables: { input: planToInput(editing, creating) } });
+      const payload = result.data?.adminSavePlan;
+      if (payload && payload.success === false) {
+        onToast('error', payload.message || 'Could not save package');
+        return;
+      }
       onToast('success', `Plan "${editing.name}" ${editingMode === 'create' ? 'created' : 'saved'}`);
+      const saved = { planId: editing.id.trim(), planName: editing.name };
       closePlanWindow();
       refetch();
+      refetchPackaging();
+      // The modules changed and companies are on the older version: offer to
+      // give them the new modules now (dry-run preview first).
+      if (editingMode === 'edit' && (payload?.plan?.outdatedSubscribersCount || 0) > 0) {
+        setApplyFor(saved);
+      }
     } catch (err: any) {
       onToast('error', err.message || 'Backend plan API is not ready yet');
     }
   };
 
-  const handleSavePromo = async () => {
+  const handleSavePromo = () => once('save-promo', savePromoNow);
+  const savePromoNow = async () => {
     if (!editingPromo) return;
     if (!editingPromo.code.trim()) {
       onToast('error', 'Promo code is required');
       return;
     }
-    if (editingPromo.discountType === 'percent' && (editingPromo.discountValue <= 0 || editingPromo.discountValue > 100)) {
-      onToast('error', 'Percent discount must be between 1 and 100');
-      return;
+    const currency = editingPromo.currency || 'USD';
+    if (editingPromo.discountType === 'percent') {
+      // An Int on the server: 12.5 failed the whole save with a GraphQL error.
+      const value = Number(editingPromo.discountInput);
+      if (!editingPromo.discountInput.trim() || !Number.isInteger(value) || value < 1 || value > 100) {
+        onToast('error', 'Percent discount must be a whole number between 1 and 100');
+        return;
+      }
+    } else {
+      const problem = moneyInputError(editingPromo.discountInput, currency, 'Discount amount');
+      if (problem) {
+        onToast('error', problem);
+        return;
+      }
+      if (!(centsFromAmount(editingPromo.discountInput || '0', currency) > 0)) {
+        onToast('error', 'Fixed discount amount must be greater than 0');
+        return;
+      }
     }
-    if (editingPromo.discountType === 'amount' && editingPromo.discountValue <= 0) {
-      onToast('error', 'Fixed discount amount must be greater than 0');
+    const limitProblem =
+      moneyInputError(editingPromo.minimumAmountDollars, currency, 'Minimum amount') ||
+      // Blank = unlimited; a limit of 0 could never be used (the server refuses it).
+      wholeNumberError(editingPromo.maxRedemptions, 'Max redemptions', 1, MAX_INT32) ||
+      wholeNumberError(editingPromo.perEmailLimit, 'Per email limit', 1, MAX_INT32) ||
+      wholeNumberError(editingPromo.perCompanyLimit, 'Per company limit', 1, MAX_INT32);
+    if (limitProblem) {
+      onToast('error', limitProblem);
       return;
     }
     if (editingPromo.appliesToPlanIds.length === 0) {
@@ -509,7 +683,9 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
     }
 
     try {
-      const { data } = await savePromoCode({ variables: { input: promoToInput(editingPromo) } });
+      const { data } = await savePromoCode({
+        variables: { input: promoToInput(editingPromo, editingPromoMode === 'create') },
+      });
       const payload = data?.adminSavePromoCode;
       if (!payload?.success) {
         onToast('error', payload?.message || 'Promo code could not be saved');
@@ -523,9 +699,18 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
     }
   };
 
-  const handleDeletePlan = async (plan: PlanType) => {
-    const reason = window.prompt(`Reason for deleting ${plan.name}`, 'Admin deleted unused plan');
-    if (!reason?.trim()) {
+  const handleDeletePlan = (plan: PlanType) => once(`delete-plan-${plan.id}`, () => deletePlanNow(plan));
+  const deletePlanNow = async (plan: PlanType) => {
+    const reason = await askReason({
+      title: `Delete ${plan.name}?`,
+      message: 'Customers can no longer choose this plan at registration. Companies already on it keep it.',
+      label: 'Reason for deleting',
+      defaultValue: 'Admin deleted unused plan',
+      confirmLabel: 'Delete plan',
+      tone: 'danger',
+    });
+    if (reason === null) return;
+    if (!reason.trim()) {
       onToast('error', 'Reason is required to delete a plan');
       return;
     }
@@ -542,15 +727,29 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
         return;
       }
       onToast('success', `Plan "${plan.name}" deleted`);
+      // The packaging list (subscriber counts, promo plan list, the
+      // "id already exists" check) must forget the plan too, so its id can be
+      // used again right away.
+      setDeletedPlanIds((current) => new Set(current).add(plan.id));
+      refetchPackaging();
       await refetch();
     } catch (err: any) {
       onToast('error', err.message || 'Plan could not be deleted');
     }
   };
 
-  const handleDeactivatePromo = async (promo: PromoCodeType) => {
-    const reason = window.prompt(`Reason for deactivating ${promo.code}`, 'Admin deactivated promo code');
-    if (!reason?.trim()) {
+  const handleDeactivatePromo = (promo: PromoCodeType) => once(`deactivate-promo-${promo.id}`, () => deactivatePromoNow(promo));
+  const deactivatePromoNow = async (promo: PromoCodeType) => {
+    const reason = await askReason({
+      title: `Deactivate ${promo.code}?`,
+      message: 'Customers can no longer use this code at checkout.',
+      label: 'Reason for deactivating',
+      defaultValue: 'Admin deactivated promo code',
+      confirmLabel: 'Deactivate',
+      tone: 'danger',
+    });
+    if (reason === null) return;
+    if (!reason.trim()) {
       onToast('error', 'Reason is required to deactivate a promo code');
       return;
     }
@@ -579,7 +778,7 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
       return;
     }
     const rows = plans.map((plan) => (
-      `<tr><td>${escapeHtml(plan.id)}</td><td>${escapeHtml(plan.name)}</td><td>${plan.basePriceCents / 100}</td><td>${escapeHtml(plan.currency)}</td><td>${escapeHtml(plan.billingInterval)}</td><td>${escapeHtml(plan.active ? 'Active' : 'Inactive')}</td></tr>`
+      `<tr><td>${escapeHtml(plan.id)}</td><td>${escapeHtml(plan.name)}</td><td>${amountFromCents(plan.basePriceCents, plan.currency || 'USD')}</td><td>${escapeHtml(plan.currency)}</td><td>${escapeHtml(plan.billingInterval)}</td><td>${escapeHtml(plan.active ? 'Active' : 'Inactive')}</td></tr>`
     )).join('');
     downloadTextFile(
       'superadmin-plans.xls',
@@ -597,7 +796,7 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
     const rows = plans.map((plan) => (
       `<tr><td>${escapeHtml(plan.id)}</td><td>${escapeHtml(plan.name)}</td><td>${escapeHtml(formatPrice(plan.basePriceCents, plan.currency))}</td><td>${escapeHtml(plan.billingInterval)}</td><td>${escapeHtml(plan.active ? 'Active' : 'Inactive')}</td></tr>`
     )).join('');
-    const printWindow = window.open('', '_blank', 'noopener,noreferrer,width=1024,height=768');
+    const printWindow = window.open('', '_blank', 'width=1024,height=768');
     if (!printWindow) return;
     printWindow.document.write(`<!doctype html><html><head><title>Plans</title><style>body{font-family:Arial,sans-serif;padding:28px;color:#0f172a}table{border-collapse:collapse;width:100%}th,td{border:1px solid #cbd5e1;padding:8px 10px;text-align:left}th{background:#f1f5f9}</style></head><body><h1>Plans</h1><table><thead><tr><th>ID</th><th>Name</th><th>Price</th><th>Billing</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table></body></html>`);
     printWindow.document.close();
@@ -609,17 +808,20 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
     <div className="space-y-6">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div>
-          <h2 className="text-2xl font-bold text-slate-800">Plans & Pricing</h2>
+          <h2 className="text-2xl font-semibold text-gray-700">Plans & Pricing</h2>
           <p className="text-slate-600">
             Manage paid registration plans and promo codes used at checkout.
           </p>
-          {!backendReady ? (
-            <p className="mt-2 inline-flex rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700">
-              Showing canonical fallback plans until backend adminPlans is available.
+          {error && !backendPlans.length ? (
+            <p className="mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700" role="alert" data-testid="plans-load-error">
+              Plans could not be loaded: {error.message}{' '}
+              <button type="button" className="font-semibold underline" onClick={() => refetch()}>
+                Try again
+              </button>
             </p>
           ) : null}
         </div>
-        {activeTab === 'plans' ? (
+        {activeTab === 'plans' && viewMode === 'card' ? (
         <div className="flex flex-wrap items-center gap-2 rounded-lg border border-gray-200 bg-white p-2">
           <div className="relative min-w-[180px] max-w-[280px] flex-1">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
@@ -634,7 +836,6 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
             type="button"
             onClick={() => setPlanFiltersOpen((open) => {
               if (open) {
-                setPlanStatusSelections([]);
                 setActiveFilter('all');
               }
               return !open;
@@ -693,51 +894,7 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
             New plan
           </button>
         </div>
-        ) : (
-        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-gray-200 bg-white p-2">
-          <div className="relative min-w-[220px] max-w-[320px] flex-1">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-            <input
-              className="h-9 w-full rounded-lg border border-slate-200 bg-slate-50 pl-9 pr-3 text-[13px] text-slate-700 outline-none transition focus:border-sky-400 focus:bg-white focus:ring-2 focus:ring-sky-100"
-              value={promoSearch}
-              onChange={(event) => setPromoSearch(event.target.value)}
-              placeholder="Search promo codes"
-            />
-          </div>
-          <button
-            type="button"
-            onClick={() => setPromoFiltersOpen((open) => {
-              if (open) setPromoStatusSelections([]);
-              return !open;
-            })}
-            aria-pressed={promoFiltersOpen}
-            title="Filters"
-            className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border transition ${
-              promoFiltersOpen
-                ? 'border-sky-400 bg-sky-50 text-sky-500'
-                : 'border-slate-200 bg-slate-50 text-slate-400 hover:border-sky-300 hover:text-sky-400'
-            }`}
-          >
-            <Filter className="h-4 w-4" />
-          </button>
-          <button
-            type="button"
-            onClick={() => refetchPromos()}
-            className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-slate-200/60 bg-slate-50 px-3 text-sm font-medium text-slate-600 transition hover:bg-slate-100"
-          >
-            <RotateCcw className="h-4 w-4" />
-            Refresh
-          </button>
-          <button
-            type="button"
-            onClick={openCreatePromo}
-            className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-sky-500 to-cyan-400 px-4 text-[13px] font-semibold text-white shadow-sm transition hover:from-sky-600 hover:to-cyan-500"
-          >
-            <Plus className="h-4 w-4" />
-            New promo
-          </button>
-        </div>
-        )}
+        ) : null}
       </div>
 
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -781,99 +938,110 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
         ) : null}
       </div>
 
-      {activeTab === 'plans' && loading && backendPlans.length === 0 ? (
+      {activeTab === 'plans' ? (
+        <PartialListWarning
+          error={planPageError}
+          loadingMore={plansLoadingMore}
+          shown={backendPlans.length}
+          what="plans"
+          onRetry={() => refetch()}
+        />
+      ) : null}
+      {activeTab === 'plans' && packagingError ? (
+        <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800" data-testid="packaging-load-error">
+          Package details (modules, yearly prices) could not be loaded: {packagingError.message}{' '}
+          <button type="button" className="font-semibold underline" onClick={() => refetchPackaging()}>
+            Try again
+          </button>
+        </p>
+      ) : null}
+      {activeTab === 'plans' && viewMode === 'card' && loading && backendPlans.length === 0 ? (
         <div className="rounded-lg border border-slate-200 bg-white p-6 text-center text-slate-500">
           Loading plans...
         </div>
       ) : null}
 
       {activeTab === 'plans' && (viewMode === 'table' ? (
-        <div className="relative overflow-x-clip overflow-y-visible rounded-lg border border-gray-200 bg-white p-2">
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[880px] border-collapse text-left">
-              <thead>
-                <tr className="sticky top-0 z-10 bg-white">
-                  <th className="px-3 py-3.5 align-top"><SortHeader label="Plan" column="name" /></th>
-                  <th className="px-3 py-3.5 align-top"><SortHeader label="Price" column="basePriceCents" /></th>
-                  <th className="px-3 py-3.5 align-top"><SortHeader label="Billing" column="billingInterval" /></th>
-                  <th className="px-3 py-3.5 align-top"><SortHeader label="Trial" column="trialMonths" /></th>
-                  <th className="px-3 py-3.5 align-top"><SortHeader label="Status" column="active" /></th>
-                  <th className="px-3 py-3.5 text-right text-[13px] font-extrabold uppercase tracking-wide text-sky-600">Actions</th>
-                </tr>
-                {planFiltersOpen ? (
-                <tr className="border-t border-slate-200 bg-white">
-                  <th className="px-3 py-1.5"></th>
-                  <th className="px-3 py-1.5"></th>
-                  <th className="px-3 py-1.5"></th>
-                  <th className="px-3 py-1.5"></th>
-                  <th className="px-3 py-1.5">
-                    <ColumnFilter
-                      label="Status"
-                      options={planStatusOptions}
-                      selectedValues={planStatusSelections}
-                      onChange={setPlanStatusSelections}
-                    />
-                  </th>
-                  <th className="px-3 py-1.5"></th>
-                </tr>
-                ) : null}
-              </thead>
-              <tbody>
-                {plans.length === 0 ? (
-                  <tr>
-                    <td colSpan={6} className="px-3 py-10 text-center text-slate-500">No plans found</td>
-                  </tr>
-                ) : plans.map((plan) => (
-                  <tr key={plan.id} className="h-[52px] border-t border-slate-100 transition-colors even:bg-sky-50/[0.18] hover:bg-sky-50">
-                    <td className="px-3 py-3 align-top text-[14px] text-slate-950">
-                      <div className="font-bold text-slate-950">{plan.name}</div>
-                      <div className="text-xs text-slate-500">{plan.id}</div>
-                      <div className="mt-1 max-w-md truncate text-xs text-slate-500">{plan.description}</div>
-                    </td>
-                    <td className="px-3 py-3 align-top text-[14px] font-semibold text-slate-950">
-                      {formatPrice(plan.basePriceCents, plan.currency)}
-                    </td>
-                    <td className="px-3 py-3 align-top text-[14px] text-slate-950">
-                      <div>{plan.billingInterval}</div>
-                      <div className="text-xs text-slate-500">{plan.perEmployee ? 'Per employee' : 'Flat'}</div>
-                    </td>
-                    <td className="px-3 py-3 align-top text-[14px] text-slate-950">{plan.trialMonths} months</td>
-                    <td className="px-3 py-3 align-top">
-                      <span className={`rounded-md px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide ${
-                        plan.active ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'
-                      }`}>
-                        {plan.active ? 'Active' : 'Inactive'}
-                      </span>
-                    </td>
-                    <td className="px-3 py-3 align-top">
-                      <div className="flex justify-end gap-1">
-                        <button
-                          type="button"
-                          onClick={() => openEditPlan(plan)}
-                          title={`Edit ${plan.name}`}
-                          className="inline-flex h-8 w-8 items-center justify-center rounded-lg border-none text-slate-400 transition hover:bg-sky-400/10 hover:text-sky-500"
-                        >
-                          <Edit2 className="h-4 w-4" />
-                          <span className="sr-only">Edit</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleDeletePlan(plan)}
-                          disabled={deleting}
-                          title={`Delete ${plan.name}`}
-                          className="inline-flex h-8 w-8 items-center justify-center rounded-lg border-none text-slate-400 transition hover:bg-red-50 hover:text-red-500 disabled:opacity-50"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                          <span className="sr-only">Delete</span>
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
+        <DataTable<PlanType>
+          testId="plans-table"
+          rows={plans}
+          rowKey={(plan) => plan.id}
+          searchPlaceholder="Search plans"
+          searchValue={search}
+          onSearchChange={setSearch}
+          onRefresh={() => refetch()}
+          onExport={exportPlans}
+          onPrint={printPlans}
+          createLabel="New plan"
+          onCreate={openCreatePlan}
+          loading={loading}
+          loadingText="Loading plans..."
+          emptyMessage="No plans found"
+          minWidth="880px"
+          columns={[
+            {
+              key: 'name',
+              header: 'Plan',
+              value: (plan) => plan.name,
+              sortable: true,
+              render: (plan) => (
+                <>
+                  <div className="font-bold text-slate-950">{plan.name}</div>
+                  <div className="text-xs text-slate-500">{plan.id}</div>
+                  <div className="mt-1 max-w-md truncate text-xs text-slate-500">{plan.description}</div>
+                </>
+              ),
+            },
+            {
+              key: 'price',
+              header: 'Price',
+              value: (plan) => plan.basePriceCents,
+              sortable: true,
+              render: (plan) => (
+                <div className="font-semibold">
+                  {packagePriceLines(packagingById.get(plan.id)?.pricing || null, plan.basePriceCents, plan.currency, plan.billingInterval).map((line) => (
+                    <div key={line}>{line}</div>
+                  ))}
+                </div>
+              ),
+            },
+            {
+              key: 'billing',
+              header: 'Billing',
+              value: (plan) => plan.billingInterval,
+              sortable: true,
+              filterable: true,
+              render: (plan) => (
+                <>
+                  <div className="capitalize">{plan.billingInterval}</div>
+                  <div className="text-xs text-slate-500">{plan.perEmployee ? 'Per employee' : 'Flat'}</div>
+                </>
+              ),
+            },
+            { key: 'trial', header: 'Trial', value: (plan) => plan.trialMonths || 0, sortable: true, render: (plan) => monthsLabel(plan.trialMonths || 0) },
+            { key: 'employees', header: 'Employees', value: (plan) => plan.employeeLimit ?? 'Unlimited', sortable: true },
+            { key: 'status', header: 'Status', value: (plan) => (plan.active ? 'Active' : 'Inactive'), sortable: true, filterable: true, status: true },
+          ]}
+          rowActions={(plan) => (
+            <>
+              <RowActionButton
+                title={packagingPending(plan) ? 'Loading package details…' : `Edit ${plan.name}`}
+                label="Edit"
+                icon={<Edit2 />}
+                onClick={() => openEditPlan(plan)}
+                disabled={packagingPending(plan)}
+              />
+              <RowActionButton
+                title={`Delete ${plan.name}`}
+                label="Delete"
+                icon={<Trash2 />}
+                danger
+                onClick={() => handleDeletePlan(plan)}
+                disabled={deleting}
+              />
+            </>
+          )}
+        />
       ) : (
       <div className="grid grid-cols-1 items-start gap-4 md:grid-cols-2 2xl:grid-cols-3">
         {plans.map((plan) => {
@@ -897,9 +1065,9 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
                     </div>
                     <div className="mt-1 flex flex-wrap items-center gap-2">
                       <h3 className="text-base font-black leading-tight text-gray-800 transition-colors group-hover:text-sky-600">{plan.name}</h3>
-                      {isPremium ? (
+                      {plan.trialMonths > 0 ? (
                         <span className="rounded-md border border-sky-200 bg-sky-50 px-2 py-0.5 text-[10px] font-black uppercase tracking-tight text-sky-700">
-                          Free for 6 months
+                          Free for {monthsLabel(plan.trialMonths)}
                         </span>
                       ) : null}
                     </div>
@@ -917,14 +1085,20 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
                 <div className="mt-4 grid grid-cols-2 gap-3">
                   <div className="rounded-lg border border-sky-100 bg-sky-50/60 p-2.5">
                     <span className="mb-0.5 block text-[11px] font-black uppercase tracking-tight text-sky-600">Price</span>
-                    <div className="text-lg font-black leading-tight text-gray-800">
-                      {formatPrice(plan.basePriceCents, plan.currency).replace('.00', '')}
-                    </div>
+                    {packagePriceLines(packagingById.get(plan.id)?.pricing || null, plan.basePriceCents, plan.currency, plan.billingInterval).map((line, index) => (
+                      <div
+                        key={line}
+                        className={index === 0 ? 'text-lg font-black leading-tight text-gray-800' : 'mt-0.5 text-xs text-gray-500'}
+                        data-testid={index === 0 ? `plan-price-${plan.id}` : undefined}
+                      >
+                        {line}
+                      </div>
+                    ))}
                     <p className="mt-0.5 text-xs text-gray-500">{billingCopy(plan)}</p>
                   </div>
                   <div className="rounded-lg border border-amber-100 bg-amber-50/60 p-2.5">
                     <span className="mb-0.5 block text-[11px] font-black uppercase tracking-tight text-amber-600">Trial</span>
-                    <div className="text-sm font-bold text-gray-800">{plan.trialMonths} months</div>
+                    <div className="text-sm font-bold text-gray-800">{monthsLabel(plan.trialMonths || 0)}</div>
                     {plan.trialMonths > 0 ? (
                       <p className="mt-0.5 text-xs font-semibold text-amber-700">after free period</p>
                     ) : null}
@@ -939,6 +1113,34 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
                     <p className="mt-0.5 text-xs text-gray-500">{plan.currency}</p>
                   </div>
                 </div>
+
+                {packagingById.get(plan.id) ? (
+                  <div className="mt-4">
+                    <div className="mb-1.5 flex items-center justify-between text-[11px] font-black uppercase tracking-tight text-slate-500">
+                      <span>Modules</span>
+                      <span className="font-semibold normal-case text-slate-400">
+                        {packagingById.get(plan.id)!.isPublic ? '' : 'Private'}
+                      </span>
+                    </div>
+                    {packagingById.get(plan.id)!.modules.length ? (
+                      <FeatureAreaChips
+                        moduleIds={packagingById.get(plan.id)!.modules.map((m) => m.moduleId)}
+                        options={moduleOptions}
+                        testId={`plan-modules-${plan.id}`}
+                      />
+                    ) : (
+                      <p className="text-xs text-amber-700">
+                        No modules configured — companies registered before packages keep every module; new sign-ups get core features only.
+                      </p>
+                    )}
+                    <p className="mt-2 text-[11px] text-slate-500" data-testid={`plan-subscribers-${plan.id}`}>
+                      v{packagingById.get(plan.id)!.version} · {packagingById.get(plan.id)!.subscribersCount || 0} subscriber(s)
+                      {packagingById.get(plan.id)!.outdatedSubscribersCount
+                        ? ` · ${packagingById.get(plan.id)!.outdatedSubscribersCount} on an older version`
+                        : ''}
+                    </p>
+                  </div>
+                ) : null}
 
                 <ul className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
                   {features.slice(0, 6).map((feature) => (
@@ -955,11 +1157,23 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
                 </ul>
               </div>
 
-              <div className="mt-4 flex justify-end gap-2 border-t border-gray-100 pt-4">
+              <div className="mt-4 flex flex-wrap justify-end gap-2 border-t border-gray-100 pt-4">
+                {packagingById.get(plan.id)?.outdatedSubscribersCount ? (
+                  <button
+                    type="button"
+                    onClick={() => setApplyFor({ planId: plan.id, planName: plan.name })}
+                    className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-sky-200 bg-sky-50 px-3 text-[13px] font-semibold text-sky-700 transition hover:bg-sky-100"
+                    data-testid={`apply-subscribers-${plan.id}`}
+                  >
+                    Apply to {packagingById.get(plan.id)!.outdatedSubscribersCount} subscriber(s)
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   onClick={() => openEditPlan(plan)}
-                  className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-slate-200/70 bg-slate-50 px-3 text-[13px] font-semibold text-slate-600 transition hover:border-sky-300 hover:bg-sky-50 hover:text-sky-600"
+                  disabled={packagingPending(plan)}
+                  title={packagingPending(plan) ? 'Loading package details…' : undefined}
+                  className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-slate-200/70 bg-slate-50 px-3 text-[13px] font-semibold text-slate-600 transition hover:border-sky-300 hover:bg-sky-50 hover:text-sky-600 disabled:opacity-50"
                 >
                   <Edit2 className="h-4 w-4" />
                   Edit plan
@@ -982,482 +1196,518 @@ export const Plans: React.FC<{ onToast: (type: 'success' | 'error', msg: string)
       ))}
 
       {activeTab === 'promos' ? (
-        <div className="relative overflow-x-clip overflow-y-visible rounded-lg border border-gray-200 bg-white p-2">
-          {promoLoading ? (
-            <div className="p-8 text-center text-slate-500">Loading promo codes...</div>
-          ) : displayedPromoCodes.length === 0 ? (
-            <div className="p-8 text-center text-slate-500">No promo codes found</div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[980px] border-collapse text-left">
-                <thead>
-                  <tr className="sticky top-0 z-10 bg-white">
-                    <th className="px-3 py-3.5 text-left text-[13px] font-extrabold uppercase tracking-wide text-sky-600">Code</th>
-                    <th className="px-3 py-3.5 text-left text-[13px] font-extrabold uppercase tracking-wide text-sky-600">Discount</th>
-                    <th className="px-3 py-3.5 text-left text-[13px] font-extrabold uppercase tracking-wide text-sky-600">Applies To</th>
-                    <th className="px-3 py-3.5 text-left text-[13px] font-extrabold uppercase tracking-wide text-sky-600">Limits</th>
-                    <th className="px-3 py-3.5 text-left text-[13px] font-extrabold uppercase tracking-wide text-sky-600">Window</th>
-                    <th className="px-3 py-3.5 text-left text-[13px] font-extrabold uppercase tracking-wide text-sky-600">Status</th>
-                    <th className="px-3 py-3.5 text-right text-[13px] font-extrabold uppercase tracking-wide text-sky-600">Actions</th>
-                  </tr>
-                  {promoFiltersOpen ? (
-                  <tr className="border-t border-slate-200 bg-white">
-                    <th className="px-3 py-1.5"></th>
-                    <th className="px-3 py-1.5"></th>
-                    <th className="px-3 py-1.5"></th>
-                    <th className="px-3 py-1.5"></th>
-                    <th className="px-3 py-1.5"></th>
-                    <th className="px-3 py-1.5">
-                      <ColumnFilter
-                        label="Status"
-                        options={promoStatusOptions}
-                        selectedValues={promoStatusSelections}
-                        onChange={setPromoStatusSelections}
-                      />
-                    </th>
-                    <th className="px-3 py-1.5"></th>
-                  </tr>
-                  ) : null}
-                </thead>
-                <tbody>
-                  {displayedPromoCodes.map((promo) => (
-                    <tr key={promo.id} className="h-[52px] border-t border-slate-100 transition-colors even:bg-sky-50/[0.18] hover:bg-sky-50">
-                      <td className="px-3 py-3 align-top text-[14px] text-slate-950">
-                        <div className="font-bold text-slate-950">{promo.code}</div>
-                        <div className="text-xs text-slate-500">{promo.name || 'No label'}</div>
-                      </td>
-                      <td className="px-3 py-3 align-top text-[14px] font-semibold text-slate-950">
-                        {promo.discountType === 'percent'
-                          ? `${promo.discountValue}%`
-                          : formatPrice(promo.discountValue, promo.currency || 'USD')}
-                      </td>
-                      <td className="px-3 py-3 align-top text-[14px] text-slate-950">
-                        <div>{promo.appliesToPlanIds.length ? promo.appliesToPlanIds.join(', ') : 'All paid plans'}</div>
-                        <div className="text-xs text-slate-500">
-                          {promo.applicableBillingIntervals.length ? promo.applicableBillingIntervals.join(', ') : 'All billing intervals'}
-                        </div>
-                      </td>
-                      <td className="px-3 py-3 align-top text-[14px] text-slate-950">
-                        <div>{promo.redeemedCount}{promo.maxRedemptions ? ` / ${promo.maxRedemptions}` : ''} redeemed</div>
-                        <div className="text-xs text-slate-500">
-                          {promo.perEmailLimit ? `${promo.perEmailLimit}/email` : 'No email limit'}
-                        </div>
-                      </td>
-                      <td className="px-3 py-3 align-top text-[14px] text-slate-950">
-                        <div>{promo.startsAt ? new Date(promo.startsAt).toLocaleDateString() : 'Any start'}</div>
-                        <div className="text-xs text-slate-500">{promo.endsAt ? new Date(promo.endsAt).toLocaleDateString() : 'No end'}</div>
-                      </td>
-                      <td className="px-3 py-3 align-top">
-                        <span className={`rounded-md px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide ${
-                          promo.active ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'
-                        }`}>
-                          {promo.active ? 'Active' : 'Inactive'}
-                        </span>
-                      </td>
-                      <td className="px-3 py-3 align-top">
-                        <div className="flex justify-end gap-1">
-                          <button
-                            type="button"
-                            onClick={() => openEditPromo(promo)}
-                            title={`Edit ${promo.code}`}
-                            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border-none text-slate-400 transition hover:bg-sky-400/10 hover:text-sky-500"
-                          >
-                            <Edit2 className="h-4 w-4" />
-                            <span className="sr-only">Edit</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleDeactivatePromo(promo)}
-                            disabled={!promo.active || deactivatingPromo}
-                            title={`Deactivate ${promo.code}`}
-                            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border-none text-slate-400 transition hover:bg-red-50 hover:text-red-500 disabled:opacity-50"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                            <span className="sr-only">Deactivate</span>
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+        <DataTable<PromoCodeType>
+          testId="promos-table"
+          rows={promoCodes}
+          rowKey={(promo) => promo.id}
+          searchPlaceholder="Search promo codes"
+          searchValue={promoSearch}
+          onSearchChange={setPromoSearch}
+          onRefresh={() => refetchPromos()}
+          createLabel="New promo"
+          onCreate={openCreatePromo}
+          notice={(
+            <PartialListWarning
+              error={promoPageError}
+              loadingMore={promosLoadingMore}
+              shown={promoCodes.length}
+              what="promo codes"
+              onRetry={() => refetchPromos()}
+            />
           )}
-        </div>
+          loading={promoLoading}
+          loadingText="Loading promo codes..."
+          error={promoError ? <span data-testid="promo-load-error">Promo codes could not be loaded: {promoError.message}</span> : null}
+          emptyMessage="No promo codes found"
+          minWidth="980px"
+          columns={[
+            {
+              key: 'code',
+              header: 'Code',
+              value: (promo) => promo.code,
+              sortable: true,
+              render: (promo) => (
+                <>
+                  <div className="font-bold text-slate-950">{promo.code}</div>
+                  <div className="text-xs text-slate-500">{promo.name || 'No label'}</div>
+                </>
+              ),
+            },
+            {
+              key: 'discount',
+              header: 'Discount',
+              value: (promo) => (promo.discountType === 'percent' ? `${promo.discountValue}%` : formatPrice(promo.discountValue, promo.currency || 'USD')),
+              className: 'font-semibold',
+            },
+            {
+              key: 'appliesTo',
+              header: 'Applies to',
+              value: (promo) => (promo.appliesToPlanIds.length ? promo.appliesToPlanIds.join(', ') : 'All paid plans'),
+              render: (promo) => (
+                <>
+                  <div>{promo.appliesToPlanIds.length ? promo.appliesToPlanIds.join(', ') : 'All paid plans'}</div>
+                  <div className="text-xs text-slate-500">
+                    {promo.applicableBillingIntervals.length ? promo.applicableBillingIntervals.join(', ') : 'All billing intervals'}
+                  </div>
+                </>
+              ),
+            },
+            {
+              key: 'limits',
+              header: 'Limits',
+              value: (promo) => promo.redeemedCount,
+              sortable: true,
+              render: (promo) => (
+                <>
+                  <div>{promo.redeemedCount}{promo.maxRedemptions ? ` / ${promo.maxRedemptions}` : ''} redeemed</div>
+                  <div className="text-xs text-slate-500">{promo.perEmailLimit ? `${promo.perEmailLimit}/email` : 'No email limit'}</div>
+                </>
+              ),
+            },
+            {
+              key: 'window',
+              header: 'Window',
+              value: (promo) => promo.startsAt || '',
+              sortable: true,
+              render: (promo) => (
+                <>
+                  <div>{promo.startsAt ? new Date(promo.startsAt).toLocaleDateString() : 'Any start'}</div>
+                  <div className="text-xs text-slate-500">{promo.endsAt ? new Date(promo.endsAt).toLocaleDateString() : 'No end'}</div>
+                </>
+              ),
+            },
+            { key: 'status', header: 'Status', value: (promo) => (promo.active ? 'Active' : 'Inactive'), sortable: true, filterable: true, status: true },
+          ]}
+          rowActions={(promo) => (
+            <>
+              <RowActionButton title={`Edit ${promo.code}`} label="Edit" icon={<Edit2 />} onClick={() => openEditPromo(promo)} />
+              <RowActionButton
+                title={`Deactivate ${promo.code}`}
+                label="Deactivate"
+                icon={<Trash2 />}
+                danger
+                onClick={() => handleDeactivatePromo(promo)}
+                disabled={!promo.active || deactivatingPromo}
+              />
+            </>
+          )}
+        />
+      ) : null}
+
+      {applyFor ? (
+        <ApplyToSubscribersDialog
+          planId={applyFor.planId}
+          planName={applyFor.planName}
+          onClose={() => setApplyFor(null)}
+          onDone={(message) => {
+            setApplyFor(null);
+            onToast('success', message);
+            refetchPackaging();
+          }}
+          onError={(message) => onToast('error', message)}
+          onRefresh={() => {
+            refetchPackaging();
+            refetch();
+          }}
+        />
       ) : null}
 
       {editing && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/30 p-4">
-          <div className="flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white">
-            <div className="shrink-0 flex items-center justify-between border-b border-slate-100 p-5">
-              <h3 className="text-lg font-bold text-slate-800">{editingMode === 'create' ? 'Create Plan' : 'Edit Plan'}</h3>
-              <button
-                type="button"
-                onClick={closePlanWindow}
-                className="rounded-lg border border-slate-200 p-2 text-slate-700 hover:bg-slate-100"
-                aria-label="Close plan window"
+        <FormDialog
+          title={editingMode === 'create' ? 'Create Plan' : 'Edit Plan'}
+          subtitle="Fill out the details below. Customers see active public plans on the registration page."
+          onClose={closePlanWindow}
+          closeLabel="Close plan window"
+          widthClass="max-w-5xl"
+          footer={
+            <FormActions
+              onCancel={closePlanWindow}
+              onSave={handleSave}
+              saving={saving}
+              saveLabel={<><Save className="h-4 w-4" />{editingMode === 'create' ? 'Create plan' : 'Save plan'}</>}
+            />
+          }
+        >
+          <FormSection title="Plan details" icon={<FileText />}>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <FormField
+                label="Plan ID"
+                required={editingMode === 'create'}
+                disabled={editingMode === 'edit'}
+                hint={editingMode === 'create' ? 'Lowercase letters, numbers, “-” and “_”. Can\'t be changed later.' : undefined}
               >
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-
-            <div className="flex-1 space-y-4 overflow-y-auto p-5">
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                <label className="block">
-                  <span className="mb-1 block text-sm font-medium text-slate-700">Plan ID</span>
-                  <input
-                    value={editing.id}
-                    disabled={editingMode === 'edit'}
-                    onChange={(event) => setEditing({ ...editing, id: event.target.value })}
-                    placeholder="starter"
-                    className={`w-full rounded-lg border border-slate-300 px-3 py-2 ${
-                      editingMode === 'edit' ? 'bg-slate-100' : ''
-                    }`}
-                  />
-                </label>
-                <label className="block">
-                  <span className="mb-1 block text-sm font-medium text-slate-700">Name</span>
-                  <input
-                    value={editing.name}
-                    onChange={(event) => setEditing({ ...editing, name: event.target.value })}
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2"
-                  />
-                </label>
-                <label className="block">
-                  <span className="mb-1 block text-sm font-medium text-slate-700">Base price ($)</span>
-                  <input
-                    type="number"
-                    step="0.01"
-                    value={editing.basePriceCents / 100}
-                    onChange={(event) =>
-                      setEditing({ ...editing, basePriceCents: centsFromDollars(Number(event.target.value) || 0) })
-                    }
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2"
-                  />
-                </label>
-                <label className="block">
-                  <span className="mb-1 block text-sm font-medium text-slate-700">Currency</span>
-                  <input
-                    value={editing.currency}
-                    onChange={(event) => setEditing({ ...editing, currency: normalizeCurrency(event.target.value) })}
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2"
-                  />
-                </label>
-                <label className="block">
-                  <span className="mb-1 block text-sm font-medium text-slate-700">Billing interval</span>
-                  <select
-                    value={editing.billingInterval}
-                    onChange={(event) => setEditing({ ...editing, billingInterval: event.target.value as BillingInterval })}
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2"
-                  >
-                    <option value="monthly">Monthly</option>
-                    <option value="yearly">Yearly</option>
-                  </select>
-                </label>
-                <label className="block">
-                  <span className="mb-1 block text-sm font-medium text-slate-700">Trial months</span>
-                  <input
-                    type="number"
-                    min="0"
-                    value={editing.trialMonths}
-                    onChange={(event) => setEditing({ ...editing, trialMonths: Number(event.target.value) || 0 })}
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2"
-                  />
-                </label>
-                <label className="block">
-                  <span className="mb-1 block text-sm font-medium text-slate-700">Employee limit</span>
-                  <input
-                    value={editing.employeeLimit}
-                    onChange={(event) => setEditing({ ...editing, employeeLimit: event.target.value })}
-                    placeholder="Blank for unlimited"
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2"
-                  />
-                </label>
-                <label className="flex items-center gap-2 pt-7 text-sm text-slate-700">
-                  <input
-                    type="checkbox"
-                    checked={editing.perEmployee}
-                    onChange={(event) => setEditing({ ...editing, perEmployee: event.target.checked })}
-                  />
-                  Price is per employee
-                </label>
-                <label className="flex items-center gap-2 text-sm text-slate-700">
-                  <input
-                    type="checkbox"
-                    checked={editing.recommended}
-                    onChange={(event) => setEditing({ ...editing, recommended: event.target.checked })}
-                  />
-                  Recommended plan
-                </label>
-                <label className="flex items-center gap-2 text-sm text-slate-700">
-                  <input
-                    type="checkbox"
-                    checked={editing.active}
-                    onChange={(event) => setEditing({ ...editing, active: event.target.checked })}
-                  />
-                  Active
-                </label>
-              </div>
-
-              <label className="block">
-                <span className="mb-1 block text-sm font-medium text-slate-700">Description</span>
-                <textarea
-                  rows={2}
-                  value={editing.description}
-                  onChange={(event) => setEditing({ ...editing, description: event.target.value })}
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2"
+                <input
+                  value={editing.id}
+                  disabled={editingMode === 'edit'}
+                  onChange={(event) => setEditing({ ...editing, id: event.target.value })}
+                  placeholder="starter"
+                  className={formControlClass}
                 />
-              </label>
-
-              <label className="block">
-                <span className="mb-1 block text-sm font-medium text-slate-700">Features</span>
-                <textarea
-                  rows={8}
-                  value={editing.featuresText}
-                  onChange={(event) => setEditing({ ...editing, featuresText: event.target.value })}
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2"
+              </FormField>
+              <FormField label="Name" required>
+                <input
+                  value={editing.name}
+                  onChange={(event) => setEditing({ ...editing, name: event.target.value })}
+                  placeholder="Plan name shown to customers"
+                  className={formControlClass}
                 />
-              </label>
+              </FormField>
             </div>
+            <FormField label="Description" hint="One or two lines under the plan name on the registration page.">
+              <textarea
+                rows={2}
+                value={editing.description}
+                onChange={(event) => setEditing({ ...editing, description: event.target.value })}
+                className={formControlClass}
+              />
+            </FormField>
+            <div className="flex flex-wrap gap-x-6 gap-y-3">
+              <FormField label="Recommended plan" inline>
+                <input
+                  type="checkbox"
+                  className={checkboxClass}
+                  checked={editing.recommended}
+                  onChange={(event) => setEditing({ ...editing, recommended: event.target.checked })}
+                />
+              </FormField>
+              <FormField label="Active" inline>
+                <input
+                  type="checkbox"
+                  className={checkboxClass}
+                  checked={editing.active}
+                  onChange={(event) => setEditing({ ...editing, active: event.target.checked })}
+                />
+              </FormField>
+            </div>
+          </FormSection>
 
-            <div className="shrink-0 flex justify-end gap-2 border-t border-slate-100 bg-white p-4">
-              <button
-                type="button"
-                className="rounded-lg border border-slate-200 px-4 py-2 text-slate-700 hover:bg-slate-100 disabled:opacity-50"
-                onClick={closePlanWindow}
-                disabled={saving}
+          <FormSection title="Pricing & billing" icon={<CreditCard />}>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <FormField
+                label={`Package price (${editing.currency || 'USD'} / ${editing.billingInterval === 'yearly' ? 'year' : 'month'})`}
+                required
               >
-                Cancel
-              </button>
-              <button
-                type="button"
-                disabled={saving}
-                className="inline-flex items-center gap-2 rounded-lg bg-[#0ea5b7] px-4 py-2 font-semibold text-white hover:bg-[#0b8fa0] disabled:opacity-50"
-                onClick={handleSave}
-              >
-                <Save className="h-4 w-4" />
-                {saving ? 'Saving...' : editingMode === 'create' ? 'Create plan' : 'Save plan'}
-              </button>
+                <input
+                  type="number"
+                  min="0"
+                  step={String(currencyInputStep(editing.currency))}
+                  value={editing.basePriceInput}
+                  onChange={(event) =>
+                    setEditing({
+                      ...editing,
+                      basePriceInput: event.target.value,
+                      basePriceCents: centsFromAmount(event.target.value, editing.currency) || 0,
+                    })
+                  }
+                  className={formControlClass}
+                  data-testid="plan-price"
+                />
+              </FormField>
+              <FormField label="Currency">
+                {/* A list, not a text box (typing "JPY" letter by letter converted the
+                    price at every keystroke). The typed price is kept as it is and
+                    converted only when saved, so switching back and forth changes nothing. */}
+                <select
+                  value={normalizeCurrency(editing.currency || 'USD')}
+                  onChange={(event) => {
+                    const currency = normalizeCurrency(event.target.value);
+                    setEditing({ ...editing, currency, basePriceCents: centsFromAmount(editing.basePriceInput, currency) || 0 });
+                  }}
+                  className={formControlClass}
+                  data-testid="plan-currency"
+                >
+                  {planCurrencyOptions.map((code) => (
+                    <option key={code} value={code}>
+                      {code}
+                    </option>
+                  ))}
+                </select>
+              </FormField>
+              <FormField label="Billing interval">
+                <select
+                  data-testid="plan-billing-interval"
+                  value={editing.billingInterval}
+                  onChange={(event) => setEditing({ ...editing, billingInterval: event.target.value as BillingInterval })}
+                  className={formControlClass}
+                >
+                  <option value="monthly">Monthly</option>
+                  <option value="yearly">Yearly</option>
+                  <option value="both">Monthly or yearly (customer chooses)</option>
+                </select>
+              </FormField>
+              <FormField label="Trial months" hint="0 = no free period.">
+                <input
+                  type="number"
+                  min="0"
+                  max={PLAN_MAX_TRIAL_MONTHS}
+                  step="1"
+                  value={editing.trialMonths}
+                  onChange={(event) => setEditing({ ...editing, trialMonths: Number(event.target.value) || 0 })}
+                  className={formControlClass}
+                />
+              </FormField>
+              <YearlyPricingFields value={editing} onChange={(next) => setEditing({ ...editing, ...next })} />
+              <FormField label="Employee limit" hint="Blank for unlimited.">
+                <input
+                  value={editing.employeeLimit}
+                  onChange={(event) => setEditing({ ...editing, employeeLimit: event.target.value })}
+                  placeholder="Blank for unlimited"
+                  className={formControlClass}
+                />
+              </FormField>
+              <FormField label="Price is per employee" inline className="md:pt-6">
+                <input
+                  type="checkbox"
+                  className={checkboxClass}
+                  checked={editing.perEmployee}
+                  onChange={(event) => setEditing({ ...editing, perEmployee: event.target.checked })}
+                />
+              </FormField>
             </div>
-          </div>
-        </div>
+          </FormSection>
+
+          <PackageBuilder value={editing} onChange={(next) => setEditing({ ...editing, ...next })} />
+
+          <FormSection title="Features" icon={<ListChecks />} description="One per line. Shown under “Show features” on the registration page.">
+            <FormField label="Features">
+              <textarea
+                rows={8}
+                value={editing.featuresText}
+                onChange={(event) => setEditing({ ...editing, featuresText: event.target.value })}
+                placeholder={'Unlimited employees\nAI Workforce intelligence'}
+                className={formControlClass}
+              />
+            </FormField>
+          </FormSection>
+        </FormDialog>
       )}
 
       {editingPromo && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/30 p-4">
-          <div className="flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white">
-            <div className="shrink-0 flex items-center justify-between border-b border-slate-100 p-5">
-              <h3 className="text-lg font-bold text-slate-800">
-                {editingPromoMode === 'create' ? 'Create Promo Code' : 'Edit Promo Code'}
-              </h3>
-              <button
-                type="button"
-                onClick={closePromoWindow}
-                className="rounded-lg border border-slate-200 p-2 text-slate-700 hover:bg-slate-100"
-                aria-label="Close promo window"
+        <FormDialog
+          title={editingPromoMode === 'create' ? 'Create Promo Code' : 'Edit Promo Code'}
+          subtitle="Customers type this code at checkout on the registration page."
+          onClose={closePromoWindow}
+          closeLabel="Close promo window"
+          widthClass="max-w-4xl"
+          footer={(
+            <FormActions
+              onCancel={closePromoWindow}
+              onSave={handleSavePromo}
+              saving={savingPromo}
+              saveLabel={<><Save className="h-4 w-4" />{editingPromoMode === 'create' ? 'Create promo' : 'Save promo'}</>}
+              savingLabel="Saving..."
+            />
+          )}
+        >
+          <FormSection title="Code and discount" icon={<FileText />}>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+              <FormField label="Code" required>
+                <input
+                  value={editingPromo.code}
+                  onChange={(event) => setEditingPromo({ ...editingPromo, code: event.target.value.toUpperCase() })}
+                  placeholder="SAVE20"
+                  className={`${formControlClass} font-mono uppercase`}
+                />
+              </FormField>
+              <FormField label="Label" className="md:col-span-2">
+                <input
+                  value={editingPromo.name}
+                  onChange={(event) => setEditingPromo({ ...editingPromo, name: event.target.value })}
+                  placeholder="Launch offer"
+                  className={formControlClass}
+                />
+              </FormField>
+              <FormField label="Discount type">
+                <select
+                  value={editingPromo.discountType}
+                  onChange={(event) => {
+                    const discountType = event.target.value as DiscountType;
+                    // A percent and an amount mean different things: start the new one empty.
+                    setEditingPromo({
+                      ...editingPromo,
+                      discountType,
+                      discountInput: discountType === editingPromo.discountType ? editingPromo.discountInput : '',
+                    });
+                  }}
+                  className={formControlClass}
+                >
+                  <option value="percent">Percent</option>
+                  <option value="amount">Fixed amount</option>
+                </select>
+              </FormField>
+              {/* A fixed discount is typed as an amount ($10, ¥1000), kept as typed and
+                  converted to minor units only when saved. */}
+              <FormField
+                label={editingPromo.discountType === 'percent'
+                  ? 'Discount %'
+                  : `Discount amount (${(editingPromo.currency || 'USD').toUpperCase()})`}
+                required
               >
-                <X className="h-5 w-5" />
-              </button>
+                <input
+                  type="number"
+                  min="0"
+                  step={editingPromo.discountType === 'percent' ? '1' : String(currencyInputStep(editingPromo.currency || 'USD'))}
+                  value={editingPromo.discountInput}
+                  onChange={(event) => setEditingPromo({ ...editingPromo, discountInput: event.target.value })}
+                  className={formControlClass}
+                  data-testid="promo-discount"
+                />
+              </FormField>
+              {/* A list, not a text box: typing "JPY" letter by letter converted the amount
+                  at every keystroke. The typed amount is converted when saved. */}
+              <FormField label="Currency">
+                <select
+                  value={normalizeCurrency(editingPromo.currency || 'USD')}
+                  onChange={(event) => setEditingPromo({ ...editingPromo, currency: normalizeCurrency(event.target.value) })}
+                  className={formControlClass}
+                  data-testid="promo-currency"
+                >
+                  {promoCurrencyOptions.map((code) => (
+                    <option key={code} value={code}>
+                      {code}
+                    </option>
+                  ))}
+                </select>
+              </FormField>
             </div>
+          </FormSection>
 
-            <div className="flex-1 space-y-5 overflow-y-auto p-5">
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-                <label className="block">
-                  <span className="mb-1 block text-sm font-medium text-slate-700">Code</span>
-                  <input
-                    value={editingPromo.code}
-                    onChange={(event) => setEditingPromo({ ...editingPromo, code: event.target.value.toUpperCase() })}
-                    placeholder="SAVE20"
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono uppercase"
-                  />
-                </label>
-                <label className="block md:col-span-2">
-                  <span className="mb-1 block text-sm font-medium text-slate-700">Label</span>
-                  <input
-                    value={editingPromo.name}
-                    onChange={(event) => setEditingPromo({ ...editingPromo, name: event.target.value })}
-                    placeholder="Launch offer"
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2"
-                  />
-                </label>
-                <label className="block">
-                  <span className="mb-1 block text-sm font-medium text-slate-700">Discount type</span>
-                  <select
-                    value={editingPromo.discountType}
-                    onChange={(event) => setEditingPromo({ ...editingPromo, discountType: event.target.value as DiscountType })}
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2"
-                  >
-                    <option value="percent">Percent</option>
-                    <option value="amount">Fixed amount</option>
-                  </select>
-                </label>
-                <label className="block">
-                  <span className="mb-1 block text-sm font-medium text-slate-700">
-                    {editingPromo.discountType === 'percent' ? 'Discount %' : 'Discount cents'}
-                  </span>
-                  <input
-                    type="number"
-                    min="0"
-                    value={editingPromo.discountValue}
-                    onChange={(event) => setEditingPromo({ ...editingPromo, discountValue: Number(event.target.value) || 0 })}
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2"
-                  />
-                </label>
-                <label className="block">
-                  <span className="mb-1 block text-sm font-medium text-slate-700">Currency</span>
-                  <input
-                    value={editingPromo.currency}
-                    onChange={(event) => setEditingPromo({ ...editingPromo, currency: normalizeCurrency(event.target.value) })}
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2"
-                  />
-                </label>
-                <label className="block">
-                  <span className="mb-1 block text-sm font-medium text-slate-700">Starts at</span>
-                  <input
-                    type="datetime-local"
-                    value={editingPromo.startsAt}
-                    onChange={(event) => setEditingPromo({ ...editingPromo, startsAt: event.target.value })}
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2"
-                  />
-                </label>
-                <label className="block">
-                  <span className="mb-1 block text-sm font-medium text-slate-700">Ends at</span>
-                  <input
-                    type="datetime-local"
-                    value={editingPromo.endsAt}
-                    onChange={(event) => setEditingPromo({ ...editingPromo, endsAt: event.target.value })}
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2"
-                  />
-                </label>
-                <label className="flex items-center gap-2 pt-7 text-sm text-slate-700">
+          <FormSection title="Validity" icon={<CalendarDays />}>
+            <div className="grid grid-cols-1 items-end gap-4 md:grid-cols-3">
+              <FormField label="Starts at">
+                <input
+                  type="datetime-local"
+                  value={editingPromo.startsAt}
+                  onChange={(event) => setEditingPromo({ ...editingPromo, startsAt: event.target.value })}
+                  className={formControlClass}
+                />
+              </FormField>
+              <FormField label="Ends at">
+                <input
+                  type="datetime-local"
+                  value={editingPromo.endsAt}
+                  onChange={(event) => setEditingPromo({ ...editingPromo, endsAt: event.target.value })}
+                  className={formControlClass}
+                />
+              </FormField>
+              <FormField label="Active" inline className="pb-2">
+                <input
+                  type="checkbox"
+                  className={checkboxClass}
+                  checked={editingPromo.active}
+                  onChange={(event) => setEditingPromo({ ...editingPromo, active: event.target.checked })}
+                />
+              </FormField>
+            </div>
+          </FormSection>
+
+          <FormSection title="Limits" icon={<Gauge />} description="Leave empty for no limit.">
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
+              <FormField label="Max redemptions">
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={editingPromo.maxRedemptions}
+                  onChange={(event) => setEditingPromo({ ...editingPromo, maxRedemptions: event.target.value })}
+                  placeholder="Unlimited"
+                  className={formControlClass}
+                />
+              </FormField>
+              <FormField label="Per email">
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={editingPromo.perEmailLimit}
+                  onChange={(event) => setEditingPromo({ ...editingPromo, perEmailLimit: event.target.value })}
+                  placeholder="Unlimited"
+                  className={formControlClass}
+                />
+              </FormField>
+              <FormField label="Per company">
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={editingPromo.perCompanyLimit}
+                  onChange={(event) => setEditingPromo({ ...editingPromo, perCompanyLimit: event.target.value })}
+                  placeholder="Unlimited"
+                  className={formControlClass}
+                />
+              </FormField>
+              <FormField label={`Minimum amount (${normalizeCurrency(editingPromo.currency || 'USD')})`}>
+                <input
+                  type="number"
+                  min="0"
+                  step={String(currencyInputStep(editingPromo.currency || 'USD'))}
+                  value={editingPromo.minimumAmountDollars}
+                  onChange={(event) => setEditingPromo({ ...editingPromo, minimumAmountDollars: event.target.value })}
+                  placeholder="None"
+                  className={formControlClass}
+                />
+              </FormField>
+            </div>
+          </FormSection>
+
+          <FormSection title="Who can use it" icon={<ListChecks />} description="No plan ticked means every paid plan.">
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <div>
+                <p className="mb-2 text-[11.5px] font-semibold uppercase tracking-[0.02em] text-slate-500">Applicable plans</p>
+                <div className="space-y-2 rounded-lg border-[1.5px] border-slate-200 bg-white p-3">
+                  {premiumPlans.map((plan) => (
+                    <label key={plan.id} className="flex cursor-pointer items-center gap-2.5 text-[13px] text-slate-700">
+                      <input
+                        type="checkbox"
+                        className={checkboxClass}
+                        checked={editingPromo.appliesToPlanIds.includes(plan.id)}
+                        onChange={(event) => {
+                          const selected = event.target.checked
+                            ? [...editingPromo.appliesToPlanIds, plan.id]
+                            : editingPromo.appliesToPlanIds.filter((id) => id !== plan.id);
+                          setEditingPromo({ ...editingPromo, appliesToPlanIds: selected });
+                        }}
+                      />
+                      {plan.name} ({plan.billingInterval})
+                      <span className="text-xs text-slate-400">{plan.id}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <p className="mb-2 text-[11.5px] font-semibold uppercase tracking-[0.02em] text-slate-500">Billing intervals</p>
+                <div className="space-y-2 rounded-lg border-[1.5px] border-slate-200 bg-white p-3">
+                  {(['monthly', 'yearly'] as BillingInterval[]).map((interval) => (
+                    <label key={interval} className="flex cursor-pointer items-center gap-2.5 text-[13px] capitalize text-slate-700">
+                      <input
+                        type="checkbox"
+                        className={checkboxClass}
+                        checked={editingPromo.applicableBillingIntervals.includes(interval)}
+                        onChange={(event) => {
+                          const selected = event.target.checked
+                            ? [...editingPromo.applicableBillingIntervals, interval]
+                            : editingPromo.applicableBillingIntervals.filter((item) => item !== interval);
+                          setEditingPromo({ ...editingPromo, applicableBillingIntervals: selected });
+                        }}
+                      />
+                      {interval}
+                    </label>
+                  ))}
+                </div>
+                <FormField label="First-time customer only" inline className="mt-3">
                   <input
                     type="checkbox"
-                    checked={editingPromo.active}
-                    onChange={(event) => setEditingPromo({ ...editingPromo, active: event.target.checked })}
+                    className={checkboxClass}
+                    checked={editingPromo.firstTimeCustomerOnly}
+                    onChange={(event) => setEditingPromo({ ...editingPromo, firstTimeCustomerOnly: event.target.checked })}
                   />
-                  Active
-                </label>
-              </div>
-
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
-                <label className="block">
-                  <span className="mb-1 block text-sm font-medium text-slate-700">Max redemptions</span>
-                  <input
-                    type="number"
-                    value={editingPromo.maxRedemptions}
-                    onChange={(event) => setEditingPromo({ ...editingPromo, maxRedemptions: event.target.value })}
-                    placeholder="Unlimited"
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2"
-                  />
-                </label>
-                <label className="block">
-                  <span className="mb-1 block text-sm font-medium text-slate-700">Per email</span>
-                  <input
-                    type="number"
-                    value={editingPromo.perEmailLimit}
-                    onChange={(event) => setEditingPromo({ ...editingPromo, perEmailLimit: event.target.value })}
-                    placeholder="Unlimited"
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2"
-                  />
-                </label>
-                <label className="block">
-                  <span className="mb-1 block text-sm font-medium text-slate-700">Per company</span>
-                  <input
-                    type="number"
-                    value={editingPromo.perCompanyLimit}
-                    onChange={(event) => setEditingPromo({ ...editingPromo, perCompanyLimit: event.target.value })}
-                    placeholder="Unlimited"
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2"
-                  />
-                </label>
-                <label className="block">
-                  <span className="mb-1 block text-sm font-medium text-slate-700">Minimum amount ($)</span>
-                  <input
-                    type="number"
-                    step="0.01"
-                    value={editingPromo.minimumAmountDollars}
-                    onChange={(event) => setEditingPromo({ ...editingPromo, minimumAmountDollars: event.target.value })}
-                    placeholder="None"
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2"
-                  />
-                </label>
-              </div>
-
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                <div className="rounded-xl border border-slate-200 p-4">
-                  <p className="mb-3 text-sm font-bold text-slate-800">Applicable plans</p>
-                  <div className="space-y-2">
-                    {premiumPlans.map((plan) => (
-                      <label key={plan.id} className="flex items-center gap-2 text-sm text-slate-700">
-                        <input
-                          type="checkbox"
-                          checked={editingPromo.appliesToPlanIds.includes(plan.id)}
-                          onChange={(event) => {
-                            const selected = event.target.checked
-                              ? [...editingPromo.appliesToPlanIds, plan.id]
-                              : editingPromo.appliesToPlanIds.filter((id) => id !== plan.id);
-                            setEditingPromo({ ...editingPromo, appliesToPlanIds: selected });
-                          }}
-                        />
-                        {plan.name} ({plan.billingInterval})
-                      </label>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="rounded-xl border border-slate-200 p-4">
-                  <p className="mb-3 text-sm font-bold text-slate-800">Billing intervals</p>
-                  <div className="space-y-2">
-                    {(['monthly', 'yearly'] as BillingInterval[]).map((interval) => (
-                      <label key={interval} className="flex items-center gap-2 text-sm capitalize text-slate-700">
-                        <input
-                          type="checkbox"
-                          checked={editingPromo.applicableBillingIntervals.includes(interval)}
-                          onChange={(event) => {
-                            const selected = event.target.checked
-                              ? [...editingPromo.applicableBillingIntervals, interval]
-                              : editingPromo.applicableBillingIntervals.filter((item) => item !== interval);
-                            setEditingPromo({ ...editingPromo, applicableBillingIntervals: selected });
-                          }}
-                        />
-                        {interval}
-                      </label>
-                    ))}
-                  </div>
-                  <label className="mt-4 flex items-center gap-2 text-sm text-slate-700">
-                    <input
-                      type="checkbox"
-                      checked={editingPromo.firstTimeCustomerOnly}
-                      onChange={(event) => setEditingPromo({ ...editingPromo, firstTimeCustomerOnly: event.target.checked })}
-                    />
-                    First-time customer only
-                  </label>
-                </div>
+                </FormField>
               </div>
             </div>
-
-            <div className="shrink-0 flex justify-end gap-2 border-t border-slate-100 bg-white p-4">
-              <button
-                type="button"
-                className="rounded-lg border border-slate-200 px-4 py-2 text-slate-700 hover:bg-slate-100 disabled:opacity-50"
-                onClick={closePromoWindow}
-                disabled={savingPromo}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                disabled={savingPromo}
-                className="inline-flex items-center gap-2 rounded-lg bg-[#0ea5b7] px-4 py-2 font-semibold text-white hover:bg-[#0b8fa0] disabled:opacity-50"
-                onClick={handleSavePromo}
-              >
-                <Save className="h-4 w-4" />
-                {savingPromo ? 'Saving...' : editingPromoMode === 'create' ? 'Create promo' : 'Save promo'}
-              </button>
-            </div>
-          </div>
-        </div>
+          </FormSection>
+        </FormDialog>
       )}
+      {dialog}
     </div>
   );
 };

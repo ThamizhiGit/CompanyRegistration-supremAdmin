@@ -2,6 +2,7 @@ import React from 'react';
 import { expect, test } from '@playwright/experimental-ct-react';
 import { type MockedResponse } from '@apollo/client/testing';
 import { PlansHarness } from '../fixtures/commerce-harnesses';
+import { paged } from '../fixtures/paging';
 import {
   ADMIN_DELETE_PLAN_MUTATION,
   ADMIN_PLANS_QUERY,
@@ -9,8 +10,8 @@ import {
   ADMIN_SAVE_PROMO_CODE_MUTATION,
 } from '../../src/lib/graphql';
 
-const planVariables = { includeInactive: true, search: null, active: null };
-const promoVariables = { includeInactive: true, search: null, active: null, planId: null };
+const planVariables = paged({ includeInactive: true, search: null, active: null });
+const promoVariables = paged({ includeInactive: true, search: null, active: null, planId: null });
 
 const paidPlan = {
   id: 'team',
@@ -40,20 +41,21 @@ test.describe('commerce / plans', () => {
     await loading.unmount();
     const component = await mount(<PlansHarness scenario="data" />);
     await expect(component.getByText('Team', { exact: true })).toBeVisible();
-    await component.getByRole('button', { name: 'Table View' }).click();
+    // Table View is the default.
     await component.getByPlaceholder('Search plans').fill('does-not-exist');
     await expect(component.getByText('No plans found')).toBeVisible();
     await component.getByRole('button', { name: 'Promo Codes' }).click();
     await expect(component.getByText('No promo codes found')).toBeVisible();
   });
 
-  test('uses the canonical fallback when the plans query errors', async ({ mount }) => {
+  test('says the plans could not be loaded (no built-in stand-ins) when the plans query errors', async ({ mount }) => {
     const component = await mount(
       <PlansHarness scenario="error" />,
     );
 
-    await expect(component.getByText(/Showing canonical fallback plans/)).toBeVisible();
-    await expect(component.getByText('Premium', { exact: true })).toBeVisible();
+    await expect(component.getByTestId('plans-load-error')).toBeVisible();
+    await expect(component.getByTestId('plans-load-error').getByRole('button', { name: 'Try again' })).toBeVisible();
+    await expect(component.getByText('Premium', { exact: true })).toHaveCount(0);
   });
 
   test('creates a promo code and reports validation failures', async ({ mount }) => {
@@ -90,14 +92,20 @@ test.describe('commerce / plans', () => {
     await expect(component.getByLabel('toast')).toHaveText('success: Promo code "SAVE20" created');
   });
 
-  test('deletes a plan only after collecting an audit reason', async ({ mount, page }) => {
+  test('deletes a plan only after collecting an audit reason', async ({ mount }) => {
     const component = await mount(
       <PlansHarness scenario="actions" />,
     );
 
-    page.once('dialog', async (dialog) => dialog.accept('Retired after migration'));
+    await component.getByRole('button', { name: 'Board View' }).click(); // the page opens in Table View
     const teamPlan = component.locator('article').filter({ hasText: 'Team' });
     await teamPlan.getByRole('button', { name: 'Delete', exact: true }).click();
+    // The app's own dialog (not the browser's prompt): no reason, no delete.
+    await component.getByTestId('confirm-dialog-input').fill('');
+    await expect(component.getByTestId('confirm-dialog-ok')).toBeDisabled();
+    await component.getByTestId('confirm-dialog-input').fill('Retired after migration');
+    await component.getByTestId('confirm-dialog-ok').click();
+    await expect(component.getByTestId('confirm-dialog')).toHaveCount(0);
     await expect(component.getByLabel('toast')).toHaveText('success: Plan "Team" deleted');
   });
 });
